@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "skills": {
+    "ai-elements": {
+      "source": "vercel/ai-elements",
+      "sourceType": "github",
+      "skillPath": "skills/ai-elements/SKILL.md",
+      "computedHash": "6d7ccc65b98adb04d6c47632746dbfea55528903de9b027f6b39b80983d5aa55"
+    },
+    "ai-image-generation": {
+      "source": "skills-collective/skills",
+      "sourceType": "github",
+      "skillPath": "ai-image-generation/SKILL.md",
+      "computedHash": "765f5ce859b1943e948d4f747b768389d7a9f0c563d4e93f2a3231bc1a617944"
+    },
+    "ai-sdk": {
+      "source": "vercel/ai",
+      "sourceType": "github",
+      "skillPath": "skills/use-ai-sdk/SKILL.md",
+      "computedHash": "da25c27a274ef2b71017c255f95a26350d2519765a75cb54ee1a37872b121dab"
+    },
+    "ai-video-generation": {
+      "source": "whytryharder/skills",
+      "sourceType": "github",
+      "skillPath": "tools/video/ai-video-generation/SKILL.md",
+      "computedHash": "8524cc49ad3dca2a4502903234061b307636e44b08496e982747cdb9590f5556"
+    },
+    "azure-ai": {
+      "source": "microsoft/azure-skills",
+      "sourceType": "github",
+      "skillPath": "skills/azure-ai/SKILL.md",
+      "computedHash": "00533909740269b80dfaa1edd24b0ce86f2fc452e977c811647839353c793025"
+    },
+    "azure-aigateway": {
+      "source": "microsoft/azure-skills",
+      "sourceType": "github",
+      "skillPath": "skills/azure-aigateway/SKILL.md",
+      "computedHash": "d8073cb540d8799c446148a2605965d9cd0ff2205c0fe8911c4350df499c46d5"
+    },
+    "baoyu-image-gen": {
+      "source": "jimliu/baoyu-skills",
+      "sourceType": "github",
+      "skillPath": "skills/baoyu-image-gen/SKILL.md",
+      "computedHash": "388a4e2ae4e1953476dcbda56f446a9f6896fd4423cad2f9ba66ad9c06cbc044"
+    },
+    "changelog-video": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/changelog-video/SKILL.md",
+      "computedHash": "313e00f2b5cc24610bad6ce2fd0491ef32559a0f04efdac88c784f07a075f6de"
+    },
+    "cloudbase": {
+      "source": "tencentcloudbase/cloudbase-skills",
+      "sourceType": "github",
+      "skillPath": "skills/cloudbase/SKILL.md",
+      "computedHash": "7176b860fabda488f6d950a172e8be90d1bae295ad1fe9efca7548936925a8ba"
+    },
+    "firebase-ai-logic-basics": {
+      "source": "firebase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/firebase-ai-logic-basics/SKILL.md",
+      "computedHash": "fbe2bd8cb8fb7c90cd30f85d6f3de237b3ebf1dca91c2b92ff4fa0aa26285f7b"
+    },
+    "general-video": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "skillPath": "skills/general-video/SKILL.md",
+      "computedHash": "4f0c6cac18a6ef22765713e59e083af80916b423d3cb5b7f588b49fd0dfb65c8"
+    },
+    "image-gen": {
+      "source": "marswaveai/skills",
+      "sourceType": "github",
+      "skillPath": "image-gen/SKILL.md",
+      "computedHash": "e40640024a6bca92d4d3dc833eeecad6bd0761ea442bfc4dd8678ae1dda091b1"
+    },
+    "image-generation": {
+      "source": "bytedance/deer-flow",
+      "sourceType": "github",
+      "skillPath": "skills/public/image-generation/SKILL.md",
+      "computedHash": "52d2c5c142368c20aeeb0cf43c735100d1f4a1b60a0aedbdd8cf330caebe0280"
+    },
+    "imagegen": {
+      "source": "openai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/.system/imagegen/SKILL.md",
+      "computedHash": "9f14832d6538d83047ef41223ba9b0fb4a8c393d144ad4015ce4c10cc3d5414c"
+    },
+    "imagegen-frontend-mobile": {
+      "source": "leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/imagegen-frontend-mobile/SKILL.md",
+      "computedHash": "9ab7f4f6ce66a3cff02bbf5894e5bd5af50bf5d6ef0adffdc88e8fab772fe44f"
+    },
+    "imagegen-frontend-web": {
+      "source": "leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/imagegen-frontend-web/SKILL.md",
+      "computedHash": "65f5ae59fa317567809438310b1c54f78cd133426deb43e4d3d4ca4c8f541628"
+    },
+    "modern-web-development": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "modern-web-development/SKILL.md",
+      "computedHash": "01f88bbb9650f319582b831f4cf41354df9a4520c96738c36b1fd201b4da087d"
+    },
+    "modern-web-guidance": {
+      "source": "googlechrome/modern-web-guidance",
+      "sourceType": "github",
+      "skillPath": "skills/modern-web-guidance/SKILL.md",
+      "computedHash": "48c293af02df689a60ea7148869344e336bfecb897caa1005387fe2df44a5668"
+    },
+    "music-to-video": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "skillPath": "skills/music-to-video/SKILL.md",
+      "computedHash": "f044ddf1019779ffc9f1c678c254ad4f0356f8d3efcb3ead55220581ee54ac80"
+    },
+    "physical-ai-defect-image-generation": {
+      "source": "nvidia/skills",
+      "sourceType": "github",
+      "skillPath": "skills/physical-ai-defect-image-generation/SKILL.md",
+      "computedHash": "048b0fd2ccd7eabca8803fe8c31f866fdb234f99d9bb3d17e86ae5c25712e98f"
+    },
+    "pr-to-video": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "skillPath": "skills/pr-to-video/SKILL.md",
+      "computedHash": "69a2be5b8af27e712fbacb4358134421bcbcc01d1eaf48c4ebf50f95c1a1032a"
+    },
+    "product-launch-video": {
+      "source": "heygen-com/hyperframes",
+      "sourceType": "github",
+      "skillPath": "skills/product-launch-video/SKILL.md",
+      "computedHash": "8f3fa80304e1c3a821fdb4148ab1cc6bd37a35025492e9a4260c6d0104b4d71c"
+    },
+    "qianwen-image-generation": {
+      "source": "qianwen-ai/qianwen-ai",
+      "sourceType": "github",
+      "skillPath": "skills/image/qianwen-image-generation/SKILL.md",
+      "computedHash": "a0134d6ba2e460f50ed27827c261531d9d6aabeb0dd687689556c9ae06f37995"
+    },
+    "seo-image-gen": {
+      "source": "agricidaniel/claude-seo",
+      "sourceType": "github",
+      "skillPath": "skills/seo-image-gen/SKILL.md",
+      "computedHash": "92a1150be50a132a2fc225599481954e7b473ed3abab8fcece3c077808281ca3"
+    },
+    "tao-generate-image-grounding": {
+      "source": "nvidia/skills",
+      "sourceType": "github",
+      "skillPath": "skills/tao-generate-image-grounding/SKILL.md",
+      "computedHash": "9622776617dab105b973d53e6c1838d9ec390186e1c25f3080b0d73f02d29d58"
+    },
+    "video-editing": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "skillPath": "skills/video-editing/SKILL.md",
+      "computedHash": "f44c45ed71dec68cf955a316577ddd191248d0c607118c89ffc10f9f3f1ea3a0"
+    },
+    "video-processing-editing": {
+      "source": "erichowens/some_claude_skills",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/video-processing-editing/SKILL.md",
+      "computedHash": "01706a193e89982cd9f1d2fbae982ba7bec51f3e5b6d93e2318e7b32ce414491"
+    },
+    "videoagent-image-studio": {
+      "source": "pexoai/pexo-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videoagent-image-studio/SKILL.md",
+      "computedHash": "73a857d1a2a51dde71128a3a716482d7f876d63a89bee92f10b2f46d907d4842"
+    },
+    "videoagent-video-studio": {
+      "source": "pexoai/pexo-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videoagent-video-studio/SKILL.md",
+      "computedHash": "6b680136146f3776e5706a066440432456b2dcf27e674ac6650aedc00ceca940"
+    },
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-design-guidelines/SKILL.md",
+      "computedHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474"
+    }
+  }
+}
