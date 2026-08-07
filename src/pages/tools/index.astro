@@ -1,0 +1,18 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import ToolGrid from "../../components/tool/ToolGrid.tsx";
+---
+
+<Layout title="All Tools — Clipbench" description="Browse every video and audio editing tool, all free and running entirely in your browser.">
+  <section class="mx-auto max-w-7xl px-4 pb-20 pt-12 sm:px-6 lg:px-8">
+    <div class="max-w-2xl">
+      <h1 class="text-h1 font-bold tracking-tight">All tools</h1>
+      <p class="mt-3 text-body text-(--color-text-muted)">
+        Everything you need to edit video and audio, free, private, and browser-based.
+      </p>
+    </div>
+    <div class="mt-8">
+      <ToolGrid client:load />
+    </div>
+  </section>
+</Layout>

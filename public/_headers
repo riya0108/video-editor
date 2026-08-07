@@ -1,0 +1,7 @@
+# Cross-origin isolation, required so the multithreaded ffmpeg.wasm engine
+# can use SharedArrayBuffer. Understood by Netlify and Cloudflare Pages.
+# If you deploy elsewhere (Vercel, custom server, etc.), set the same two
+# headers on every response at the host/server level instead.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

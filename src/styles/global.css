@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+/* Self-hosted variable fonts (no external requests — keeps the app private/offline-friendly) */
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+
+  /* ---- Brand: violet/indigo primary ---- */
+  --color-primary-50: oklch(97% 0.015 292);
+  --color-primary-100: oklch(93% 0.035 292);
+  --color-primary-200: oklch(87% 0.07 292);
+  --color-primary-300: oklch(79% 0.11 292);
+  --color-primary-400: oklch(70% 0.16 292);
+  --color-primary-500: oklch(60% 0.19 292);
+  --color-primary-600: oklch(52% 0.19 292);
+  --color-primary-700: oklch(44% 0.17 292);
+  --color-primary-800: oklch(36% 0.14 292);
+  --color-primary-900: oklch(29% 0.11 292);
+  --color-primary-950: oklch(20% 0.08 292);
+
+  /* ---- Accent: teal/cyan, complementary to the violet primary ---- */
+  --color-accent-50: oklch(97% 0.02 195);
+  --color-accent-100: oklch(92% 0.05 195);
+  --color-accent-200: oklch(85% 0.08 195);
+  --color-accent-300: oklch(76% 0.1 195);
+  --color-accent-400: oklch(68% 0.11 195);
+  --color-accent-500: oklch(60% 0.11 195);
+  --color-accent-600: oklch(51% 0.1 195);
+  --color-accent-700: oklch(43% 0.09 195);
+  --color-accent-800: oklch(35% 0.07 195);
+  --color-accent-900: oklch(28% 0.06 195);
+
+  /* ---- Neutrals: near-achromatic, faint cool tint ---- */
+  --color-neutral-0: oklch(100% 0 0);
+  --color-neutral-50: oklch(98% 0.003 260);
+  --color-neutral-100: oklch(95.5% 0.004 260);
+  --color-neutral-200: oklch(91% 0.006 260);
+  --color-neutral-300: oklch(84% 0.008 260);
+  --color-neutral-400: oklch(70% 0.01 260);
+  --color-neutral-500: oklch(58% 0.012 260);
+  --color-neutral-600: oklch(48% 0.012 260);
+  --color-neutral-700: oklch(38% 0.012 260);
+  --color-neutral-800: oklch(27% 0.01 260);
+  --color-neutral-900: oklch(19% 0.008 260);
+  --color-neutral-950: oklch(13% 0.006 260);
+
+  /* ---- Semantic ---- */
+  --color-success-500: oklch(65% 0.16 148);
+  --color-success-600: oklch(55% 0.15 148);
+  --color-warning-500: oklch(78% 0.16 85);
+  --color-warning-600: oklch(68% 0.16 80);
+  --color-danger-500: oklch(62% 0.21 25);
+  --color-danger-600: oklch(54% 0.21 25);
+
+  /* ---- Type scale: 1.25 modular ratio, 16px body floor ---- */
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.5;
+  --text-body-sm: 0.875rem;
+  --text-body-sm--line-height: 1.5;
+  --text-body: 1rem;
+  --text-body--line-height: 1.6;
+  --text-subheading: 1.25rem;
+  --text-subheading--line-height: 1.4;
+  --text-h3: 1.5rem;
+  --text-h3--line-height: 1.3;
+  --text-h2: 2rem;
+  --text-h2--line-height: 1.2;
+  --text-h1: 2.5rem;
+  --text-h1--line-height: 1.15;
+  --text-display: clamp(2.75rem, 2rem + 3vw, 4rem);
+  --text-display--line-height: 1.05;
+
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+
+  --animate-fade-in: fade-in 0.2s ease-out;
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  --animate-pulse-record: pulse-record 1.4s ease-in-out infinite;
+  @keyframes pulse-record {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+}
+
+/* ---- Semantic surface tokens: light by default, dark via .dark ---- */
+:root {
+  --color-bg: var(--color-neutral-0);
+  --color-bg-subtle: var(--color-neutral-50);
+  --color-surface: var(--color-neutral-0);
+  --color-surface-raised: var(--color-neutral-0);
+  --color-border: var(--color-neutral-200);
+  --color-border-strong: var(--color-neutral-300);
+  --color-text: var(--color-neutral-900);
+  --color-text-muted: var(--color-neutral-600);
+  --color-text-faint: var(--color-neutral-400);
+  color-scheme: light;
+}
+
+.dark {
+  --color-bg: var(--color-neutral-950);
+  --color-bg-subtle: var(--color-neutral-900);
+  --color-surface: var(--color-neutral-900);
+  --color-surface-raised: var(--color-neutral-800);
+  --color-border: var(--color-neutral-800);
+  --color-border-strong: var(--color-neutral-700);
+  --color-text: var(--color-neutral-50);
+  --color-text-muted: var(--color-neutral-400);
+  --color-text-faint: var(--color-neutral-500);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --color-bg: var(--color-neutral-950);
+    --color-bg-subtle: var(--color-neutral-900);
+    --color-surface: var(--color-neutral-900);
+    --color-surface-raised: var(--color-neutral-800);
+    --color-border: var(--color-neutral-800);
+    --color-border-strong: var(--color-neutral-700);
+    --color-text: var(--color-neutral-50);
+    --color-text-muted: var(--color-neutral-400);
+    --color-text-faint: var(--color-neutral-500);
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  html {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100dvh;
+  }
+
+  ::selection {
+    background: var(--color-primary-200);
+    color: var(--color-primary-900);
+  }
+
+  /* Consistent, visible keyboard focus everywhere, without adding a ring on mouse/touch clicks. */
+  :focus-visible {
+    outline: 2px solid var(--color-primary-500);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+}

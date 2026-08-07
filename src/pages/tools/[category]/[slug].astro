@@ -1,0 +1,57 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import ToolHeader from "../../../components/site/ToolHeader.astro";
+import ToolGrid from "../../../components/tool/ToolGrid.tsx";
+import { tools } from "../../../lib/tools-registry";
+import { Clock } from "lucide-react";
+
+// Tools that are already built ship their own explicit page (e.g.
+// src/pages/tools/video/trim-video.astro), which Astro resolves in
+// preference to this dynamic route. This route only needs to generate
+// "coming soon" pages for everything still unbuilt.
+export function getStaticPaths() {
+  return tools
+    .filter((t) => t.status === "soon")
+    .map((tool) => ({
+      params: { category: tool.category, slug: tool.slug },
+      props: { tool },
+    }));
+}
+
+const { tool } = Astro.props;
+const otherTools = tools.filter((t) => t.status === "available").slice(0, 3);
+---
+
+<Layout title={`${tool.name} — Clipbench`} description={tool.description}>
+  <ToolHeader name={tool.name} description={tool.description} category={tool.category} />
+
+  <div class="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
+    <div
+      class="flex flex-col items-center gap-3 rounded-xl border border-dashed border-(--color-border-strong) bg-(--color-bg-subtle) px-6 py-16 text-center"
+    >
+      <span class="grid h-12 w-12 place-items-center rounded-full bg-primary-100 text-primary-600 dark:bg-primary-900 dark:text-primary-300">
+        <Clock size={22} />
+      </span>
+      <p class="font-semibold">This tool is on the way</p>
+      <p class="max-w-sm text-body-sm text-(--color-text-muted)">
+        We're still building {tool.name}. In the meantime, try one of the tools already live
+        below.
+      </p>
+      <a
+        href="/tools"
+        class="mt-2 inline-flex items-center rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold hover:border-(--color-border-strong)"
+      >
+        Browse all tools
+      </a>
+    </div>
+
+    {otherTools.length > 0 && (
+      <div class="mt-12">
+        <h2 class="text-h3 font-bold tracking-tight">Available now</h2>
+        <div class="mt-4">
+          <ToolGrid client:load tools={otherTools} showSearch={false} />
+        </div>
+      </div>
+    )}
+  </div>
+</Layout>

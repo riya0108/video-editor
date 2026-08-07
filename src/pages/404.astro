@@ -1,0 +1,28 @@
+---
+import Layout from "../layouts/Layout.astro";
+import ToolGrid from "../components/tool/ToolGrid.tsx";
+import { tools } from "../lib/tools-registry";
+import { Compass } from "lucide-react";
+
+const featuredTools = tools.filter((t) => t.featured);
+---
+
+<Layout title="Page not found — Clipbench" description="This page doesn't exist. Browse Clipbench's free video and audio tools instead.">
+  <section class="mx-auto max-w-7xl px-4 py-20 text-center sm:px-6 lg:px-8">
+    <Compass className="mx-auto text-primary-500" size={32} />
+    <h1 class="mt-4 text-h1 font-bold tracking-tight">Page not found</h1>
+    <p class="mx-auto mt-3 max-w-md text-body text-(--color-text-muted)">
+      That page doesn&rsquo;t exist, or may have moved. Here are some tools to get you back on track.
+    </p>
+    <a
+      href="/"
+      class="mt-6 inline-flex items-center rounded-md bg-primary-500 px-6 py-3 font-semibold text-white transition-colors hover:bg-primary-600"
+    >
+      Back to home
+    </a>
+  </section>
+
+  <section class="mx-auto max-w-7xl px-4 pb-20 sm:px-6 lg:px-8">
+    <ToolGrid client:load tools={featuredTools} showSearch={false} />
+  </section>
+</Layout>

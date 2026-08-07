@@ -13,6 +13,12 @@
       "skillPath": "ai-image-generation/SKILL.md",
       "computedHash": "765f5ce859b1943e948d4f747b768389d7a9f0c563d4e93f2a3231bc1a617944"
     },
+    "ai-prompt-engineering-safety-review": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/ai-prompt-engineering-safety-review/SKILL.md",
+      "computedHash": "81bf64d383cb7a6c06d252f6b1097c40a161b1968b05204fffeacc395fda1ae9"
+    },
     "ai-sdk": {
       "source": "vercel/ai",
       "sourceType": "github",
@@ -43,6 +49,30 @@
       "skillPath": "skills/baoyu-image-gen/SKILL.md",
       "computedHash": "388a4e2ae4e1953476dcbda56f446a9f6896fd4423cad2f9ba66ad9c06cbc044"
     },
+    "better-typography": {
+      "source": "jakubkrehel/skills",
+      "sourceType": "github",
+      "skillPath": "skills/better-typography/SKILL.md",
+      "computedHash": "a43f293432e6df33b62553b67bc1c60e01f7ec66894da9d6bdb8fb95027f6d8d"
+    },
+    "brand": {
+      "source": "nextlevelbuilder/ui-ux-pro-max-skill",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/brand/SKILL.md",
+      "computedHash": "3c7acb846082f9e4cc873f1cf85bd57ade027206e18c7c050797f815e3a56af7"
+    },
+    "brand-analyzer": {
+      "source": "ailabs-393/ai-labs-claude-skills",
+      "sourceType": "github",
+      "skillPath": "packages/skills/brand-analyzer/SKILL.md",
+      "computedHash": "85eb5e8a69a6d99cbf24d3097eb100977654108ba6b7022209682e744cc74954"
+    },
+    "brand-consistency": {
+      "source": "dylantarre/animation-principles",
+      "sourceType": "github",
+      "skillPath": "skills/12-by-problem-type/brand-consistency/SKILL.md",
+      "computedHash": "d1edf054ffebe406003d60322c9171257dba161bf2edba6c47fa36ead21f5992"
+    },
     "changelog-video": {
       "source": "heygen-com/hyperframes",
       "sourceType": "github",
@@ -55,11 +85,23 @@
       "skillPath": "skills/cloudbase/SKILL.md",
       "computedHash": "7176b860fabda488f6d950a172e8be90d1bae295ad1fe9efca7548936925a8ba"
     },
+    "color-theory-palette-harmony-expert": {
+      "source": "erichowens/some_claude_skills",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/color-theory-palette-harmony-expert/SKILL.md",
+      "computedHash": "2291395477ce9df4a0cc1b46a7fa5c762b73b72ae72c3d59880f0ff36935ee27"
+    },
     "firebase-ai-logic-basics": {
       "source": "firebase/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/firebase-ai-logic-basics/SKILL.md",
       "computedHash": "fbe2bd8cb8fb7c90cd30f85d6f3de237b3ebf1dca91c2b92ff4fa0aa26285f7b"
+    },
+    "font-pairing-suggester": {
+      "source": "onewave-ai/claude-skills",
+      "sourceType": "github",
+      "skillPath": "font-pairing-suggester/SKILL.md",
+      "computedHash": "03b9ac9b499f962f9676bbd669584c262becb77193646c30c2c14c20ca5b353f"
     },
     "general-video": {
       "source": "heygen-com/hyperframes",
@@ -133,6 +175,18 @@
       "skillPath": "skills/product-launch-video/SKILL.md",
       "computedHash": "8f3fa80304e1c3a821fdb4148ab1cc6bd37a35025492e9a4260c6d0104b4d71c"
     },
+    "prompt-engineering": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/prompt-engineering/SKILL.md",
+      "computedHash": "ba7fc5cdd72445b9084ce75f015eb442e7234366aeb40734c4bdc988283cd7c6"
+    },
+    "prompt-engineering-patterns": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/llm-application-dev/skills/prompt-engineering-patterns/SKILL.md",
+      "computedHash": "e6b7544a39770a3a65f6b2f5da0c455b99a2fe004fe7c6caf6f5040cda85cc54"
+    },
     "qianwen-image-generation": {
       "source": "qianwen-ai/qianwen-ai",
       "sourceType": "github",
@@ -150,6 +204,18 @@
       "sourceType": "github",
       "skillPath": "skills/tao-generate-image-grounding/SKILL.md",
       "computedHash": "9622776617dab105b973d53e6c1838d9ec390186e1c25f3080b0d73f02d29d58"
+    },
+    "typography-scale": {
+      "source": "owl-listener/designer-skills",
+      "sourceType": "github",
+      "skillPath": "ui-design/skills/typography-scale/SKILL.md",
+      "computedHash": "2ab442a62f1ecc618ab4458a29372c88c5ec3f904209b358003772d96a99a9f9"
+    },
+    "ui-typography": {
+      "source": "bencium/bencium-claude-code-design-skill",
+      "sourceType": "github",
+      "skillPath": "typography/skills/typography/SKILL.md",
+      "computedHash": "1e2ca6a20a9180dedd9ae9039e743bf2609fb4ad0608ee5cafe739fcef04e7ec"
     },
     "video-editing": {
       "source": "affaan-m/everything-claude-code",
@@ -175,11 +241,23 @@
       "skillPath": "skills/videoagent-video-studio/SKILL.md",
       "computedHash": "6b680136146f3776e5706a066440432456b2dcf27e674ac6650aedc00ceca940"
     },
+    "visual-hierarchy": {
+      "source": "owl-listener/designer-skills",
+      "sourceType": "github",
+      "skillPath": "ui-design/skills/visual-hierarchy/SKILL.md",
+      "computedHash": "f8cc919884a4752f54303b4e07af8db630503e058aefd3197dce1d1a5eb9c3ff"
+    },
     "web-design-guidelines": {
       "source": "vercel-labs/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/web-design-guidelines/SKILL.md",
       "computedHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474"
+    },
+    "web-typography": {
+      "source": "wondelai/skills",
+      "sourceType": "github",
+      "skillPath": "web-typography/SKILL.md",
+      "computedHash": "c17dc754c870e6de1bed62c972291f56c5b7752b921c2273886a6f6380d16596"
     }
   }
 }
