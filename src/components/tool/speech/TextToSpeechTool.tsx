@@ -13,12 +13,47 @@ import {
 const SAMPLE_TEXT =
   "Welcome to Clipbench. Type or paste any text here, pick a voice, and it will be read aloud.";
 
+type AccentGroup = {
+  id: string;
+  label: string;
+  match: (lang: string) => boolean;
+};
+
+// Other major Indian language locales (Bengali, Tamil, Telugu, Kannada, Malayalam,
+// Marathi, Gujarati, Punjabi, Urdu, Odia, Assamese) that OS voice packs ship separately from Hindi.
+const OTHER_INDIAN_LANG_PREFIXES = ["bn", "ta", "te", "kn", "ml", "mr", "gu", "pa", "ur", "or", "as"];
+
+// Ordered so Hindi and Indian-English voices surface first when present.
+const ACCENT_GROUPS: AccentGroup[] = [
+  { id: "hi", label: "Hindi", match: (lang) => lang.startsWith("hi") },
+  { id: "en-in", label: "English (India)", match: (lang) => lang === "en-in" },
+  {
+    id: "in-other",
+    label: "Indian Languages (Other)",
+    match: (lang) => OTHER_INDIAN_LANG_PREFIXES.some((p) => lang.startsWith(`${p}-in`) || lang === p),
+  },
+  { id: "en-us", label: "English (US)", match: (lang) => lang === "en-us" },
+  { id: "en-gb", label: "English (UK)", match: (lang) => lang === "en-gb" },
+  {
+    id: "en-other",
+    label: "English (Other)",
+    match: (lang) => lang.startsWith("en") && !["en-in", "en-us", "en-gb"].includes(lang),
+  },
+];
+
+function groupIdForLang(lang: string): string {
+  const normalized = lang.toLowerCase();
+  const found = ACCENT_GROUPS.find((g) => g.match(normalized));
+  return found ? found.id : "other";
+}
+
 export default function TextToSpeechTool() {
   const recorder = useMediaRecorder();
   const [isSupported, setIsSupported] = useState(true);
   const [text, setText] = useState(SAMPLE_TEXT);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceURI, setVoiceURI] = useState("");
+  const [accentFilter, setAccentFilter] = useState("all");
   const [rate, setRate] = useState(1);
   const [pitch, setPitch] = useState(1);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -42,6 +77,16 @@ export default function TextToSpeechTool() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const availableGroupIds = new Set(voices.map((v) => groupIdForLang(v.lang)));
+  const accentOptions = [
+    { id: "all", label: "All voices" },
+    ...ACCENT_GROUPS.filter((g) => availableGroupIds.has(g.id)),
+    ...(availableGroupIds.has("other") ? [{ id: "other", label: "Other languages" }] : []),
+  ];
+  const filteredVoices =
+    accentFilter === "all" ? voices : voices.filter((v) => groupIdForLang(v.lang) === accentFilter);
+  const hasIndianVoice = availableGroupIds.has("hi") || availableGroupIds.has("en-in");
 
   const buildUtterance = () => {
     const utterance = new SpeechSynthesisUtterance(text);
@@ -116,6 +161,22 @@ export default function TextToSpeechTool() {
     setRecordError(null);
   };
 
+  const handleAccentFilterChange = (nextFilter: string) => {
+    setAccentFilter(nextFilter);
+    const nextVoices =
+      nextFilter === "all" ? voices : voices.filter((v) => groupIdForLang(v.lang) === nextFilter);
+    if (nextVoices.length > 0 && !nextVoices.some((v) => v.voiceURI === voiceURI)) {
+      setVoiceURI(nextVoices[0].voiceURI);
+    }
+  };
+
+  const voicesByGroup =
+    accentFilter === "all"
+      ? [...ACCENT_GROUPS, { id: "other", label: "Other languages", match: () => true }]
+          .map((g) => ({ group: g, list: voices.filter((v) => groupIdForLang(v.lang) === g.id) }))
+          .filter((g) => g.list.length > 0)
+      : [{ group: { id: accentFilter, label: "" }, list: filteredVoices }];
+
   if (!isSupported) {
     return (
       <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-8 text-center">
@@ -148,7 +209,21 @@ export default function TextToSpeechTool() {
         className="w-full resize-none rounded-md border border-(--color-border) bg-(--color-surface) px-3 py-2 text-body outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-200"
       />
 
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
+          Accent / language
+          <select
+            value={accentFilter}
+            onChange={(e) => handleAccentFilterChange(e.target.value)}
+            className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
+          >
+            {accentOptions.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
           Voice
           <select
@@ -156,13 +231,28 @@ export default function TextToSpeechTool() {
             onChange={(e) => setVoiceURI(e.target.value)}
             className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
           >
-            {voices.map((v) => (
-              <option key={v.voiceURI} value={v.voiceURI}>
-                {v.name} ({v.lang})
-              </option>
-            ))}
+            {voicesByGroup.map(({ group, list }) =>
+              accentFilter === "all" ? (
+                <optgroup key={group.id} label={group.label}>
+                  {list.map((v) => (
+                    <option key={v.voiceURI} value={v.voiceURI}>
+                      {v.name} ({v.lang})
+                    </option>
+                  ))}
+                </optgroup>
+              ) : (
+                list.map((v) => (
+                  <option key={v.voiceURI} value={v.voiceURI}>
+                    {v.name} ({v.lang})
+                  </option>
+                ))
+              ),
+            )}
           </select>
         </label>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
           Rate: {rate.toFixed(1)}x
           <input
@@ -188,6 +278,18 @@ export default function TextToSpeechTool() {
           />
         </label>
       </div>
+
+      {!hasIndianVoice && (
+        <p className="mt-3 flex items-start gap-2 text-caption text-(--color-text-muted)">
+          <Info size={14} className="mt-0.5 shrink-0" />
+          <span>
+            No Hindi or Indian-English voice was found on this device yet. On Windows, add one under{" "}
+            <strong>Settings → Time & Language → Speech → Manage voices</strong>. On macOS, add one under{" "}
+            <strong>System Settings → Accessibility → Spoken Content → System voice</strong>. Chrome also adds
+            online Google voices (including Hindi) automatically when you&rsquo;re connected to the internet.
+          </span>
+        </p>
+      )}
 
       <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
         {!isSpeaking ? (

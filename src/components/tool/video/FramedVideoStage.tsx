@@ -16,6 +16,8 @@ export default function FramedVideoStage({
   onTimeUpdate,
   onPlay,
   onPause,
+  controls = false,
+  overlayInteractive = true,
   children,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -26,6 +28,9 @@ export default function FramedVideoStage({
   onTimeUpdate?: () => void;
   onPlay?: () => void;
   onPause?: () => void;
+  controls?: boolean;
+  /** Set false for purely-visual overlays (e.g. caption preview) so clicks reach native video controls underneath. */
+  overlayInteractive?: boolean;
   children?: (box: { width: number; height: number }) => ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -59,6 +64,7 @@ export default function FramedVideoStage({
         onTimeUpdate={onTimeUpdate}
         onPlay={onPlay}
         onPause={onPause}
+        controls={controls}
         style={{ width: box.width || undefined, height: box.height || undefined }}
       />
       {box.width > 0 && (
@@ -66,7 +72,9 @@ export default function FramedVideoStage({
           className="pointer-events-none absolute"
           style={{ width: box.width, height: box.height }}
         >
-          <div className="pointer-events-auto absolute inset-0">{children?.(box)}</div>
+          <div className={`absolute inset-0 ${overlayInteractive ? "pointer-events-auto" : "pointer-events-none"}`}>
+            {children?.(box)}
+          </div>
         </div>
       )}
     </div>

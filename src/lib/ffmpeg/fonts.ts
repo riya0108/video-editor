@@ -31,6 +31,13 @@ export const TEXT_FONTS: TextFontOption[] = [
     url: "/fonts/geist-mono-drawtext.ttf",
     cssFontFamily: '"Geist Mono Variable", ui-monospace, monospace',
   },
+  {
+    id: "anton",
+    label: "Impact",
+    ffmpegName: "anton.ttf",
+    url: "/fonts/anton-drawtext.ttf",
+    cssFontFamily: '"Anton", ui-sans-serif, sans-serif',
+  },
 ];
 
 export const DEFAULT_TEXT_FONT = TEXT_FONTS[0];

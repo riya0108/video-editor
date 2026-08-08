@@ -26,6 +26,10 @@ const FONTS = [
     src: join(nodeModules, "@fontsource", "bebas-neue", "files", "bebas-neue-latin-400-normal.woff2"),
     dest: join(destDir, "bebas-neue-drawtext.ttf"),
   },
+  {
+    src: join(nodeModules, "@fontsource", "anton", "files", "anton-latin-400-normal.woff2"),
+    dest: join(destDir, "anton-drawtext.ttf"),
+  },
 ];
 
 for (const { src, dest } of FONTS) {

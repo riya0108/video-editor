@@ -3,6 +3,8 @@
 /* Self-hosted variable fonts (no external requests — keeps the app private/offline-friendly) */
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@import "@fontsource/bebas-neue";
+@import "@fontsource/anton";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
