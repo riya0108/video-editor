@@ -3,8 +3,11 @@ import { Type, Captions } from "lucide-react";
 import Dropzone from "../Dropzone";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
+import ToolSplitLayout from "../ToolSplitLayout";
+import ToolPanelSection from "../ToolPanelSection";
 import FramedVideoStage from "./FramedVideoStage";
 import CaptionsEditor from "./CaptionsEditor";
+import CaptionsPreview from "./CaptionsPreview";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { useCaptions } from "../../../lib/hooks/useCaptions";
@@ -12,6 +15,7 @@ import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format"
 import { escapeDrawtext } from "../../../lib/ffmpeg/drawtext";
 import { TEXT_FONTS, getTextFont, DEFAULT_TEXT_FONT } from "../../../lib/ffmpeg/fonts";
 import { buildCaptionsFilter } from "../../../lib/captions/build-captions-filter";
+import { measureKaraokeLayouts } from "../../../lib/captions/karaoke-layout";
 
 type Position = "top" | "center" | "bottom";
 type Mode = "text" | "captions";
@@ -92,14 +96,17 @@ export default function AddTextTool() {
   };
 
   const handleCaptionsExport = async () => {
-    if (!video.file || captions.cues.length === 0) return;
+    if (!video.file || captions.cues.length === 0 || video.videoWidth === 0) return;
     const ext = guessVideoExtension(video.file);
     const inputName = `input.${ext}`;
     const outputName = "output.mp4";
     const font = getTextFont(captions.style.fontId);
 
     const fontBlob = await fetch(font.url).then((r) => r.blob());
-    const vf = buildCaptionsFilter(captions.cues, captions.style, font.ffmpegName);
+    const karaokeLayouts = captions.style.karaoke
+      ? await measureKaraokeLayouts(captions.cues, captions.style, font.cssFontFamily, video.videoWidth)
+      : undefined;
+    const vf = buildCaptionsFilter(captions.cues, captions.style, font.ffmpegName, karaokeLayouts);
 
     await exportState.run(
       {
@@ -130,7 +137,13 @@ export default function AddTextTool() {
   };
 
   const handleExport = mode === "text" ? handleTextExport : handleCaptionsExport;
-  const canExport = mode === "text" ? !!text.trim() : captions.cues.length > 0;
+  const canExport =
+    mode === "text"
+      ? !!text.trim()
+      : captions.cues.length > 0 &&
+        video.videoWidth > 0 &&
+        !video.isMetadataLoading &&
+        !video.metadataError;
 
   const reset = () => {
     exportState.reset();
@@ -163,41 +176,160 @@ export default function AddTextTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
-      <div className="mb-5 flex w-fit items-center gap-1 rounded-md border border-(--color-border) p-1">
-        <button
-          type="button"
-          onClick={() => setMode("text")}
-          className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-caption font-medium transition-colors ${
-            mode === "text" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
-          }`}
-        >
-          <Type size={13} />
-          Text Overlay
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("captions")}
-          className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-caption font-medium transition-colors ${
-            mode === "captions"
-              ? "bg-primary-500 text-white"
-              : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
-          }`}
-        >
-          <Captions size={13} />
-          Captions
-        </button>
-      </div>
-
-      {mode === "text" ? (
+    <ToolSplitLayout
+      controls={
         <>
-          {video.sourceUrl && (
+          <div className="flex w-fit items-center gap-1 rounded-md border border-(--color-border) p-1">
+            <button
+              type="button"
+              onClick={() => setMode("text")}
+              className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-caption font-medium transition-colors ${
+                mode === "text" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
+              }`}
+            >
+              <Type size={13} />
+              Text Overlay
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("captions")}
+              className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-caption font-medium transition-colors ${
+                mode === "captions"
+                  ? "bg-primary-500 text-white"
+                  : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
+              }`}
+            >
+              <Captions size={13} />
+              Captions
+            </button>
+          </div>
+
+          {mode === "text" ? (
+            <ToolPanelSection icon={Type} label="Text">
+              <div className="space-y-4">
+                <textarea
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  rows={2}
+                  placeholder="Type your text…"
+                  className="w-full resize-none rounded-md border border-(--color-border) bg-(--color-surface) px-3 py-2 text-body-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-200"
+                />
+
+                <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
+                  Font
+                  <select
+                    value={fontId}
+                    onChange={(e) => setFontId(e.target.value)}
+                    className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
+                  >
+                    {TEXT_FONTS.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="flex items-center gap-2">
+                  {COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      aria-label={`Text color ${c}`}
+                      onClick={() => setColor(c)}
+                      className={`h-6 w-6 rounded-full border-2 ${color === c ? "border-primary-500" : "border-(--color-border)"}`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={color}
+                    onChange={(e) => setColor(e.target.value)}
+                    className="h-6 w-6 cursor-pointer rounded border border-(--color-border) bg-transparent"
+                    aria-label="Custom text color"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1 rounded-md border border-(--color-border) p-1">
+                  {(["top", "center", "bottom"] as Position[]).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPosition(p)}
+                      className={`flex-1 rounded px-3 py-1 text-caption font-medium capitalize transition-colors ${
+                        position === p
+                          ? "bg-primary-500 text-white"
+                          : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="flex items-center gap-2 text-caption text-(--color-text-muted)">
+                  <input
+                    type="checkbox"
+                    checked={withBackground}
+                    onChange={(e) => setWithBackground(e.target.checked)}
+                    className="accent-(--color-primary-500)"
+                  />
+                  Background box
+                </label>
+
+                <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
+                  Size
+                  <input
+                    type="range"
+                    min={16}
+                    max={140}
+                    value={fontSize}
+                    onChange={(e) => setFontSize(Number(e.target.value))}
+                    className="flex-1 accent-(--color-primary-500)"
+                  />
+                  <span className="w-10 text-right tabular-nums">{fontSize}px</span>
+                </label>
+              </div>
+            </ToolPanelSection>
+          ) : (
+            <CaptionsEditor video={video} captions={captions} />
+          )}
+
+          <ExportStatus
+            enginePhase={exportState.enginePhase}
+            engineFraction={exportState.engineFraction}
+            runFraction={exportState.runFraction}
+            error={exportState.error ?? video.metadataError}
+            runLabel={mode === "text" ? "Adding text…" : "Adding captions…"}
+          />
+
+          <button
+            type="button"
+            disabled={exportState.isProcessing || !canExport}
+            onClick={handleExport}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {mode === "text" ? <Type size={16} /> : <Captions size={16} />}
+            {exportState.isProcessing
+              ? mode === "text"
+                ? "Adding text…"
+                : "Adding captions…"
+              : mode === "text"
+                ? "Add text"
+                : "Add captions"}
+          </button>
+        </>
+      }
+      preview={
+        mode === "text" ? (
+          video.sourceUrl && (
             <FramedVideoStage
               videoRef={video.videoRef}
               sourceUrl={video.sourceUrl}
               naturalWidth={video.videoWidth}
               naturalHeight={video.videoHeight}
               onLoadedMetadata={video.onLoadedMetadata}
+              onError={video.onError}
             >
               {(box) => {
                 const scale = video.videoWidth > 0 ? box.width / video.videoWidth : 1;
@@ -220,124 +352,11 @@ export default function AddTextTool() {
                 );
               }}
             </FramedVideoStage>
-          )}
-
-          <div className="mt-5 space-y-4">
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={2}
-              placeholder="Type your text…"
-              className="w-full resize-none rounded-md border border-(--color-border) bg-(--color-surface) px-3 py-2 text-body-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-200"
-            />
-
-            <div className="flex flex-wrap items-center gap-4">
-              <label className="flex items-center gap-2 text-caption text-(--color-text-muted)">
-                Font
-                <select
-                  value={fontId}
-                  onChange={(e) => setFontId(e.target.value)}
-                  className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
-                >
-                  {TEXT_FONTS.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="flex items-center gap-2">
-                {COLORS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    aria-label={`Text color ${c}`}
-                    onClick={() => setColor(c)}
-                    className={`h-6 w-6 rounded-full border-2 ${color === c ? "border-primary-500" : "border-(--color-border)"}`}
-                    style={{ backgroundColor: c }}
-                  />
-                ))}
-                <input
-                  type="color"
-                  value={color}
-                  onChange={(e) => setColor(e.target.value)}
-                  className="h-6 w-6 cursor-pointer rounded border border-(--color-border) bg-transparent"
-                  aria-label="Custom text color"
-                />
-              </div>
-
-              <div className="flex items-center gap-1 rounded-md border border-(--color-border) p-1">
-                {(["top", "center", "bottom"] as Position[]).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => setPosition(p)}
-                    className={`rounded px-3 py-1 text-caption font-medium capitalize transition-colors ${
-                      position === p
-                        ? "bg-primary-500 text-white"
-                        : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-
-              <label className="flex items-center gap-2 text-caption text-(--color-text-muted)">
-                <input
-                  type="checkbox"
-                  checked={withBackground}
-                  onChange={(e) => setWithBackground(e.target.checked)}
-                  className="accent-(--color-primary-500)"
-                />
-                Background box
-              </label>
-            </div>
-
-            <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
-              Size
-              <input
-                type="range"
-                min={16}
-                max={140}
-                value={fontSize}
-                onChange={(e) => setFontSize(Number(e.target.value))}
-                className="flex-1 accent-(--color-primary-500)"
-              />
-              <span className="w-10 text-right tabular-nums">{fontSize}px</span>
-            </label>
-          </div>
-        </>
-      ) : (
-        <CaptionsEditor video={video} captions={captions} />
-      )}
-
-      <ExportStatus
-        enginePhase={exportState.enginePhase}
-        engineFraction={exportState.engineFraction}
-        runFraction={exportState.runFraction}
-        error={exportState.error}
-        runLabel={mode === "text" ? "Adding text…" : "Adding captions…"}
-      />
-
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          disabled={exportState.isProcessing || !canExport}
-          onClick={handleExport}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {mode === "text" ? <Type size={16} /> : <Captions size={16} />}
-          {exportState.isProcessing
-            ? mode === "text"
-              ? "Adding text…"
-              : "Adding captions…"
-            : mode === "text"
-              ? "Add text"
-              : "Add captions"}
-        </button>
-      </div>
-    </div>
+          )
+        ) : (
+          <CaptionsPreview video={video} captions={captions} />
+        )
+      }
+    />
   );
 }

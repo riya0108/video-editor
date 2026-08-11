@@ -1,4 +1,4 @@
-import { nextCaptionId, type CaptionCue } from "./types";
+import { nextCaptionId, type CaptionCue, type CaptionWord } from "./types";
 
 export type CaptionModelTier = "fast" | "balanced";
 
@@ -56,67 +56,67 @@ async function loadTranscriber(tier: CaptionModelTier, onProgress?: GenerateCapt
   return promise;
 }
 
-/** Breaks text into <= maxChars pieces, preferring sentence/word boundaries. */
-function splitIntoReadableSegments(text: string, maxChars: number): { text: string; offset: number }[] {
-  const segments: { text: string; offset: number }[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    let sliceEnd = Math.min(cursor + maxChars, text.length);
-    if (sliceEnd < text.length) {
-      const window = text.slice(cursor, sliceEnd + 1);
-      const sentenceBreak = Math.max(window.lastIndexOf(". "), window.lastIndexOf("! "), window.lastIndexOf("? "));
-      if (sentenceBreak > maxChars * 0.4) {
-        sliceEnd = cursor + sentenceBreak + 1;
-      } else {
-        const lastSpace = window.lastIndexOf(" ");
-        if (lastSpace > maxChars * 0.4) sliceEnd = cursor + lastSpace;
-      }
-    }
-    const piece = text.slice(cursor, sliceEnd).trim();
-    if (piece) segments.push({ text: piece, offset: cursor });
-    cursor = sliceEnd;
-    while (text[cursor] === " ") cursor += 1;
-  }
-  return segments;
-}
-
-function chunksToCues(chunks: RawChunk[], audioDuration: number): CaptionCue[] {
+/**
+ * Groups word-level chunks into readable cues (broadcast norms land around
+ * 32-42 chars/line for two lines, and a few seconds of read time), keeping
+ * each word's own timestamp on the cue so the caption editor can offer
+ * word-by-word karaoke highlighting.
+ */
+function wordsToCues(words: CaptionWord[]): CaptionCue[] {
   const cues: CaptionCue[] = [];
-  for (const chunk of chunks) {
-    const text = chunk.text.trim();
-    if (!text) continue;
-    const start = chunk.timestamp[0] ?? 0;
-    const end = chunk.timestamp[1] ?? Math.min(audioDuration, start + 4);
-    const duration = Math.max(0.1, end - start);
+  let current: CaptionWord[] = [];
+  let charCount = 0;
 
-    if (text.length <= MAX_CUE_CHARS && duration <= MAX_CUE_SECONDS) {
-      cues.push({ id: nextCaptionId(), start, end, text });
-      continue;
-    }
-
-    for (const piece of splitIntoReadableSegments(text, MAX_CUE_CHARS)) {
-      const segStart = start + duration * (piece.offset / text.length);
-      const segEnd = start + duration * ((piece.offset + piece.text.length) / text.length);
+  const flush = () => {
+    if (current.length === 0) return;
+    const text = current.map((w) => w.text).join(" ").replace(/\s+/g, " ").trim();
+    if (text) {
       cues.push({
         id: nextCaptionId(),
-        start: segStart,
-        end: Math.max(segStart + 0.3, segEnd),
-        text: piece.text,
+        start: current[0].start,
+        end: current[current.length - 1].end,
+        text,
+        words: current,
       });
     }
+    current = [];
+    charCount = 0;
+  };
+
+  for (const word of words) {
+    const text = word.text.trim();
+    if (!text) continue;
+    const endsSentence = /[.!?]$/.test(text);
+
+    const wouldOverflowChars = charCount + text.length + 1 > MAX_CUE_CHARS;
+    const wouldOverflowSeconds = current.length > 0 && word.end - current[0].start > MAX_CUE_SECONDS;
+    if (current.length > 0 && (wouldOverflowChars || wouldOverflowSeconds)) flush();
+
+    current.push({ text, start: word.start, end: Math.max(word.start, word.end) });
+    charCount += text.length + 1;
+
+    if (endsSentence) flush();
   }
+  flush();
+
   return cues;
+}
+
+export interface TranscribeWordsResult {
+  words: CaptionWord[];
+  audioDuration: number;
 }
 
 /**
  * Transcribes a video's audio track fully client-side (via an in-browser
- * Whisper model) and returns timed caption cues. Works on any language the
- * video happens to be in — pass `language` only as an optional accuracy hint.
+ * Whisper model) and returns flat, word-level timestamps. Shared foundation
+ * for both auto-captions (grouped into readable cues) and the filler-word /
+ * silence detector, which needs the raw per-word timing to find gaps.
  */
-export async function generateCaptions(
+export async function transcribeWords(
   videoFile: File,
   { modelTier, language, onProgress }: GenerateCaptionsOptions,
-): Promise<CaptionCue[]> {
+): Promise<TranscribeWordsResult> {
   const { read_audio } = await import("@huggingface/transformers");
   const objectUrl = URL.createObjectURL(videoFile);
   let audio: Float32Array;
@@ -133,12 +133,34 @@ export async function generateCaptions(
 
   onProgress?.({ phase: "transcribing", fraction: 0 });
   const output = await transcriber(audio, {
-    return_timestamps: true,
+    return_timestamps: "word",
     chunk_length_s: 30,
     stride_length_s: 5,
     language: language || undefined,
   });
 
   const audioDuration = audio.length / 16000;
-  return chunksToCues(output.chunks ?? [], audioDuration);
+  const words: CaptionWord[] = [];
+  for (const chunk of output.chunks ?? []) {
+    const text = chunk.text.trim();
+    if (!text) continue;
+    const start = chunk.timestamp[0] ?? (words.at(-1)?.end ?? 0);
+    const end = chunk.timestamp[1] ?? Math.min(audioDuration, start + 0.5);
+    words.push({ text, start, end: Math.max(start, end) });
+  }
+
+  return { words, audioDuration };
+}
+
+/**
+ * Transcribes a video's audio track fully client-side (via an in-browser
+ * Whisper model) and returns timed caption cues. Works on any language the
+ * video happens to be in — pass `language` only as an optional accuracy hint.
+ */
+export async function generateCaptions(
+  videoFile: File,
+  options: GenerateCaptionsOptions,
+): Promise<CaptionCue[]> {
+  const { words } = await transcribeWords(videoFile, options);
+  return wordsToCues(words);
 }

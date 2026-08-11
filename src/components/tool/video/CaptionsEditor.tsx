@@ -1,7 +1,7 @@
 import { useRef, useState, type ChangeEvent } from "react";
-import { Sparkles, Upload, Pencil, Plus, Trash2, Palette } from "lucide-react";
-import FramedVideoStage from "./FramedVideoStage";
+import { Sparkles, Upload, Pencil, Plus, Trash2, Palette, Captions as CaptionsIcon, List } from "lucide-react";
 import ProgressBar from "../ProgressBar";
+import ToolPanelSection from "../ToolPanelSection";
 import { CAPTION_MODELS, type CaptionModelTier } from "../../../lib/captions/auto-caption";
 import { CAPTION_COLORS, CAPTION_STYLE_PRESETS } from "../../../lib/captions/caption-styles";
 import { CAPTION_LANGUAGES } from "../../../lib/captions/languages";
@@ -39,6 +39,7 @@ function TimeField({ seconds, onCommit }: { seconds: number; onCommit: (next: nu
   );
 }
 
+/** Controls only — see CaptionsPreview for the live video + burned-in caption preview that goes in the shared preview column. */
 export default function CaptionsEditor({
   video,
   captions,
@@ -46,14 +47,11 @@ export default function CaptionsEditor({
   video: ReturnType<typeof useVideoFile>;
   captions: ReturnType<typeof useCaptions>;
 }) {
-  const [previewTime, setPreviewTime] = useState(0);
   const [modelTier, setModelTier] = useState<CaptionModelTier>("fast");
   const [language, setLanguage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { style, presetId, cues } = captions;
-  const font = getTextFont(style.fontId);
-  const activeCue = cues.find((c) => previewTime >= c.start && previewTime < c.end);
 
   const handleUploadChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -61,169 +59,122 @@ export default function CaptionsEditor({
     if (file) captions.handleSubtitleFile(file);
   };
 
-  const displayText = (text: string) => (style.uppercase ? text.toLocaleUpperCase() : text);
-
   return (
-    <div>
-      {video.sourceUrl && (
-        <FramedVideoStage
-          videoRef={video.videoRef}
-          sourceUrl={video.sourceUrl}
-          naturalWidth={video.videoWidth}
-          naturalHeight={video.videoHeight}
-          onLoadedMetadata={video.onLoadedMetadata}
-          onTimeUpdate={() => setPreviewTime(video.videoRef.current?.currentTime ?? 0)}
-          controls
-          overlayInteractive={false}
-        >
-          {(box) => {
-            const scale = video.videoWidth > 0 ? box.width / video.videoWidth : 1;
-            const positionClass: Record<CaptionPosition, string> = {
-              top: "items-start pt-[6%]",
-              center: "items-center",
-              bottom: "items-end pb-[6%]",
-            };
-            return (
-              <div className={`flex h-full w-full justify-center px-4 text-center ${positionClass[style.position]}`}>
-                {activeCue && (
-                  <span
-                    className="max-w-full whitespace-pre-wrap break-words font-semibold"
-                    style={{
-                      fontFamily: font.cssFontFamily,
-                      fontSize: style.fontSize * scale,
-                      color: style.color,
-                      lineHeight: 1.15,
-                      padding: style.background ? `${8 * scale}px ${16 * scale}px` : 0,
-                      backgroundColor: style.background ? style.backgroundColor : "transparent",
-                      WebkitTextStroke: style.outline ? `${Math.max(1, 2 * scale)}px ${style.outlineColor}` : undefined,
-                      paintOrder: style.outline ? "stroke fill" : undefined,
-                    }}
-                  >
-                    {displayText(activeCue.text)}
-                  </span>
-                )}
-              </div>
-            );
-          }}
-        </FramedVideoStage>
-      )}
-
+    <>
       {/* ---- Source ---- */}
-      <div className="mt-5 flex items-center gap-1 rounded-md border border-(--color-border) p-1">
-        {SOURCE_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => captions.setSourceMode(tab.id)}
-            className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded px-3 py-1.5 text-caption font-medium transition-colors ${
-              captions.sourceMode === tab.id
-                ? "bg-primary-500 text-white"
-                : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
-            }`}
-          >
-            <tab.icon size={13} />
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <ToolPanelSection icon={CaptionsIcon} label="Captions source">
+        <div className="flex items-center gap-1 rounded-md border border-(--color-border) p-1">
+          {SOURCE_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => captions.setSourceMode(tab.id)}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded px-3 py-1.5 text-caption font-medium transition-colors ${
+                captions.sourceMode === tab.id
+                  ? "bg-primary-500 text-white"
+                  : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
+              }`}
+            >
+              <tab.icon size={13} />
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-      <div className="mt-4 rounded-lg border border-(--color-border) bg-(--color-bg-subtle) p-4">
-        {captions.sourceMode === "auto" && (
-          <div className="space-y-3">
-            <p className="text-body-sm text-(--color-text-muted)">
-              Transcribes the video's audio fully in your browser — works with any spoken language, and nothing is
-              uploaded anywhere.
-            </p>
-            <div className="flex flex-wrap gap-3">
-              <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
-                Quality
-                <select
-                  value={modelTier}
-                  onChange={(e) => setModelTier(e.target.value as CaptionModelTier)}
-                  className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
-                >
-                  {(Object.entries(CAPTION_MODELS) as [CaptionModelTier, (typeof CAPTION_MODELS)[CaptionModelTier]][]).map(
-                    ([id, m]) => (
-                      <option key={id} value={id}>
-                        {m.label} ({m.sizeHint})
+        <div className="mt-4 rounded-lg border border-(--color-border) bg-(--color-bg-subtle) p-4">
+          {captions.sourceMode === "auto" && (
+            <div className="space-y-3">
+              <p className="text-body-sm text-(--color-text-muted)">
+                Transcribes the video's audio fully in your browser — works with any spoken language, and nothing is
+                uploaded anywhere.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
+                  Quality
+                  <select
+                    value={modelTier}
+                    onChange={(e) => setModelTier(e.target.value as CaptionModelTier)}
+                    className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
+                  >
+                    {(Object.entries(CAPTION_MODELS) as [CaptionModelTier, (typeof CAPTION_MODELS)[CaptionModelTier]][]).map(
+                      ([id, m]) => (
+                        <option key={id} value={id}>
+                          {m.label} ({m.sizeHint})
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
+                  Spoken language
+                  <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
+                  >
+                    {CAPTION_LANGUAGES.map((l) => (
+                      <option key={l.value} value={l.value}>
+                        {l.label}
                       </option>
-                    ),
-                  )}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
-                Spoken language
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
-                >
-                  {CAPTION_LANGUAGES.map((l) => (
-                    <option key={l.value} value={l.value}>
-                      {l.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <button
+                type="button"
+                disabled={!video.file || captions.isGenerating}
+                onClick={() => video.file && captions.autoGenerate(video.file, modelTier, language)}
+                className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-4 py-2 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Sparkles size={15} />
+                {captions.isGenerating ? "Generating…" : "Generate captions"}
+              </button>
+              {captions.genProgress && (
+                <ProgressBar
+                  label={captions.genProgress.phase === "downloading" ? "Downloading speech model…" : "Transcribing…"}
+                  fraction={captions.genProgress.fraction}
+                />
+              )}
+              {captions.genError && <p className="text-body-sm text-danger-600">{captions.genError}</p>}
             </div>
-            <button
-              type="button"
-              disabled={!video.file || captions.isGenerating}
-              onClick={() => video.file && captions.autoGenerate(video.file, modelTier, language)}
-              className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-4 py-2 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Sparkles size={15} />
-              {captions.isGenerating ? "Generating…" : "Generate captions"}
-            </button>
-            {captions.genProgress && (
-              <ProgressBar
-                label={captions.genProgress.phase === "downloading" ? "Downloading speech model…" : "Transcribing…"}
-                fraction={captions.genProgress.fraction}
-              />
-            )}
-            {captions.genError && <p className="text-body-sm text-danger-600">{captions.genError}</p>}
-          </div>
-        )}
+          )}
 
-        {captions.sourceMode === "manual" && (
-          <div className="space-y-3">
-            <p className="text-body-sm text-(--color-text-muted)">
-              Add a line, set when it starts and ends, and type what it should say.
-            </p>
-            <button
-              type="button"
-              onClick={() => captions.addCue(video.videoRef.current?.currentTime ?? 0)}
-              className="inline-flex items-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-surface)"
-            >
-              <Plus size={15} />
-              Add caption
-            </button>
-          </div>
-        )}
+          {captions.sourceMode === "manual" && (
+            <div className="space-y-3">
+              <p className="text-body-sm text-(--color-text-muted)">
+                Add a line, set when it starts and ends, and type what it should say.
+              </p>
+              <button
+                type="button"
+                onClick={() => captions.addCue(video.videoRef.current?.currentTime ?? 0)}
+                className="inline-flex items-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-surface)"
+              >
+                <Plus size={15} />
+                Add caption
+              </button>
+            </div>
+          )}
 
-        {captions.sourceMode === "upload" && (
-          <div className="space-y-3">
-            <p className="text-body-sm text-(--color-text-muted)">Upload an existing .srt or .vtt subtitle file.</p>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-surface)"
-            >
-              <Upload size={15} />
-              Choose subtitle file
-            </button>
-            <input ref={fileInputRef} type="file" accept=".srt,.vtt" className="sr-only" onChange={handleUploadChange} />
-            {captions.uploadError && <p className="text-body-sm text-danger-600">{captions.uploadError}</p>}
-          </div>
-        )}
-      </div>
+          {captions.sourceMode === "upload" && (
+            <div className="space-y-3">
+              <p className="text-body-sm text-(--color-text-muted)">Upload an existing .srt or .vtt subtitle file.</p>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-surface)"
+              >
+                <Upload size={15} />
+                Choose subtitle file
+              </button>
+              <input ref={fileInputRef} type="file" accept=".srt,.vtt" className="sr-only" onChange={handleUploadChange} />
+              {captions.uploadError && <p className="text-body-sm text-danger-600">{captions.uploadError}</p>}
+            </div>
+          )}
+        </div>
+      </ToolPanelSection>
 
       {/* ---- Style ---- */}
-      <div className="mt-5">
-        <p className="mb-2 flex items-center gap-1.5 text-caption font-medium text-(--color-text-muted)">
-          <Palette size={13} />
-          Style
-        </p>
+      <ToolPanelSection icon={Palette} label="Style">
         <div className="flex flex-wrap gap-2">
           {CAPTION_STYLE_PRESETS.map((preset) => (
             <button
@@ -359,15 +310,39 @@ export default function CaptionsEditor({
             )}
           </label>
         </div>
-      </div>
+
+        <div className="mt-4">
+          <label className="flex items-center gap-2 text-caption text-(--color-text-muted)">
+            <input
+              type="checkbox"
+              checked={style.karaoke}
+              onChange={(e) => captions.updateStyle({ karaoke: e.target.checked })}
+              className="accent-(--color-primary-500)"
+            />
+            Word-by-word highlight
+            {style.karaoke && (
+              <input
+                type="color"
+                value={style.highlightColor}
+                onChange={(e) => captions.updateStyle({ highlightColor: e.target.value })}
+                className="h-5 w-5 cursor-pointer rounded border border-(--color-border) bg-transparent"
+                aria-label="Highlight color"
+              />
+            )}
+          </label>
+          {style.karaoke && cues.length > 0 && !cues.some((c) => c.words?.length) && (
+            <p className="mt-1 text-caption text-(--color-text-muted)">
+              These captions don&apos;t have word-level timing (typed manually or uploaded), so they&apos;ll
+              export without the highlight. Auto-generate captions to enable it.
+            </p>
+          )}
+        </div>
+      </ToolPanelSection>
 
       {/* ---- Cue list ---- */}
-      <div className="mt-5">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-caption font-medium text-(--color-text-muted)">
-            {cues.length} caption{cues.length === 1 ? "" : "s"}
-          </p>
-          {cues.length > 0 && (
+      <ToolPanelSection icon={List} label={`${cues.length} caption${cues.length === 1 ? "" : "s"}`}>
+        {cues.length > 0 && (
+          <div className="mb-2 flex justify-end">
             <button
               type="button"
               onClick={() => captions.setCues([])}
@@ -375,8 +350,8 @@ export default function CaptionsEditor({
             >
               Clear all
             </button>
-          )}
-        </div>
+          </div>
+        )}
         {cues.length === 0 ? (
           <p className="rounded-lg border border-dashed border-(--color-border) px-4 py-6 text-center text-body-sm text-(--color-text-muted)">
             No captions yet — generate, type, or upload some above.
@@ -414,7 +389,7 @@ export default function CaptionsEditor({
               ))}
           </div>
         )}
-      </div>
-    </div>
+      </ToolPanelSection>
+    </>
   );
 }

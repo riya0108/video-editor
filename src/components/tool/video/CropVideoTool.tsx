@@ -3,6 +3,8 @@ import { Crop } from "lucide-react";
 import Dropzone from "../Dropzone";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
+import ToolSplitLayout from "../ToolSplitLayout";
+import ToolPanelSection from "../ToolPanelSection";
 import FramedVideoStage from "./FramedVideoStage";
 import RectOverlay, { type FractionRect } from "./RectOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
@@ -18,7 +20,7 @@ export default function CropVideoTool() {
   const [rect, setRect] = useState<FractionRect>(DEFAULT_RECT);
 
   const handleExport = async () => {
-    if (!video.file || video.videoWidth === 0) return;
+    if (!video.file || video.videoWidth === 0 || video.isMetadataLoading) return;
     const ext = guessVideoExtension(video.file);
     const inputName = `input.${ext}`;
     const outputName = "output.mp4";
@@ -83,46 +85,57 @@ export default function CropVideoTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
-      {video.sourceUrl && (
-        <FramedVideoStage
-          videoRef={video.videoRef}
-          sourceUrl={video.sourceUrl}
-          naturalWidth={video.videoWidth}
-          naturalHeight={video.videoHeight}
-          onLoadedMetadata={video.onLoadedMetadata}
-        >
-          {(box) => (
-            <RectOverlay boxWidth={box.width} boxHeight={box.height} rect={rect} onChange={setRect} />
-          )}
-        </FramedVideoStage>
-      )}
+    <ToolSplitLayout
+      controls={
+        <>
+          <ToolPanelSection icon={Crop} label="Crop">
+            <p className="text-body-sm text-(--color-text-muted)">
+              {video.isMetadataLoading ? "Reading your video…" : "Drag the box on the preview to choose what stays in frame."}
+            </p>
+            {video.videoWidth > 0 && (
+              <p className="mt-2 text-caption tabular-nums text-(--color-text-muted)">
+                {evenRound(rect.w * video.videoWidth)} &times; {evenRound(rect.h * video.videoHeight)}px
+              </p>
+            )}
+          </ToolPanelSection>
 
-      {video.videoWidth > 0 && (
-        <p className="mt-3 text-center text-caption tabular-nums text-(--color-text-muted)">
-          {evenRound(rect.w * video.videoWidth)} &times; {evenRound(rect.h * video.videoHeight)}px
-        </p>
-      )}
+          <ExportStatus
+            enginePhase={exportState.enginePhase}
+            engineFraction={exportState.engineFraction}
+            runFraction={exportState.runFraction}
+            error={exportState.error ?? video.metadataError}
+            runLabel="Cropping video…"
+          />
 
-      <ExportStatus
-        enginePhase={exportState.enginePhase}
-        engineFraction={exportState.engineFraction}
-        runFraction={exportState.runFraction}
-        error={exportState.error}
-        runLabel="Cropping video…"
-      />
-
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          disabled={exportState.isProcessing}
-          onClick={handleExport}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Crop size={16} />
-          {exportState.isProcessing ? "Cropping…" : "Crop video"}
-        </button>
-      </div>
-    </div>
+          <button
+            type="button"
+            disabled={exportState.isProcessing || video.isMetadataLoading || !!video.metadataError}
+            onClick={handleExport}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Crop size={16} />
+            {exportState.isProcessing
+              ? "Cropping…"
+              : video.isMetadataLoading
+                ? "Reading video…"
+                : "Crop video"}
+          </button>
+        </>
+      }
+      preview={
+        video.sourceUrl && (
+          <FramedVideoStage
+            videoRef={video.videoRef}
+            sourceUrl={video.sourceUrl}
+            naturalWidth={video.videoWidth}
+            naturalHeight={video.videoHeight}
+            onLoadedMetadata={video.onLoadedMetadata}
+            onError={video.onError}
+          >
+            {(box) => <RectOverlay boxWidth={box.width} boxHeight={box.height} rect={rect} onChange={setRect} />}
+          </FramedVideoStage>
+        )
+      }
+    />
   );
 }

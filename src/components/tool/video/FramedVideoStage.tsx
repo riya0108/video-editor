@@ -13,6 +13,7 @@ export default function FramedVideoStage({
   naturalWidth,
   naturalHeight,
   onLoadedMetadata,
+  onError,
   onTimeUpdate,
   onPlay,
   onPause,
@@ -25,6 +26,7 @@ export default function FramedVideoStage({
   naturalWidth: number;
   naturalHeight: number;
   onLoadedMetadata?: () => void;
+  onError?: () => void;
   onTimeUpdate?: () => void;
   onPlay?: () => void;
   onPause?: () => void;
@@ -61,6 +63,7 @@ export default function FramedVideoStage({
         ref={videoRef}
         src={sourceUrl}
         onLoadedMetadata={onLoadedMetadata}
+        onError={onError}
         onTimeUpdate={onTimeUpdate}
         onPlay={onPlay}
         onPause={onPause}

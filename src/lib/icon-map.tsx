@@ -22,6 +22,7 @@ import {
   Mic,
   Link2,
   MessageSquareText,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -49,6 +50,7 @@ export const iconMap: Record<string, LucideIcon> = {
   mic: Mic,
   "link-2": Link2,
   "message-square-text": MessageSquareText,
+  "wand-2": Wand2,
 };
 
 export function getIcon(key: string): LucideIcon {

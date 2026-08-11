@@ -14,6 +14,7 @@ export default function TransformedVideoPreview({
   naturalWidth,
   naturalHeight,
   onLoadedMetadata,
+  onError,
   onTimeUpdate,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -24,6 +25,7 @@ export default function TransformedVideoPreview({
   naturalWidth: number;
   naturalHeight: number;
   onLoadedMetadata?: () => void;
+  onError?: () => void;
   onTimeUpdate?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -60,6 +62,7 @@ export default function TransformedVideoPreview({
         ref={videoRef}
         src={sourceUrl}
         onLoadedMetadata={onLoadedMetadata}
+        onError={onError}
         onTimeUpdate={onTimeUpdate}
         style={{
           width: renderWidth || undefined,

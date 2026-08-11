@@ -4,6 +4,8 @@ import Dropzone from "../Dropzone";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import TrimSlider from "../TrimSlider";
+import ToolSplitLayout from "../ToolSplitLayout";
+import ToolPanelSection from "../ToolPanelSection";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { guessVideoExtension, stripExtension, VIDEO_EXT_MIME } from "../../../lib/ffmpeg/format";
@@ -112,68 +114,73 @@ export default function TrimVideoTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
-      {video.sourceUrl && (
-        <div className="overflow-hidden rounded-lg bg-black">
-          <video
-            ref={video.videoRef}
-            src={video.sourceUrl}
-            className="max-h-96 w-full"
-            onLoadedMetadata={handleLoadedMetadata}
-            onTimeUpdate={handleTimeUpdate}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-          />
-        </div>
-      )}
+    <ToolSplitLayout
+      controls={
+        <>
+          <ToolPanelSection icon={Scissors} label="Trim">
+            <TrimSlider
+              duration={video.duration}
+              start={start}
+              end={end}
+              currentTime={currentTime}
+              onChangeStart={setStart}
+              onChangeEnd={setEnd}
+              onSeek={seekTo}
+            />
+            <div className="flex justify-between text-caption tabular-nums text-(--color-text-muted)">
+              <span>{formatTime(start, true)}</span>
+              <span>Selected: {formatTime(trimmedDuration)}</span>
+              <span>{formatTime(end, true)}</span>
+            </div>
+          </ToolPanelSection>
 
-      <div className="mt-4 flex items-center gap-4">
-        <button
-          type="button"
-          onClick={togglePlay}
-          aria-label={isPlaying ? "Pause" : "Play"}
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary-500 text-white transition-colors hover:bg-primary-600"
-        >
-          {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
-        </button>
-
-        <div className="flex-1">
-          <TrimSlider
-            duration={video.duration}
-            start={start}
-            end={end}
-            currentTime={currentTime}
-            onChangeStart={setStart}
-            onChangeEnd={setEnd}
-            onSeek={seekTo}
+          <ExportStatus
+            enginePhase={exportState.enginePhase}
+            engineFraction={exportState.engineFraction}
+            runFraction={exportState.runFraction}
+            error={exportState.error ?? video.metadataError}
+            runLabel="Trimming video…"
           />
-          <div className="flex justify-between text-caption tabular-nums text-(--color-text-muted)">
-            <span>{formatTime(start, true)}</span>
-            <span>Selected: {formatTime(trimmedDuration)}</span>
-            <span>{formatTime(end, true)}</span>
+
+          <button
+            type="button"
+            disabled={exportState.isProcessing || trimmedDuration <= 0}
+            onClick={handleExport}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Scissors size={16} />
+            {exportState.isProcessing ? "Trimming…" : "Trim video"}
+          </button>
+        </>
+      }
+      preview={
+        video.sourceUrl && (
+          <div>
+            <div className="overflow-hidden rounded-lg bg-black">
+              <video
+                ref={video.videoRef}
+                src={video.sourceUrl}
+                className="max-h-[32rem] w-full"
+                onLoadedMetadata={handleLoadedMetadata}
+                onError={video.onError}
+                onTimeUpdate={handleTimeUpdate}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+              />
+            </div>
+            <div className="mt-3 flex justify-center">
+              <button
+                type="button"
+                onClick={togglePlay}
+                aria-label={isPlaying ? "Pause" : "Play"}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary-500 text-white transition-colors hover:bg-primary-600"
+              >
+                {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
+              </button>
+            </div>
           </div>
-        </div>
-      </div>
-
-      <ExportStatus
-        enginePhase={exportState.enginePhase}
-        engineFraction={exportState.engineFraction}
-        runFraction={exportState.runFraction}
-        error={exportState.error}
-        runLabel="Trimming video…"
-      />
-
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          disabled={exportState.isProcessing || trimmedDuration <= 0}
-          onClick={handleExport}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Scissors size={16} />
-          {exportState.isProcessing ? "Trimming…" : "Trim video"}
-        </button>
-      </div>
-    </div>
+        )
+      }
+    />
   );
 }

@@ -663,6 +663,7 @@ export default function VideoEditorTool() {
             naturalWidth={video.videoWidth}
             naturalHeight={video.videoHeight}
             onLoadedMetadata={handleLoadedMetadata}
+            onError={video.onError}
             onTimeUpdate={handleTimeUpdate}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
@@ -804,19 +805,28 @@ export default function VideoEditorTool() {
           enginePhase={exportState.enginePhase}
           engineFraction={exportState.engineFraction}
           runFraction={exportState.runFraction}
-          error={exportState.error}
+          error={exportState.error ?? video.metadataError}
           runLabel="Exporting your edit…"
         />
 
         <div className="mt-5 flex justify-end">
           <button
             type="button"
-            disabled={exportState.isProcessing || trimmedDuration <= 0}
+            disabled={
+              exportState.isProcessing ||
+              trimmedDuration <= 0 ||
+              video.isMetadataLoading ||
+              !!video.metadataError
+            }
             onClick={handleExport}
             className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Download size={16} />
-            {exportState.isProcessing ? "Exporting…" : "Export video"}
+            {exportState.isProcessing
+              ? "Exporting…"
+              : video.isMetadataLoading
+                ? "Reading video…"
+                : "Export video"}
           </button>
         </div>
       </div>

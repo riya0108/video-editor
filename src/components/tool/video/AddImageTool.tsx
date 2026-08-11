@@ -3,6 +3,8 @@ import { ImagePlus } from "lucide-react";
 import Dropzone from "../Dropzone";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
+import ToolSplitLayout from "../ToolSplitLayout";
+import ToolPanelSection from "../ToolPanelSection";
 import FramedVideoStage from "./FramedVideoStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
@@ -33,7 +35,7 @@ export default function AddImageTool() {
   };
 
   const handleExport = async () => {
-    if (!video.file || !imageFile || video.videoWidth === 0) return;
+    if (!video.file || !imageFile || video.videoWidth === 0 || video.isMetadataLoading) return;
     const ext = guessVideoExtension(video.file);
     const imgExt = guessImageExtension(imageFile);
     const inputName = `input.${ext}`;
@@ -114,116 +116,122 @@ export default function AddImageTool() {
   const { justify, align } = anchorExpr(anchor);
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
-      {video.sourceUrl && (
-        <FramedVideoStage
-          videoRef={video.videoRef}
-          sourceUrl={video.sourceUrl}
-          naturalWidth={video.videoWidth}
-          naturalHeight={video.videoHeight}
-          onLoadedMetadata={video.onLoadedMetadata}
-        >
-          {(box) =>
-            imageUrl && (
-              <div
-                className="flex h-full w-full p-6"
-                style={{
-                  justifyContent: justify === "start" ? "flex-start" : justify === "end" ? "flex-end" : "center",
-                  alignItems: align === "start" ? "flex-start" : align === "end" ? "flex-end" : "center",
-                }}
-              >
-                <img
-                  src={imageUrl}
-                  alt=""
-                  style={{ width: box.width * (sizePercent / 100), opacity }}
-                  className="max-w-none"
-                />
+    <ToolSplitLayout
+      controls={
+        <>
+          <ToolPanelSection icon={ImagePlus} label="Overlay image">
+            {!imageFile ? (
+              <Dropzone
+                accept="image/*"
+                label="Drop a logo or image here"
+                hint="PNG, JPG, or WebP"
+                onFiles={handleImageFiles}
+              />
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-1.5">
+                  {ANCHORS.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      aria-label={a.id}
+                      onClick={() => setAnchor(a.id)}
+                      className={`grid h-9 w-9 place-items-center rounded-md border text-body-sm transition-colors ${
+                        anchor === a.id
+                          ? "border-primary-500 bg-primary-500 text-white"
+                          : "border-(--color-border) hover:border-(--color-border-strong)"
+                      }`}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
+                  Size
+                  <input
+                    type="range"
+                    min={5}
+                    max={60}
+                    value={sizePercent}
+                    onChange={(e) => setSizePercent(Number(e.target.value))}
+                    className="w-32 accent-(--color-primary-500)"
+                  />
+                  <span className="w-10 tabular-nums">{sizePercent}%</span>
+                </label>
+                <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
+                  Opacity
+                  <input
+                    type="range"
+                    min={0.1}
+                    max={1}
+                    step={0.05}
+                    value={opacity}
+                    onChange={(e) => setOpacity(Number(e.target.value))}
+                    className="w-32 accent-(--color-primary-500)"
+                  />
+                  <span className="w-10 tabular-nums">{Math.round(opacity * 100)}%</span>
+                </label>
               </div>
-            )
-          }
-        </FramedVideoStage>
-      )}
+            )}
+          </ToolPanelSection>
 
-      {!imageFile ? (
-        <div className="mt-4">
-          <Dropzone
-            accept="image/*"
-            label="Drop a logo or image here"
-            hint="PNG, JPG, or WebP"
-            onFiles={handleImageFiles}
+          <ExportStatus
+            enginePhase={exportState.enginePhase}
+            engineFraction={exportState.engineFraction}
+            runFraction={exportState.runFraction}
+            error={exportState.error ?? video.metadataError}
+            runLabel="Adding image…"
           />
-        </div>
-      ) : (
-        <div className="mt-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-center gap-6">
-            <div className="grid grid-cols-3 gap-1.5">
-              {ANCHORS.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  aria-label={a.id}
-                  onClick={() => setAnchor(a.id)}
-                  className={`grid h-9 w-9 place-items-center rounded-md border text-body-sm transition-colors ${
-                    anchor === a.id
-                      ? "border-primary-500 bg-primary-500 text-white"
-                      : "border-(--color-border) hover:border-(--color-border-strong)"
-                  }`}
+
+          <button
+            type="button"
+            disabled={
+              exportState.isProcessing || !imageFile || video.isMetadataLoading || !!video.metadataError
+            }
+            onClick={handleExport}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <ImagePlus size={16} />
+            {exportState.isProcessing
+              ? "Adding image…"
+              : video.isMetadataLoading
+                ? "Reading video…"
+                : "Add image"}
+          </button>
+        </>
+      }
+      preview={
+        video.sourceUrl && (
+          <FramedVideoStage
+            videoRef={video.videoRef}
+            sourceUrl={video.sourceUrl}
+            naturalWidth={video.videoWidth}
+            naturalHeight={video.videoHeight}
+            onLoadedMetadata={video.onLoadedMetadata}
+            onError={video.onError}
+          >
+            {(box) =>
+              imageUrl && (
+                <div
+                  className="flex h-full w-full p-6"
+                  style={{
+                    justifyContent: justify === "start" ? "flex-start" : justify === "end" ? "flex-end" : "center",
+                    alignItems: align === "start" ? "flex-start" : align === "end" ? "flex-end" : "center",
+                  }}
                 >
-                  {a.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-col gap-3">
-              <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
-                Size
-                <input
-                  type="range"
-                  min={5}
-                  max={60}
-                  value={sizePercent}
-                  onChange={(e) => setSizePercent(Number(e.target.value))}
-                  className="w-32 accent-(--color-primary-500)"
-                />
-                <span className="w-10 tabular-nums">{sizePercent}%</span>
-              </label>
-              <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
-                Opacity
-                <input
-                  type="range"
-                  min={0.1}
-                  max={1}
-                  step={0.05}
-                  value={opacity}
-                  onChange={(e) => setOpacity(Number(e.target.value))}
-                  className="w-32 accent-(--color-primary-500)"
-                />
-                <span className="w-10 tabular-nums">{Math.round(opacity * 100)}%</span>
-              </label>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <ExportStatus
-        enginePhase={exportState.enginePhase}
-        engineFraction={exportState.engineFraction}
-        runFraction={exportState.runFraction}
-        error={exportState.error}
-        runLabel="Adding image…"
-      />
-
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          disabled={exportState.isProcessing || !imageFile}
-          onClick={handleExport}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <ImagePlus size={16} />
-          {exportState.isProcessing ? "Adding image…" : "Add image"}
-        </button>
-      </div>
-    </div>
+                  <img
+                    src={imageUrl}
+                    alt=""
+                    style={{ width: box.width * (sizePercent / 100), opacity }}
+                    className="max-w-none"
+                  />
+                </div>
+              )
+            }
+          </FramedVideoStage>
+        )
+      }
+    />
   );
 }

@@ -162,6 +162,16 @@ export const tools: ToolDefinition[] = [
     status: "available",
   },
   {
+    slug: "remove-filler-words",
+    category: "video",
+    name: "Remove Filler Words & Silences",
+    description: "Auto-detect \"um\"s, \"uh\"s, and dead air, then cut them out.",
+    icon: "wand-2",
+    keywords: ["clean audio", "filler words", "remove silence", "um uh", "jump cuts"],
+    status: "available",
+    featured: true,
+  },
+  {
     slug: "stabilize-video",
     category: "video",
     name: "Stabilize Video",

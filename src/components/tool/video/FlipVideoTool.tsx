@@ -3,6 +3,8 @@ import { FlipHorizontal, FlipVertical } from "lucide-react";
 import Dropzone from "../Dropzone";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
+import ToolSplitLayout from "../ToolSplitLayout";
+import ToolPanelSection from "../ToolPanelSection";
 import TransformedVideoPreview from "./TransformedVideoPreview";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
@@ -77,65 +79,71 @@ export default function FlipVideoTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
-      {video.sourceUrl && (
-        <TransformedVideoPreview
-          videoRef={video.videoRef}
-          sourceUrl={video.sourceUrl}
-          flipH={flipH}
-          flipV={flipV}
-          naturalWidth={video.videoWidth}
-          naturalHeight={video.videoHeight}
-          onLoadedMetadata={video.onLoadedMetadata}
-        />
-      )}
+    <ToolSplitLayout
+      controls={
+        <>
+          <ToolPanelSection icon={FlipHorizontal} label="Flip">
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => setFlipH((v) => !v)}
+                className={`inline-flex items-center gap-2 rounded-md border px-4 py-2 text-body-sm font-semibold transition-colors ${
+                  flipH
+                    ? "border-primary-500 bg-primary-500 text-white"
+                    : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                }`}
+              >
+                <FlipHorizontal size={16} />
+                Flip horizontal
+              </button>
+              <button
+                type="button"
+                onClick={() => setFlipV((v) => !v)}
+                className={`inline-flex items-center gap-2 rounded-md border px-4 py-2 text-body-sm font-semibold transition-colors ${
+                  flipV
+                    ? "border-primary-500 bg-primary-500 text-white"
+                    : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                }`}
+              >
+                <FlipVertical size={16} />
+                Flip vertical
+              </button>
+            </div>
+          </ToolPanelSection>
 
-      <div className="mt-5 flex items-center justify-center gap-3">
-        <button
-          type="button"
-          onClick={() => setFlipH((v) => !v)}
-          className={`inline-flex items-center gap-2 rounded-md border px-4 py-2 text-body-sm font-semibold transition-colors ${
-            flipH
-              ? "border-primary-500 bg-primary-500 text-white"
-              : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
-          }`}
-        >
-          <FlipHorizontal size={16} />
-          Flip horizontal
-        </button>
-        <button
-          type="button"
-          onClick={() => setFlipV((v) => !v)}
-          className={`inline-flex items-center gap-2 rounded-md border px-4 py-2 text-body-sm font-semibold transition-colors ${
-            flipV
-              ? "border-primary-500 bg-primary-500 text-white"
-              : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
-          }`}
-        >
-          <FlipVertical size={16} />
-          Flip vertical
-        </button>
-      </div>
+          <ExportStatus
+            enginePhase={exportState.enginePhase}
+            engineFraction={exportState.engineFraction}
+            runFraction={exportState.runFraction}
+            error={exportState.error ?? video.metadataError}
+            runLabel="Flipping video…"
+          />
 
-      <ExportStatus
-        enginePhase={exportState.enginePhase}
-        engineFraction={exportState.engineFraction}
-        runFraction={exportState.runFraction}
-        error={exportState.error}
-        runLabel="Flipping video…"
-      />
-
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          disabled={exportState.isProcessing || (!flipH && !flipV)}
-          onClick={handleExport}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <FlipHorizontal size={16} />
-          {exportState.isProcessing ? "Flipping…" : "Flip video"}
-        </button>
-      </div>
-    </div>
+          <button
+            type="button"
+            disabled={exportState.isProcessing || (!flipH && !flipV)}
+            onClick={handleExport}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FlipHorizontal size={16} />
+            {exportState.isProcessing ? "Flipping…" : "Flip video"}
+          </button>
+        </>
+      }
+      preview={
+        video.sourceUrl && (
+          <TransformedVideoPreview
+            videoRef={video.videoRef}
+            sourceUrl={video.sourceUrl}
+            flipH={flipH}
+            flipV={flipV}
+            naturalWidth={video.videoWidth}
+            naturalHeight={video.videoHeight}
+            onLoadedMetadata={video.onLoadedMetadata}
+            onError={video.onError}
+          />
+        )
+      }
+    />
   );
 }

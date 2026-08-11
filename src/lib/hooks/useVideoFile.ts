@@ -12,6 +12,13 @@ export function useVideoFile() {
   const [duration, setDuration] = useState(0);
   const [videoWidth, setVideoWidth] = useState(0);
   const [videoHeight, setVideoHeight] = useState(0);
+  // A file is picked well before the browser finishes decoding its metadata
+  // (or discovers it can't be decoded at all, e.g. an unsupported codec).
+  // Tools must not let the user trigger an export in that window, and must
+  // tell them why if decoding fails outright — otherwise export buttons look
+  // like they're doing nothing.
+  const [isMetadataLoading, setIsMetadataLoading] = useState(false);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -25,6 +32,8 @@ export function useVideoFile() {
     if (!picked) return;
     setFile(picked);
     setSourceUrl(URL.createObjectURL(picked));
+    setIsMetadataLoading(true);
+    setMetadataError(null);
   }, []);
 
   const onLoadedMetadata = useCallback(() => {
@@ -33,6 +42,15 @@ export function useVideoFile() {
     setDuration(video.duration || 0);
     setVideoWidth(video.videoWidth);
     setVideoHeight(video.videoHeight);
+    setIsMetadataLoading(false);
+    setMetadataError(null);
+  }, []);
+
+  const onError = useCallback(() => {
+    setIsMetadataLoading(false);
+    setMetadataError(
+      "Your browser couldn't read this video. Try converting it to MP4 (H.264) first.",
+    );
   }, []);
 
   const reset = useCallback(() => {
@@ -42,6 +60,8 @@ export function useVideoFile() {
     setDuration(0);
     setVideoWidth(0);
     setVideoHeight(0);
+    setIsMetadataLoading(false);
+    setMetadataError(null);
   }, [sourceUrl]);
 
   return {
@@ -51,7 +71,10 @@ export function useVideoFile() {
     videoWidth,
     videoHeight,
     videoRef,
+    isMetadataLoading,
+    metadataError,
     onLoadedMetadata,
+    onError,
     handleFiles,
     reset,
     hasFile: !!file,

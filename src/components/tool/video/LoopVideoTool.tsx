@@ -3,6 +3,8 @@ import { Repeat, Minus, Plus } from "lucide-react";
 import Dropzone from "../Dropzone";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
+import ToolSplitLayout from "../ToolSplitLayout";
+import ToolPanelSection from "../ToolPanelSection";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { guessVideoExtension, stripExtension, VIDEO_EXT_MIME } from "../../../lib/ffmpeg/format";
@@ -68,68 +70,72 @@ export default function LoopVideoTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
-      {video.sourceUrl && (
-        <div className="overflow-hidden rounded-lg bg-black">
-          <video
-            ref={video.videoRef}
-            src={video.sourceUrl}
-            controls
-            className="max-h-96 w-full"
-            onLoadedMetadata={video.onLoadedMetadata}
+    <ToolSplitLayout
+      controls={
+        <>
+          <ToolPanelSection icon={Repeat} label="Repeat">
+            <div className="flex flex-col items-center gap-3">
+              <span className="text-body-sm font-medium text-(--color-text-muted)">Repeat this clip</span>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  aria-label="Fewer repeats"
+                  onClick={() => setRepeats((r) => Math.max(2, r - 1))}
+                  className="grid h-9 w-9 place-items-center rounded-full border border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                >
+                  <Minus size={16} />
+                </button>
+                <span className="w-20 text-center text-h3 font-bold tabular-nums">{repeats}&times;</span>
+                <button
+                  type="button"
+                  aria-label="More repeats"
+                  onClick={() => setRepeats((r) => Math.min(20, r + 1))}
+                  className="grid h-9 w-9 place-items-center rounded-full border border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+              {video.duration > 0 && (
+                <p className="text-caption text-(--color-text-muted)">
+                  New length: {formatTime(video.duration * repeats)}
+                </p>
+              )}
+            </div>
+          </ToolPanelSection>
+
+          <ExportStatus
+            enginePhase={exportState.enginePhase}
+            engineFraction={exportState.engineFraction}
+            runFraction={exportState.runFraction}
+            error={exportState.error ?? video.metadataError}
+            runLabel="Looping video…"
           />
-        </div>
-      )}
 
-      <div className="mt-5 flex flex-col items-center gap-3">
-        <span className="text-body-sm font-medium text-(--color-text-muted)">
-          Repeat this clip
-        </span>
-        <div className="flex items-center gap-4">
           <button
             type="button"
-            aria-label="Fewer repeats"
-            onClick={() => setRepeats((r) => Math.max(2, r - 1))}
-            className="grid h-9 w-9 place-items-center rounded-full border border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+            disabled={exportState.isProcessing}
+            onClick={handleExport}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Minus size={16} />
+            <Repeat size={16} />
+            {exportState.isProcessing ? "Looping…" : "Loop video"}
           </button>
-          <span className="w-20 text-center text-h3 font-bold tabular-nums">{repeats}&times;</span>
-          <button
-            type="button"
-            aria-label="More repeats"
-            onClick={() => setRepeats((r) => Math.min(20, r + 1))}
-            className="grid h-9 w-9 place-items-center rounded-full border border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-        {video.duration > 0 && (
-          <p className="text-caption text-(--color-text-muted)">
-            New length: {formatTime(video.duration * repeats)}
-          </p>
-        )}
-      </div>
-
-      <ExportStatus
-        enginePhase={exportState.enginePhase}
-        engineFraction={exportState.engineFraction}
-        runFraction={exportState.runFraction}
-        error={exportState.error}
-        runLabel="Looping video…"
-      />
-
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          disabled={exportState.isProcessing}
-          onClick={handleExport}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Repeat size={16} />
-          {exportState.isProcessing ? "Looping…" : "Loop video"}
-        </button>
-      </div>
-    </div>
+        </>
+      }
+      preview={
+        video.sourceUrl && (
+          <div className="overflow-hidden rounded-lg bg-black">
+            <video
+              ref={video.videoRef}
+              src={video.sourceUrl}
+              controls
+              className="max-h-[32rem] w-full"
+              onLoadedMetadata={video.onLoadedMetadata}
+              onError={video.onError}
+            />
+          </div>
+        )
+      }
+    />
   );
 }

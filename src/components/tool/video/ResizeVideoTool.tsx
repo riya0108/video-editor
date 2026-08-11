@@ -3,6 +3,8 @@ import { Maximize } from "lucide-react";
 import Dropzone from "../Dropzone";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
+import ToolSplitLayout from "../ToolSplitLayout";
+import ToolPanelSection from "../ToolPanelSection";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
@@ -90,81 +92,87 @@ export default function ResizeVideoTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
-      {video.sourceUrl && (
-        <div className="overflow-hidden rounded-lg bg-black">
-          <video
-            ref={video.videoRef}
-            src={video.sourceUrl}
-            controls
-            className="max-h-96 w-full"
-            onLoadedMetadata={video.onLoadedMetadata}
+    <ToolSplitLayout
+      controls={
+        <>
+          <ToolPanelSection icon={Maximize} label="Target size">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setPresetId(p.id)}
+                  className={`rounded-lg border px-4 py-3 text-left text-body-sm font-medium transition-colors ${
+                    presetId === p.id
+                      ? "border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-300"
+                      : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {presetId === "custom" && (
+              <div className="mt-4 flex items-center justify-center gap-3">
+                <label className="flex flex-col items-start gap-1 text-caption text-(--color-text-muted)">
+                  Width
+                  <input
+                    type="number"
+                    min={2}
+                    value={customWidth}
+                    onChange={(e) => setCustomWidth(Number(e.target.value) || 0)}
+                    className="w-24 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
+                  />
+                </label>
+                <span className="mt-4 text-(--color-text-faint)">&times;</span>
+                <label className="flex flex-col items-start gap-1 text-caption text-(--color-text-muted)">
+                  Height
+                  <input
+                    type="number"
+                    min={2}
+                    value={customHeight}
+                    onChange={(e) => setCustomHeight(Number(e.target.value) || 0)}
+                    className="w-24 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
+                  />
+                </label>
+              </div>
+            )}
+          </ToolPanelSection>
+
+          <ExportStatus
+            enginePhase={exportState.enginePhase}
+            engineFraction={exportState.engineFraction}
+            runFraction={exportState.runFraction}
+            error={exportState.error ?? video.metadataError}
+            runLabel="Resizing video…"
           />
-        </div>
-      )}
 
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {PRESETS.map((p) => (
           <button
-            key={p.id}
             type="button"
-            onClick={() => setPresetId(p.id)}
-            className={`rounded-lg border px-4 py-3 text-left text-body-sm font-medium transition-colors ${
-              presetId === p.id
-                ? "border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-300"
-                : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
-            }`}
+            disabled={exportState.isProcessing || targetWidth < 2 || targetHeight < 2}
+            onClick={handleExport}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {p.label}
+            <Maximize size={16} />
+            {exportState.isProcessing ? "Resizing…" : "Resize video"}
           </button>
-        ))}
-      </div>
-
-      {presetId === "custom" && (
-        <div className="mt-4 flex items-center justify-center gap-3">
-          <label className="flex flex-col items-start gap-1 text-caption text-(--color-text-muted)">
-            Width
-            <input
-              type="number"
-              min={2}
-              value={customWidth}
-              onChange={(e) => setCustomWidth(Number(e.target.value) || 0)}
-              className="w-24 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
+        </>
+      }
+      preview={
+        video.sourceUrl && (
+          <div className="overflow-hidden rounded-lg bg-black">
+            <video
+              ref={video.videoRef}
+              src={video.sourceUrl}
+              controls
+              className="max-h-[32rem] w-full"
+              onLoadedMetadata={video.onLoadedMetadata}
+              onError={video.onError}
             />
-          </label>
-          <span className="mt-4 text-(--color-text-faint)">&times;</span>
-          <label className="flex flex-col items-start gap-1 text-caption text-(--color-text-muted)">
-            Height
-            <input
-              type="number"
-              min={2}
-              value={customHeight}
-              onChange={(e) => setCustomHeight(Number(e.target.value) || 0)}
-              className="w-24 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
-            />
-          </label>
-        </div>
-      )}
-
-      <ExportStatus
-        enginePhase={exportState.enginePhase}
-        engineFraction={exportState.engineFraction}
-        runFraction={exportState.runFraction}
-        error={exportState.error}
-        runLabel="Resizing video…"
-      />
-
-      <div className="mt-5 flex justify-end">
-        <button
-          type="button"
-          disabled={exportState.isProcessing || targetWidth < 2 || targetHeight < 2}
-          onClick={handleExport}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Maximize size={16} />
-          {exportState.isProcessing ? "Resizing…" : "Resize video"}
-        </button>
-      </div>
-    </div>
+          </div>
+        )
+      }
+    />
   );
 }
