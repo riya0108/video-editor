@@ -106,7 +106,7 @@ function ToolCard({ tool }: { tool: ToolDefinition }) {
     <li>
       <a
         href={getToolPath(tool)}
-        className="group flex h-full flex-col gap-3 rounded-xl border border-(--color-border) bg-(--color-surface) p-5 transition-all hover:-translate-y-0.5 hover:border-(--color-border-strong) hover:shadow-lg hover:shadow-neutral-900/5"
+        className="group flex h-full flex-col gap-3 rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-(--color-border-strong) hover:shadow-lg"
       >
         <div className="flex items-start justify-between">
           <span

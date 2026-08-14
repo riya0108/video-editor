@@ -103,7 +103,7 @@ export default function ScreenRecorderTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
+    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
       <div className="overflow-hidden rounded-lg bg-black">
         {recorder.state === "idle" ? (
           <div className="flex h-96 flex-col items-center justify-center gap-3 text-white/70">

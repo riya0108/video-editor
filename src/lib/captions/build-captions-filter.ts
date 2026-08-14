@@ -1,15 +1,46 @@
 import { escapeDrawtext } from "../ffmpeg/drawtext";
+import { positionExprs } from "../ffmpeg/text-position";
 import type { WordLayout } from "./karaoke-layout";
-import type { CaptionCue, CaptionStyle, CaptionPosition } from "./types";
-
-const POSITION_Y: Record<CaptionPosition, string> = {
-  top: "40",
-  center: "(h-text_h)/2",
-  bottom: "h-text_h-40",
-};
+import type { CaptionCue, CaptionStyle } from "./types";
 
 function toFfmpegColor(hex: string): string {
   return hex.replace("#", "0x");
+}
+
+/** A short in/out alpha ramp confined to the cue's own [start, end) window, for `style.fade`. */
+function fadeAlphaExpr(start: number, end: number): string {
+  const fadeDur = Math.min(0.35, Math.max(0.05, (end - start) / 2));
+  const t0 = start.toFixed(2);
+  const t1 = end.toFixed(2);
+  const d = fadeDur.toFixed(2);
+  return `if(lt(t\\,${t0}+${d})\\,(t-${t0})/${d}\\,if(gt(t\\,${t1}-${d})\\,(${t1}-t)/${d}\\,1))`;
+}
+
+/**
+ * Shifts cue (and word) timestamps from the original video's absolute time
+ * base into a trimmed clip's own [0, trimEnd-trimStart) time base — needed
+ * wherever captions are burned into a filtergraph whose main input was
+ * seeked with `-ss` before `-i`, since ffmpeg's filter-time `t` then runs
+ * from 0 at the trim point rather than the original file's absolute time.
+ * Cues entirely outside the trim window are dropped; partially-overlapping
+ * ones are clamped to it.
+ */
+export function remapCuesToTrim(cues: CaptionCue[], trimStart: number, trimEnd: number): CaptionCue[] {
+  const span = trimEnd - trimStart;
+  return cues
+    .map((cue) => ({
+      ...cue,
+      start: cue.start - trimStart,
+      end: cue.end - trimStart,
+      words: cue.words?.map((w) => ({ ...w, start: w.start - trimStart, end: w.end - trimStart })),
+    }))
+    .filter((cue) => cue.end > 0 && cue.start < span)
+    .map((cue) => ({
+      ...cue,
+      start: Math.max(0, cue.start),
+      end: Math.min(span, cue.end),
+      words: cue.words?.filter((w) => w.end > 0 && w.start < span),
+    }));
 }
 
 /**
@@ -31,7 +62,7 @@ export function buildCaptionsFilter(
 ): string {
   const colorHex = toFfmpegColor(style.color);
   const highlightHex = toFfmpegColor(style.highlightColor);
-  const y = POSITION_Y[style.position];
+  const { x, y } = positionExprs(style.x, style.y);
 
   return cues
     .map((cue) => {
@@ -41,7 +72,7 @@ export function buildCaptionsFilter(
         `text='${escapeDrawtext(text)}'`,
         `fontsize=${style.fontSize}`,
         `fontcolor=${colorHex}`,
-        "x=(w-text_w)/2",
+        `x=${x}`,
         `y=${y}`,
         `enable='between(t\\,${cue.start.toFixed(2)}\\,${cue.end.toFixed(2)})'`,
       ];
@@ -50,6 +81,9 @@ export function buildCaptionsFilter(
       }
       if (style.outline) {
         options.push(`borderw=3:bordercolor=${toFfmpegColor(style.outlineColor)}`);
+      }
+      if (style.fade) {
+        options.push(`alpha='${fadeAlphaExpr(cue.start, cue.end)}'`);
       }
       const base = options.join(":");
 
@@ -69,6 +103,9 @@ export function buildCaptionsFilter(
         ];
         if (style.outline) {
           wordOptions.push(`borderw=3:bordercolor=${toFfmpegColor(style.outlineColor)}`);
+        }
+        if (style.fade) {
+          wordOptions.push(`alpha='${fadeAlphaExpr(cue.start, cue.end)}'`);
         }
         return wordOptions.join(":");
       });

@@ -172,6 +172,16 @@ export const tools: ToolDefinition[] = [
     featured: true,
   },
   {
+    slug: "upscale-media",
+    category: "video",
+    name: "Upscale Video or Image",
+    description: "Increase resolution with sharpened, lanczos-resampled scaling.",
+    icon: "sparkles",
+    keywords: ["upscale", "enhance", "quality", "resolution", "4k", "1080p", "720p", "hd", "super resolution"],
+    status: "available",
+    featured: true,
+  },
+  {
     slug: "stabilize-video",
     category: "video",
     name: "Stabilize Video",

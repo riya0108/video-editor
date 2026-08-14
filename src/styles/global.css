@@ -5,6 +5,12 @@
 @import "@fontsource-variable/geist-mono";
 @import "@fontsource/bebas-neue";
 @import "@fontsource/anton";
+@import "@fontsource/poppins/700.css";
+@import "@fontsource/playfair-display/700.css";
+@import "@fontsource/caveat/700.css";
+@import "@fontsource/oswald/600.css";
+@import "@fontsource/permanent-marker";
+@import "@fontsource/archivo-black";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -80,6 +86,10 @@
   --radius-md: 0.625rem;
   --radius-lg: 1rem;
   --radius-xl: 1.5rem;
+
+  --shadow-sm: 0 1px 2px oklch(0% 0 0 / 0.04), 0 1px 1px oklch(0% 0 0 / 0.03);
+  --shadow-md: 0 4px 12px oklch(0% 0 0 / 0.06), 0 2px 4px oklch(0% 0 0 / 0.04);
+  --shadow-lg: 0 12px 32px oklch(0% 0 0 / 0.1), 0 4px 8px oklch(0% 0 0 / 0.05);
 
   --animate-fade-in: fade-in 0.2s ease-out;
   @keyframes fade-in {

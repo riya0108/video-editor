@@ -11,7 +11,7 @@ export default function ToolSplitLayout({ controls, preview }: { controls: React
       <div className="space-y-3 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:pr-1">
         {controls}
       </div>
-      <div>{preview}</div>
+      <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-4 shadow-sm">{preview}</div>
     </div>
   );
 }

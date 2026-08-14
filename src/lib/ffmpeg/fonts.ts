@@ -38,6 +38,48 @@ export const TEXT_FONTS: TextFontOption[] = [
     url: "/fonts/anton-drawtext.ttf",
     cssFontFamily: '"Anton", ui-sans-serif, sans-serif',
   },
+  {
+    id: "poppins",
+    label: "Rounded",
+    ffmpegName: "poppins.ttf",
+    url: "/fonts/poppins-drawtext.ttf",
+    cssFontFamily: '"Poppins", ui-sans-serif, sans-serif',
+  },
+  {
+    id: "playfair",
+    label: "Elegant Serif",
+    ffmpegName: "playfair.ttf",
+    url: "/fonts/playfair-drawtext.ttf",
+    cssFontFamily: '"Playfair Display", ui-serif, serif',
+  },
+  {
+    id: "caveat",
+    label: "Handwriting",
+    ffmpegName: "caveat.ttf",
+    url: "/fonts/caveat-drawtext.ttf",
+    cssFontFamily: '"Caveat", cursive',
+  },
+  {
+    id: "oswald",
+    label: "Condensed",
+    ffmpegName: "oswald.ttf",
+    url: "/fonts/oswald-drawtext.ttf",
+    cssFontFamily: '"Oswald", ui-sans-serif, sans-serif',
+  },
+  {
+    id: "marker",
+    label: "Marker",
+    ffmpegName: "permanent-marker.ttf",
+    url: "/fonts/permanent-marker-drawtext.ttf",
+    cssFontFamily: '"Permanent Marker", cursive',
+  },
+  {
+    id: "archivo-black",
+    label: "Heavy Block",
+    ffmpegName: "archivo-black.ttf",
+    url: "/fonts/archivo-black-drawtext.ttf",
+    cssFontFamily: '"Archivo Black", ui-sans-serif, sans-serif',
+  },
 ];
 
 export const DEFAULT_TEXT_FONT = TEXT_FONTS[0];

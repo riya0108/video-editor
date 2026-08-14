@@ -179,7 +179,7 @@ export default function TextToSpeechTool() {
 
   if (!isSupported) {
     return (
-      <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-8 text-center">
+      <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-8 text-center shadow-sm">
         <p className="font-semibold">Text to speech isn&rsquo;t supported in this browser.</p>
         <p className="mt-1 text-body-sm text-(--color-text-muted)">Try the latest Chrome, Edge, or Safari.</p>
       </div>
@@ -200,7 +200,7 @@ export default function TextToSpeechTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
+    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}

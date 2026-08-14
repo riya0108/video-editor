@@ -8,7 +8,14 @@ import { toFfmpegTimestamp } from "../time";
 import { escapeDrawtext } from "./drawtext";
 import { anchorExpr } from "./overlay-position";
 import { getTextFont } from "./fonts";
+import { positionExprs } from "./text-position";
 import { VOICE_REMOVER_FILTER, noiseReductionFilter, atempoChain } from "./audio-filters";
+import { resolveQualityTarget, upscaleFilter } from "./upscale-filter";
+import { planCutoutOverlay } from "./person-cutout-filter";
+import { buildCaptionsFilter, remapCuesToTrim } from "../captions/build-captions-filter";
+import { measureKaraokeLayouts } from "../captions/karaoke-layout";
+import type { CutoutFrame } from "../captions/person-cutout";
+import type { CaptionCue, CaptionStyle } from "../captions/types";
 import type {
   EditorChromaKeyState,
   EditorCropState,
@@ -18,6 +25,7 @@ import type {
   EditorExtraClipState,
   EditorFadeState,
   EditorTextState,
+  EditorQualityState,
   BgAspect,
 } from "./editor-state";
 import type { OverlayLayer } from "./overlay-layer";
@@ -27,12 +35,6 @@ const ASPECT_SIZES: Record<BgAspect, [number, number]> = {
   "1:1": [1080, 1080],
   "4:5": [1080, 1350],
   "16:9": [1920, 1080],
-};
-
-const TEXT_POSITION_Y: Record<EditorTextState["position"], string> = {
-  top: "40",
-  center: "(h-text_h)/2",
-  bottom: "h-text_h-40",
 };
 
 const ANIM_DURATION = 0.6;
@@ -56,6 +58,9 @@ export interface BuildEditorCommandInput {
   overlays: OverlayLayer[];
   extraClip: EditorExtraClipState;
   text: EditorTextState;
+  captions: { enabled: boolean; cues: CaptionCue[]; style: CaptionStyle };
+  personCutoutFrames: CutoutFrame[];
+  quality: EditorQualityState;
 }
 
 export interface BuildEditorCommandResult {
@@ -188,6 +193,47 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     currentH = targetH;
   }
 
+  // ---- Captions (burned in before Speed, so filter-time `t` here still
+  // matches trim-relative real seconds — same base remapCuesToTrim shifts
+  // cue timestamps into). ----
+  if (state.captions.enabled && state.captions.cues.length > 0) {
+    const font = getTextFont(state.captions.style.fontId);
+    const fontBlob = await fetch(font.url).then((r) => r.blob());
+    inputs.push({ name: font.ffmpegName, data: fontBlob });
+
+    const remapped = remapCuesToTrim(state.captions.cues, state.trimStart, state.trimEnd);
+    const karaokeLayouts = state.captions.style.karaoke
+      ? await measureKaraokeLayouts(remapped, state.captions.style, font.cssFontFamily, currentW)
+      : undefined;
+    const capFilter = buildCaptionsFilter(remapped, state.captions.style, font.ffmpegName, karaokeLayouts);
+    if (capFilter) {
+      const out = newLabel("v");
+      filters.push(`[${vLabel}]${capFilter}[${out}]`);
+      vLabel = out;
+    }
+
+    if (state.captions.style.occludeByPerson && state.personCutoutFrames.length > 0) {
+      const plan = planCutoutOverlay({
+        frames: state.personCutoutFrames,
+        timeOffset: state.trimStart,
+        windowStart: 0,
+        windowEnd: trimmedDuration,
+        targetWidth: currentW,
+        targetHeight: currentH,
+      });
+      if (plan) {
+        let firstCutoutIdx = -1;
+        for (const cutout of plan.inputs) {
+          const idx = addFileInput(cutout.name, cutout.data, ["-loop", "1"]);
+          if (firstCutoutIdx === -1) firstCutoutIdx = idx;
+        }
+        const { filters: overlayFilters, outLabel } = plan.buildFilters(firstCutoutIdx, vLabel, newLabel);
+        filters.push(...overlayFilters);
+        vLabel = outLabel;
+      }
+    }
+  }
+
   // ---- Speed ----
   if (state.speed !== 1) {
     const out = newLabel("v");
@@ -238,7 +284,7 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     fontBlobEntry = { name: font.ffmpegName, data: fontBlob };
 
     const colorHex = state.text.color.replace("#", "0x");
-    const baseY = TEXT_POSITION_Y[state.text.position];
+    const { x: xExpr, y: baseY } = positionExprs(state.text.x, state.text.y);
     let yExpr = baseY;
     let alphaExpr = "1";
 
@@ -255,7 +301,7 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
       `text='${escapeDrawtext(state.text.content)}'`,
       `fontsize=${state.text.fontSize}`,
       `fontcolor=${colorHex}`,
-      "x=(w-text_w)/2",
+      `x=${xExpr}`,
       `y=${yExpr}`,
       `alpha='${alphaExpr}'`,
       "box=1:boxcolor=0x000000@0.45:boxborderw=16",
@@ -360,6 +406,15 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     finalA = aOut;
     finalVGenerated = true;
     finalAGenerated = true;
+  }
+
+  // ---- Quality / upscale (applied last, after any concat, so it covers the whole output) ----
+  const targetSize = resolveQualityTarget(state.quality.target, currentW, currentH);
+  if (targetSize) {
+    const out = newLabel("v");
+    filters.push(`[${finalV}]${upscaleFilter(targetSize.w, targetSize.h, state.quality.sharpen)}[${out}]`);
+    finalV = out;
+    finalVGenerated = true;
   }
 
   const args: string[] = [...inputArgs];

@@ -76,7 +76,7 @@ export default function VoiceRecorderTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-8">
+    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-8 shadow-sm">
       <div className="flex flex-col items-center gap-6">
         <span className="grid h-24 w-24 place-items-center rounded-full bg-primary-100 text-primary-600 dark:bg-primary-900 dark:text-primary-300">
           <Mic size={36} />

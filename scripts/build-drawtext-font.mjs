@@ -30,6 +30,30 @@ const FONTS = [
     src: join(nodeModules, "@fontsource", "anton", "files", "anton-latin-400-normal.woff2"),
     dest: join(destDir, "anton-drawtext.ttf"),
   },
+  {
+    src: join(nodeModules, "@fontsource", "poppins", "files", "poppins-latin-700-normal.woff2"),
+    dest: join(destDir, "poppins-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "playfair-display", "files", "playfair-display-latin-700-normal.woff2"),
+    dest: join(destDir, "playfair-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "caveat", "files", "caveat-latin-700-normal.woff2"),
+    dest: join(destDir, "caveat-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "oswald", "files", "oswald-latin-600-normal.woff2"),
+    dest: join(destDir, "oswald-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "permanent-marker", "files", "permanent-marker-latin-400-normal.woff2"),
+    dest: join(destDir, "permanent-marker-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "archivo-black", "files", "archivo-black-latin-400-normal.woff2"),
+    dest: join(destDir, "archivo-black-drawtext.ttf"),
+  },
 ];
 
 for (const { src, dest } of FONTS) {

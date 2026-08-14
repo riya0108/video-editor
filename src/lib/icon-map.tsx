@@ -23,6 +23,7 @@ import {
   Link2,
   MessageSquareText,
   Wand2,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
@@ -51,6 +52,7 @@ export const iconMap: Record<string, LucideIcon> = {
   "link-2": Link2,
   "message-square-text": MessageSquareText,
   "wand-2": Wand2,
+  sparkles: Sparkles,
 };
 
 export function getIcon(key: string): LucideIcon {

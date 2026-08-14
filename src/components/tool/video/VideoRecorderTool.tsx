@@ -84,7 +84,7 @@ export default function VideoRecorderTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
+    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
       <div className="overflow-hidden rounded-lg bg-black">
         {hasPreview ? (
           <video ref={previewRef} autoPlay muted playsInline className="max-h-96 w-full -scale-x-100" />

@@ -11,7 +11,7 @@ export default function ResultPanel({
   url: string;
   blob: Blob;
   filename: string;
-  kind: "video" | "audio";
+  kind: "video" | "audio" | "image";
   onReset: () => void;
 }) {
   const [notice, setNotice] = useState<string | null>(null);
@@ -50,7 +50,7 @@ export default function ResultPanel({
   };
 
   return (
-    <div className="animate-fade-in rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
+    <div className="animate-fade-in rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
       <div className="flex items-center gap-2 text-success-600">
         <Check size={18} />
         <p className="font-semibold">Your file is ready</p>
@@ -59,6 +59,8 @@ export default function ResultPanel({
       <div className="mt-4 overflow-hidden rounded-lg bg-black">
         {kind === "video" ? (
           <video src={url} controls className="max-h-96 w-full" />
+        ) : kind === "image" ? (
+          <img src={url} alt="" className="mx-auto max-h-96 w-auto" />
         ) : (
           <audio src={url} controls className="w-full p-4" />
         )}
@@ -68,7 +70,7 @@ export default function ResultPanel({
         <a
           href={url}
           download={filename}
-          className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600"
+          className="inline-flex items-center gap-2 rounded-full bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-600"
         >
           <Download size={16} />
           Download
@@ -76,7 +78,7 @@ export default function ResultPanel({
         <button
           type="button"
           onClick={share}
-          className="inline-flex items-center gap-2 rounded-md border border-(--color-border) px-5 py-2.5 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+          className="inline-flex items-center gap-2 rounded-full border border-(--color-border) px-5 py-2.5 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
         >
           <Share2 size={16} />
           Share
@@ -84,7 +86,7 @@ export default function ResultPanel({
         <button
           type="button"
           onClick={copyLink}
-          className="inline-flex items-center gap-2 rounded-md border border-(--color-border) px-5 py-2.5 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+          className="inline-flex items-center gap-2 rounded-full border border-(--color-border) px-5 py-2.5 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
         >
           <Link2 size={16} />
           Copy link

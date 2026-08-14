@@ -23,7 +23,7 @@ const otherTools = tools.filter((t) => t.status === "available").slice(0, 3);
 ---
 
 <Layout title={`${tool.name} — Clipbench`} description={tool.description}>
-  <ToolHeader name={tool.name} description={tool.description} category={tool.category} />
+  <ToolHeader name={tool.name} description={tool.description} category={tool.category} showTitle />
 
   <div class="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">
     <div

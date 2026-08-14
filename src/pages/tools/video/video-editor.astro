@@ -1,18 +1,13 @@
 ---
 import Layout from "../../../layouts/Layout.astro";
-import ToolHeader from "../../../components/site/ToolHeader.astro";
 import VideoEditorTool from "../../../components/tool/video/VideoEditorTool.tsx";
 import { getToolBySlug } from "../../../lib/tools-registry";
 
 const tool = getToolBySlug("video", "video-editor")!;
 ---
 
-<Layout title={`${tool.name} — Clipbench`} description={tool.description}>
-  <ToolHeader name={tool.name} description={tool.description} category={tool.category} />
-  <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+<Layout title={`${tool.name} — Clipbench`} description={tool.description} fullScreen>
+  <div class="h-full md:overflow-hidden">
     <VideoEditorTool client:load />
-    <p class="mt-6 text-center text-caption text-(--color-text-muted)">
-      Your video is edited locally in this browser tab and is never uploaded anywhere.
-    </p>
   </div>
 </Layout>

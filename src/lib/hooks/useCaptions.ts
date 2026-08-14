@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { generateCaptions, type CaptionModelTier, type CaptionProgress } from "../captions/auto-caption";
 import { CAPTION_STYLE_PRESETS, DEFAULT_CAPTION_STYLE } from "../captions/caption-styles";
 import { isSubtitleFile, parseSubtitleText } from "../captions/subtitle-parser";
+import { translateCues, type TranslateProgress } from "../captions/translate";
 import { nextCaptionId, type CaptionCue, type CaptionStyle } from "../captions/types";
 
 export type CaptionSourceMode = "auto" | "manual" | "upload";
@@ -18,6 +19,10 @@ export function useCaptions() {
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [translateProgress, setTranslateProgress] = useState<TranslateProgress | null>(null);
+  const [translateError, setTranslateError] = useState<string | null>(null);
+
   const applyPreset = useCallback((id: string) => {
     const preset = CAPTION_STYLE_PRESETS.find((p) => p.id === id);
     if (!preset) return;
@@ -30,18 +35,38 @@ export function useCaptions() {
     setStyle((prev) => ({ ...prev, ...patch }));
   }, []);
 
-  const addCue = useCallback((afterSeconds = 0) => {
+  /**
+   * `rangeStart`/`rangeEnd` are the current trim range (or video duration if
+   * untrimmed) — new cues are clamped inside it so they're never silently
+   * unplayable (which looked, to users, like typing captions did nothing).
+   */
+  const addCue = useCallback((afterSeconds = 0, rangeStart = 0, rangeEnd = Infinity) => {
+    const id = nextCaptionId();
     setCues((prev) => {
       const last = [...prev].sort((a, b) => a.start - b.start).at(-1);
-      const start = last ? last.end : afterSeconds;
-      return [...prev, { id: nextCaptionId(), start, end: start + 3, text: "" }].sort(
-        (a, b) => a.start - b.start,
-      );
+      const defaultLen = 3;
+      const minLen = 0.1;
+      const anchor = last ? last.end : afterSeconds;
+      const start = Math.min(Math.max(anchor, rangeStart), Math.max(rangeStart, rangeEnd - minLen));
+      const end = Math.min(start + defaultLen, Math.max(rangeEnd, start + minLen));
+      return [...prev, { id, start, end, text: "" }].sort((a, b) => a.start - b.start);
     });
+    return id;
   }, []);
 
-  const updateCue = useCallback((id: string, patch: Partial<CaptionCue>) => {
-    setCues((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  const updateCue = useCallback((id: string, patch: Partial<CaptionCue>, rangeStart = 0, rangeEnd = Infinity) => {
+    setCues((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        const next = { ...c, ...patch };
+        if (patch.start !== undefined || patch.end !== undefined) {
+          const minLen = 0.1;
+          next.start = Math.min(Math.max(next.start, rangeStart), Math.max(rangeStart, rangeEnd - minLen));
+          next.end = Math.min(Math.max(next.end, next.start + minLen), Math.max(rangeEnd, next.start + minLen));
+        }
+        return next;
+      }),
+    );
   }, []);
 
   const removeCue = useCallback((id: string) => {
@@ -90,11 +115,31 @@ export function useCaptions() {
     setCues(parsed);
   }, []);
 
+  const translate = useCallback(
+    async (targetCode: string, sourceCode: string) => {
+      setIsTranslating(true);
+      setTranslateError(null);
+      setTranslateProgress({ phase: "downloading", fraction: 0 });
+      try {
+        const translated = await translateCues(cues, targetCode, sourceCode, setTranslateProgress);
+        setCues(translated);
+      } catch (err) {
+        console.error(err);
+        setTranslateError("Couldn't translate these captions. Try again, or a different language pair.");
+      } finally {
+        setIsTranslating(false);
+        setTranslateProgress(null);
+      }
+    },
+    [cues],
+  );
+
   const reset = useCallback(() => {
     setCues([]);
     setSourceMode("auto");
     setGenError(null);
     setUploadError(null);
+    setTranslateError(null);
   }, []);
 
   return {
@@ -115,6 +160,10 @@ export function useCaptions() {
     autoGenerate,
     uploadError,
     handleSubtitleFile,
+    isTranslating,
+    translateProgress,
+    translateError,
+    translate,
     reset,
   };
 }

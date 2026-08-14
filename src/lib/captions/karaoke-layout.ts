@@ -44,7 +44,7 @@ export async function measureKaraokeLayouts(
     const spaceWidth = ctx.measureText(" ").width;
     const totalWidth = widths.reduce((a, b) => a + b, 0) + spaceWidth * Math.max(0, words.length - 1);
 
-    let cursor = (videoWidth - totalWidth) / 2;
+    let cursor = videoWidth * (style.x / 100) - totalWidth / 2;
     const layout: WordLayout[] = [];
     for (let i = 0; i < words.length; i++) {
       layout.push({ text: words[i], x: cursor, width: widths[i] });

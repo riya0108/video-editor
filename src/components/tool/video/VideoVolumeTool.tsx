@@ -5,6 +5,7 @@ import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
+import SimplePreviewStage from "./SimplePreviewStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { guessVideoExtension, stripExtension, VIDEO_EXT_MIME } from "../../../lib/ffmpeg/format";
@@ -127,17 +128,13 @@ export default function VideoVolumeTool() {
       }
       preview={
         video.sourceUrl && (
-          <div className="overflow-hidden rounded-lg bg-black">
-            <video
-              ref={video.videoRef}
-              src={video.sourceUrl}
-              controls
-              muted={muted}
-              className="max-h-[32rem] w-full"
-              onLoadedMetadata={video.onLoadedMetadata}
-              onError={video.onError}
-            />
-          </div>
+          <SimplePreviewStage
+            videoRef={video.videoRef}
+            sourceUrl={video.sourceUrl}
+            muted={muted}
+            onLoadedMetadata={video.onLoadedMetadata}
+            onError={video.onError}
+          />
         )
       }
     />

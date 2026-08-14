@@ -42,6 +42,9 @@ async function loadTranscriber(tier: CaptionModelTier, onProgress?: GenerateCapt
     // a LayerNorm-fusion bug, in the onnxruntime-web version this package
     // pins for these particular ONNX exports — q4 (block-quantized) and fp32
     // are the two dtypes that actually load; q4 for a much smaller download.
+    // (Word-level timestamps come from interpolating within each chunk's
+    // timing further down, not from the model's cross-attentions, which
+    // these onnx-community conversions don't export regardless of dtype.)
     dtype: "q4",
     progress_callback: (info: { status: string; progress?: number }) => {
       if (info.status === "progress_total" && typeof info.progress === "number") {
@@ -108,10 +111,40 @@ export interface TranscribeWordsResult {
 }
 
 /**
+ * Splits a chunk's text into words and spreads the chunk's own [start, end]
+ * window across them proportionally by character length. Whisper only gives
+ * us per-chunk (phrase-level) timing here — see the note in transcribeWords
+ * on why true per-word timestamps aren't available — so this is an even,
+ * approximate stand-in rather than measured word timing.
+ */
+function interpolateWordTimestamps(text: string, start: number, end: number): CaptionWord[] {
+  const wordTexts = text.trim().split(/\s+/).filter(Boolean);
+  if (wordTexts.length === 0) return [];
+  const duration = Math.max(0, end - start);
+  const totalChars = wordTexts.reduce((sum, w) => sum + w.length, 0) || 1;
+
+  let cursor = start;
+  return wordTexts.map((word) => {
+    const wordDuration = duration * (word.length / totalChars);
+    const wordStart = cursor;
+    cursor += wordDuration;
+    return { text: word, start: wordStart, end: cursor };
+  });
+}
+
+/**
  * Transcribes a video's audio track fully client-side (via an in-browser
  * Whisper model) and returns flat, word-level timestamps. Shared foundation
  * for both auto-captions (grouped into readable cues) and the filler-word /
  * silence detector, which needs the raw per-word timing to find gaps.
+ *
+ * Whisper can only give us phrase-level chunk timestamps here, not true
+ * per-word ones: word-level timestamps require the model to emit
+ * cross-attentions for DTW alignment, which the onnx-community ONNX
+ * conversions this app uses don't export in any dtype. So each returned
+ * chunk's words share its [start, end] window via interpolateWordTimestamps
+ * instead — close enough for karaoke-style highlighting and filler-word
+ * detection without needing a specially-exported model.
  */
 export async function transcribeWords(
   videoFile: File,
@@ -133,7 +166,7 @@ export async function transcribeWords(
 
   onProgress?.({ phase: "transcribing", fraction: 0 });
   const output = await transcriber(audio, {
-    return_timestamps: "word",
+    return_timestamps: true,
     chunk_length_s: 30,
     stride_length_s: 5,
     language: language || undefined,
@@ -145,8 +178,8 @@ export async function transcribeWords(
     const text = chunk.text.trim();
     if (!text) continue;
     const start = chunk.timestamp[0] ?? (words.at(-1)?.end ?? 0);
-    const end = chunk.timestamp[1] ?? Math.min(audioDuration, start + 0.5);
-    words.push({ text, start, end: Math.max(start, end) });
+    const end = Math.max(start, chunk.timestamp[1] ?? Math.min(audioDuration, start + 0.5));
+    words.push(...interpolateWordTimestamps(text, start, end));
   }
 
   return { words, audioDuration };

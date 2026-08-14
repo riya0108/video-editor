@@ -13,7 +13,9 @@ export interface EditorTextState {
   content: string;
   color: string;
   fontSize: number;
-  position: TextPosition;
+  /** Anchor point of the text block, as a percent (0-100) of the frame — freely draggable, not limited to top/center/bottom. */
+  x: number;
+  y: number;
   fontId: string;
   animation: TextAnimation;
 }
@@ -66,6 +68,14 @@ export interface EditorExtraClipState {
 export interface EditorFadeState {
   in: number;
   out: number;
+}
+
+export type QualityTarget = "original" | "720p" | "1080p" | "4k";
+
+export interface EditorQualityState {
+  target: QualityTarget;
+  /** Light unsharp pass — mainly useful when upscaling to a larger target. */
+  sharpen: boolean;
 }
 
 export type { OverlayLayer, Anchor };

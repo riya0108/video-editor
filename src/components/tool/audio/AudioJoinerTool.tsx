@@ -97,7 +97,7 @@ export default function AudioJoinerTool() {
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
+    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
       {clips.length === 0 ? (
         <Dropzone
           accept="audio/*"
