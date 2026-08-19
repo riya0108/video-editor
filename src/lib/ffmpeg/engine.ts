@@ -39,13 +39,34 @@ async function blobURLWithProgress(
 class FfmpegEngine {
   private ffmpeg: FFmpeg | null = null;
   private loadingPromise: Promise<FFmpeg> | null = null;
+  private queue: Promise<unknown> = Promise.resolve();
 
   isReady() {
     return !!this.ffmpeg?.loaded;
   }
 
+  /**
+   * Runs a task against the shared ffmpeg instance with exclusive access.
+   * The wasm core is single-threaded per command and its log events are a
+   * single global stream, so overlapping calls (e.g. probing several files
+   * at once) would otherwise leak each other's log lines into the wrong caller.
+   */
+  async exclusive<T>(task: (ffmpeg: FFmpeg) => Promise<T>, onEngineLoad?: EngineLoadListener): Promise<T> {
+    const run = this.queue.then(() => this.load(onEngineLoad).then((f) => task(f)));
+    // Swallow rejections in the queue chain itself so one failed task
+    // doesn't permanently wedge the queue for later callers.
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
   async load(onProgress?: EngineLoadListener): Promise<FFmpeg> {
-    if (this.ffmpeg?.loaded) return this.ffmpeg;
+    if (this.ffmpeg?.loaded) {
+      // Already warm (e.g. a prior probe loaded it) — still report 100% so
+      // callers waiting on this callback to flip out of a "loading" phase
+      // don't hang forever.
+      onProgress?.(1);
+      return this.ffmpeg;
+    }
     if (this.loadingPromise) return this.loadingPromise;
 
     this.loadingPromise = (async () => {
@@ -90,6 +111,32 @@ export interface RunResult {
   url: string;
 }
 
+/**
+ * Probes whether a media file has an audio stream, using ffmpeg's own demuxer
+ * (so it agrees with whatever the real export step will see). Reads only the
+ * container header — cheap even for large files.
+ */
+export async function probeHasAudio(file: File | Blob, inputName: string): Promise<boolean> {
+  return ffmpegEngine.exclusive(async (ffmpeg) => {
+    const logs: string[] = [];
+    const logHandler = ({ message }: { message: string }) => logs.push(message);
+    ffmpeg.on("log", logHandler);
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(file));
+      try {
+        await ffmpeg.exec(["-hide_banner", "-i", inputName]);
+      } catch {
+        // ffmpeg exits non-zero because no output was given — the stream
+        // listing was already printed to the log before that happens.
+      }
+      return logs.some((line) => /Stream #\d+:\d+.*: Audio:/.test(line));
+    } finally {
+      ffmpeg.off("log", logHandler);
+      await ffmpeg.deleteFile(inputName).catch(() => {});
+    }
+  });
+}
+
 /** Thrown when an ffmpeg command fails — carries the tail of ffmpeg's own log for diagnosis. */
 export class FfmpegRunError extends Error {
   logTail: string;
@@ -112,47 +159,47 @@ export async function runFfmpeg({
   onEngineLoad,
   onRunProgress,
 }: RunOptions): Promise<RunResult> {
-  const ffmpeg = await ffmpegEngine.load(onEngineLoad);
+  return ffmpegEngine.exclusive(async (ffmpeg) => {
+    const progressHandler = ({ progress }: { progress: number }) => {
+      onRunProgress?.(Math.min(1, Math.max(0, progress)));
+    };
+    if (onRunProgress) ffmpeg.on("progress", progressHandler);
 
-  const progressHandler = ({ progress }: { progress: number }) => {
-    onRunProgress?.(Math.min(1, Math.max(0, progress)));
-  };
-  if (onRunProgress) ffmpeg.on("progress", progressHandler);
+    const recentLogs: string[] = [];
+    const logHandler = ({ message }: { message: string }) => {
+      recentLogs.push(message);
+      if (recentLogs.length > 40) recentLogs.shift();
+    };
+    ffmpeg.on("log", logHandler);
 
-  const recentLogs: string[] = [];
-  const logHandler = ({ message }: { message: string }) => {
-    recentLogs.push(message);
-    if (recentLogs.length > 40) recentLogs.shift();
-  };
-  ffmpeg.on("log", logHandler);
-
-  const written: string[] = [];
-  try {
-    for (const input of inputs) {
-      const data = typeof input.data === "string" ? input.data : await fetchFile(input.data);
-      await ffmpeg.writeFile(input.name, data);
-      written.push(input.name);
-    }
-
-    await ffmpeg.exec(args);
-
-    let output: Awaited<ReturnType<typeof ffmpeg.readFile>>;
+    const written: string[] = [];
     try {
-      output = await ffmpeg.readFile(outputName);
-    } catch {
-      throw new FfmpegRunError("ffmpeg did not produce an output file", recentLogs.join("\n"));
-    }
-    const bytes = output as Uint8Array;
-    const blob = new Blob([bytes.slice().buffer], { type: outputMimeType });
-    const url = URL.createObjectURL(blob);
+      for (const input of inputs) {
+        const data = typeof input.data === "string" ? input.data : await fetchFile(input.data);
+        await ffmpeg.writeFile(input.name, data);
+        written.push(input.name);
+      }
 
-    return { blob, url };
-  } finally {
-    if (onRunProgress) ffmpeg.off("progress", progressHandler);
-    ffmpeg.off("log", logHandler);
-    for (const name of written) {
-      await ffmpeg.deleteFile(name).catch(() => {});
+      await ffmpeg.exec(args);
+
+      let output: Awaited<ReturnType<typeof ffmpeg.readFile>>;
+      try {
+        output = await ffmpeg.readFile(outputName);
+      } catch {
+        throw new FfmpegRunError("ffmpeg did not produce an output file", recentLogs.join("\n"));
+      }
+      const bytes = output as Uint8Array;
+      const blob = new Blob([bytes.slice().buffer], { type: outputMimeType });
+      const url = URL.createObjectURL(blob);
+
+      return { blob, url };
+    } finally {
+      if (onRunProgress) ffmpeg.off("progress", progressHandler);
+      ffmpeg.off("log", logHandler);
+      for (const name of written) {
+        await ffmpeg.deleteFile(name).catch(() => {});
+      }
+      await ffmpeg.deleteFile(outputName).catch(() => {});
     }
-    await ffmpeg.deleteFile(outputName).catch(() => {});
-  }
+  }, onEngineLoad);
 }

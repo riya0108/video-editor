@@ -37,3 +37,15 @@ export function anchorExpr(anchor: Anchor): { x: string; y: string; justify: str
   const align = isTop ? "start" : isBottom ? "end" : "center";
   return { x, y, justify, align };
 }
+
+const FREE_EDGE_MARGIN = 4;
+
+/** Turns a freely-dragged anchor point (x/y as a percent of the frame, center-anchored) into ffmpeg overlay x/y expressions, clamped so the overlay never runs off the edge of the frame. */
+export function freeOverlayExprs(xPercent: number, yPercent: number): { x: string; y: string } {
+  const xFrac = (xPercent / 100).toFixed(4);
+  const yFrac = (yPercent / 100).toFixed(4);
+  return {
+    x: `max(${FREE_EDGE_MARGIN}\\,min(main_w-overlay_w-${FREE_EDGE_MARGIN}\\,main_w*${xFrac}-overlay_w/2))`,
+    y: `max(${FREE_EDGE_MARGIN}\\,min(main_h-overlay_h-${FREE_EDGE_MARGIN}\\,main_h*${yFrac}-overlay_h/2))`,
+  };
+}

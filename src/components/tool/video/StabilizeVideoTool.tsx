@@ -38,6 +38,8 @@ export default function StabilizeVideoTool() {
           stabilizeFilter(strength),
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Play, Square, Mic2, Info } from "lucide-react";
+import { Play, Square, Mic2, Info, Volume2, Sparkles, Wand2 } from "lucide-react";
 import ResultPanel from "../ResultPanel";
 import RecorderControls from "../media/RecorderControls";
+import KokoroVoicesTab from "./KokoroVoicesTab";
+import VoiceCloneTab from "./VoiceCloneTab";
 import { useMediaRecorder } from "../../../lib/hooks/useMediaRecorder";
 import { stopAllTracks } from "../../../lib/media/mix-audio";
 import {
@@ -9,6 +11,13 @@ import {
   extensionForMimeType,
   pickSupportedMimeType,
 } from "../../../lib/media/pick-mime-type";
+
+type Mode = "system" | "ai" | "clone";
+const MODES: { id: Mode; label: string; icon: typeof Volume2 }[] = [
+  { id: "system", label: "System voices", icon: Volume2 },
+  { id: "ai", label: "AI voices", icon: Sparkles },
+  { id: "clone", label: "Clone your voice", icon: Wand2 },
+];
 
 const SAMPLE_TEXT =
   "Welcome to Clipbench. Type or paste any text here, pick a voice, and it will be read aloud.";
@@ -48,6 +57,7 @@ function groupIdForLang(lang: string): string {
 }
 
 export default function TextToSpeechTool() {
+  const [mode, setMode] = useState<Mode>("system");
   const recorder = useMediaRecorder();
   const [isSupported, setIsSupported] = useState(true);
   const [text, setText] = useState(SAMPLE_TEXT);
@@ -177,11 +187,50 @@ export default function TextToSpeechTool() {
           .filter((g) => g.list.length > 0)
       : [{ group: { id: accentFilter, label: "" }, list: filteredVoices }];
 
+  const modeTabs = (
+    <div className="mb-4 flex w-fit flex-wrap items-center gap-1 rounded-md border border-(--color-border) p-1">
+      {MODES.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => setMode(id)}
+          className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-caption font-medium transition-colors ${
+            mode === id ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
+          }`}
+        >
+          <Icon size={13} />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (mode === "ai") {
+    return (
+      <div>
+        {modeTabs}
+        <KokoroVoicesTab />
+      </div>
+    );
+  }
+
+  if (mode === "clone") {
+    return (
+      <div>
+        {modeTabs}
+        <VoiceCloneTab />
+      </div>
+    );
+  }
+
   if (!isSupported) {
     return (
-      <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-8 text-center shadow-sm">
-        <p className="font-semibold">Text to speech isn&rsquo;t supported in this browser.</p>
-        <p className="mt-1 text-body-sm text-(--color-text-muted)">Try the latest Chrome, Edge, or Safari.</p>
+      <div>
+        {modeTabs}
+        <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-8 text-center shadow-sm">
+          <p className="font-semibold">Text to speech isn&rsquo;t supported in this browser.</p>
+          <p className="mt-1 text-body-sm text-(--color-text-muted)">Try the latest Chrome, Edge, or Safari.</p>
+        </div>
       </div>
     );
   }
@@ -189,18 +238,23 @@ export default function TextToSpeechTool() {
   if (recorder.result) {
     const ext = extensionForMimeType(recorder.result.blob.type);
     return (
-      <ResultPanel
-        url={recorder.result.url}
-        blob={recorder.result.blob}
-        filename={`narration.${ext}`}
-        kind="audio"
-        onReset={reset}
-      />
+      <div>
+        {modeTabs}
+        <ResultPanel
+          url={recorder.result.url}
+          blob={recorder.result.blob}
+          filename={`narration.${ext}`}
+          kind="audio"
+          onReset={reset}
+        />
+      </div>
     );
   }
 
   return (
-    <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
+    <div>
+      {modeTabs}
+      <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -343,6 +397,7 @@ export default function TextToSpeechTool() {
         <Mic2 size={12} />
         Voices are provided by your operating system, so the list varies by device.
       </p>
+      </div>
     </div>
   );
 }

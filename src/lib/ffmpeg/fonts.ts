@@ -80,6 +80,62 @@ export const TEXT_FONTS: TextFontOption[] = [
     url: "/fonts/archivo-black-drawtext.ttf",
     cssFontFamily: '"Archivo Black", ui-sans-serif, sans-serif',
   },
+  {
+    id: "bangers",
+    label: "Comic",
+    ffmpegName: "bangers.ttf",
+    url: "/fonts/bangers-drawtext.ttf",
+    cssFontFamily: '"Bangers", cursive',
+  },
+  {
+    id: "pacifico",
+    label: "Script",
+    ffmpegName: "pacifico.ttf",
+    url: "/fonts/pacifico-drawtext.ttf",
+    cssFontFamily: '"Pacifico", cursive',
+  },
+  {
+    id: "righteous",
+    label: "Rounded Display",
+    ffmpegName: "righteous.ttf",
+    url: "/fonts/righteous-drawtext.ttf",
+    cssFontFamily: '"Righteous", ui-sans-serif, sans-serif',
+  },
+  {
+    id: "bungee",
+    label: "Urban Block",
+    ffmpegName: "bungee.ttf",
+    url: "/fonts/bungee-drawtext.ttf",
+    cssFontFamily: '"Bungee", ui-sans-serif, sans-serif',
+  },
+  {
+    id: "dancing-script",
+    label: "Elegant Script",
+    ffmpegName: "dancing-script.ttf",
+    url: "/fonts/dancing-script-drawtext.ttf",
+    cssFontFamily: '"Dancing Script", cursive',
+  },
+  {
+    id: "roboto-slab",
+    label: "Slab Serif",
+    ffmpegName: "roboto-slab.ttf",
+    url: "/fonts/roboto-slab-drawtext.ttf",
+    cssFontFamily: '"Roboto Slab", ui-serif, serif',
+  },
+  {
+    id: "montserrat",
+    label: "Modern",
+    ffmpegName: "montserrat.ttf",
+    url: "/fonts/montserrat-drawtext.ttf",
+    cssFontFamily: '"Montserrat", ui-sans-serif, sans-serif',
+  },
+  {
+    id: "great-vibes",
+    label: "Calligraphy",
+    ffmpegName: "great-vibes.ttf",
+    url: "/fonts/great-vibes-drawtext.ttf",
+    cssFontFamily: '"Great Vibes", cursive',
+  },
 ];
 
 export const DEFAULT_TEXT_FONT = TEXT_FONTS[0];

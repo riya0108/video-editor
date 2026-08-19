@@ -162,6 +162,8 @@ export default function RemoveFillerWordsTool() {
           `[${audioLabel}]`,
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

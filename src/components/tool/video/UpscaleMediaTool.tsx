@@ -109,6 +109,8 @@ export default function UpscaleMediaTool() {
           vf,
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

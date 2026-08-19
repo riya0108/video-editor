@@ -40,6 +40,8 @@ export default function RotateVideoTool() {
           ROTATE_FILTER[turns],
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

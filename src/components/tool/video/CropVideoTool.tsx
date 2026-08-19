@@ -40,6 +40,8 @@ export default function CropVideoTool() {
           `crop=${w}:${h}:${x}:${y}`,
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

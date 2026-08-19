@@ -54,6 +54,38 @@ const FONTS = [
     src: join(nodeModules, "@fontsource", "archivo-black", "files", "archivo-black-latin-400-normal.woff2"),
     dest: join(destDir, "archivo-black-drawtext.ttf"),
   },
+  {
+    src: join(nodeModules, "@fontsource", "bangers", "files", "bangers-latin-400-normal.woff2"),
+    dest: join(destDir, "bangers-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "pacifico", "files", "pacifico-latin-400-normal.woff2"),
+    dest: join(destDir, "pacifico-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "righteous", "files", "righteous-latin-400-normal.woff2"),
+    dest: join(destDir, "righteous-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "bungee", "files", "bungee-latin-400-normal.woff2"),
+    dest: join(destDir, "bungee-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "dancing-script", "files", "dancing-script-latin-700-normal.woff2"),
+    dest: join(destDir, "dancing-script-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "roboto-slab", "files", "roboto-slab-latin-700-normal.woff2"),
+    dest: join(destDir, "roboto-slab-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "montserrat", "files", "montserrat-latin-700-normal.woff2"),
+    dest: join(destDir, "montserrat-drawtext.ttf"),
+  },
+  {
+    src: join(nodeModules, "@fontsource", "great-vibes", "files", "great-vibes-latin-400-normal.woff2"),
+    dest: join(destDir, "great-vibes-drawtext.ttf"),
+  },
 ];
 
 for (const { src, dest } of FONTS) {

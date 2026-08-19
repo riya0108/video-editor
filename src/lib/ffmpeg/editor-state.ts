@@ -1,10 +1,19 @@
 import type { FractionRect } from "../../components/tool/video/RectOverlay";
 import type { OverlayLayer } from "./overlay-layer";
 import type { Anchor } from "./overlay-position";
+import type { ImageEntranceAnimation } from "./media-animation";
+import { getSocialPreset } from "../social-presets";
 
-export type TextAnimation = "none" | "fade" | "slide-up" | "slide-down" | "pop";
+export type TextAnimation =
+  | "none"
+  | "fade"
+  | "slide-up"
+  | "slide-down"
+  | "slide-left"
+  | "slide-right"
+  | "pop"
+  | "bounce";
 export type TextPosition = "top" | "center" | "bottom";
-export type BgAspect = "9:16" | "1:1" | "4:5" | "16:9";
 export type ChromaReplace = "color" | "image" | "video";
 export type ExtraClipPosition = "before" | "after";
 
@@ -18,6 +27,14 @@ export interface EditorTextState {
   y: number;
   fontId: string;
   animation: TextAnimation;
+  uppercase: boolean;
+  background: boolean;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  outline: boolean;
+  outlineColor: string;
+  shadow: boolean;
+  shadowColor: string;
 }
 
 export interface EditorChromaKeyState {
@@ -46,9 +63,31 @@ export interface EditorCropState {
   rect: FractionRect;
 }
 
-export interface EditorBgBlurState {
+export type BgFillMode = "blur" | "solid" | "gradient";
+export type GradientDirection = "vertical" | "horizontal" | "diagonal";
+
+/** Fits the source onto a target canvas (chosen by social-media preset or a
+ * custom size) and fills the empty space around it — with a blurred/zoomed
+ * copy of the video itself, a solid color, or a two-color gradient. */
+export interface EditorBackgroundState {
   enabled: boolean;
-  aspect: BgAspect;
+  /** Key into SOCIAL_PRESETS, or "custom" to use customWidth/customHeight. */
+  presetId: string;
+  customWidth: number;
+  customHeight: number;
+  fillMode: BgFillMode;
+  solidColor: string;
+  gradientFrom: string;
+  gradientTo: string;
+  gradientDirection: GradientDirection;
+}
+
+export function resolveBackgroundSize(bg: EditorBackgroundState): { w: number; h: number } {
+  if (bg.presetId !== "custom") {
+    const preset = getSocialPreset(bg.presetId);
+    if (preset) return { w: preset.width, h: preset.height };
+  }
+  return { w: Math.max(2, Math.round(bg.customWidth)), h: Math.max(2, Math.round(bg.customHeight)) };
 }
 
 export interface EditorMusicState {
@@ -57,12 +96,26 @@ export interface EditorMusicState {
   mode: "mix" | "replace";
 }
 
+export type DubMode = "replace" | "mix" | "duck";
+
+/** A replacement/overdub voice track — recorded in-tool or uploaded — mixed
+ * against the original audio in one of three ways: fully replace it, mix at
+ * equal volume, or "duck" (keep the original quiet underneath the dub). */
+export interface EditorDubState {
+  enabled: boolean;
+  file: File | null;
+  mode: DubMode;
+  /** Volume the original audio is lowered to under the dub, 0-1. Only used in "duck" mode. */
+  duckLevel: number;
+}
+
 export interface EditorExtraClipState {
   enabled: boolean;
   file: File | null;
   kind: "image" | "video";
   position: ExtraClipPosition;
   imageDuration: number;
+  animation: ImageEntranceAnimation;
 }
 
 export interface EditorFadeState {
@@ -78,4 +131,4 @@ export interface EditorQualityState {
   sharpen: boolean;
 }
 
-export type { OverlayLayer, Anchor };
+export type { OverlayLayer, Anchor, ImageEntranceAnimation };

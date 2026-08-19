@@ -6,7 +6,7 @@ import {
 import { evenRound } from "../geometry";
 import { toFfmpegTimestamp } from "../time";
 import { escapeDrawtext } from "./drawtext";
-import { anchorExpr } from "./overlay-position";
+import { freeOverlayExprs } from "./overlay-position";
 import { getTextFont } from "./fonts";
 import { positionExprs } from "./text-position";
 import { VOICE_REMOVER_FILTER, noiseReductionFilter, atempoChain } from "./audio-filters";
@@ -14,28 +14,24 @@ import { resolveQualityTarget, upscaleFilter } from "./upscale-filter";
 import { planCutoutOverlay } from "./person-cutout-filter";
 import { buildCaptionsFilter, remapCuesToTrim } from "../captions/build-captions-filter";
 import { measureKaraokeLayouts } from "../captions/karaoke-layout";
+import { parseHexColor } from "../color";
+import { buildOverlayAnimationFilters, kenBurnsZoompanFilter } from "./media-animation";
 import type { CutoutFrame } from "../captions/person-cutout";
 import type { CaptionCue, CaptionStyle } from "../captions/types";
+import { resolveBackgroundSize } from "./editor-state";
 import type {
   EditorChromaKeyState,
   EditorCropState,
-  EditorBgBlurState,
+  EditorBackgroundState,
   EditorLogoState,
   EditorMusicState,
+  EditorDubState,
   EditorExtraClipState,
   EditorFadeState,
   EditorTextState,
   EditorQualityState,
-  BgAspect,
 } from "./editor-state";
 import type { OverlayLayer } from "./overlay-layer";
-
-const ASPECT_SIZES: Record<BgAspect, [number, number]> = {
-  "9:16": [1080, 1920],
-  "1:1": [1080, 1080],
-  "4:5": [1080, 1350],
-  "16:9": [1920, 1080],
-};
 
 const ANIM_DURATION = 0.6;
 const SLIDE_DISTANCE = 100;
@@ -49,12 +45,13 @@ export interface BuildEditorCommandInput {
   crop: EditorCropState;
   logo: EditorLogoState;
   chromaKey: EditorChromaKeyState;
-  bgBlur: EditorBgBlurState;
+  background: EditorBackgroundState;
   speed: number;
   fade: EditorFadeState;
   voiceRemover: boolean;
   noise: { enabled: boolean; strength: number };
   music: EditorMusicState;
+  dub: EditorDubState;
   overlays: OverlayLayer[];
   extraClip: EditorExtraClipState;
   text: EditorTextState;
@@ -174,20 +171,51 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     vLabel = composited;
   }
 
-  // ---- Blurred-background padding (fit into a target aspect ratio) ----
-  if (state.bgBlur.enabled) {
-    const [targetW, targetH] = ASPECT_SIZES[state.bgBlur.aspect];
-    const split1 = newLabel("v");
-    const split2 = newLabel("v");
-    filters.push(`[${vLabel}]split=2[${split1}][${split2}]`);
-    const bgOut = newLabel("v");
-    filters.push(
-      `[${split1}]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},avgblur=sizeX=40:sizeY=40[${bgOut}]`,
-    );
+  // ---- Fit onto a target canvas (resize preset / custom size) and fill the
+  // empty space: a blurred zoomed copy, a solid color, or a two-color
+  // gradient. ----
+  if (state.background.enabled) {
+    const { w: targetW, h: targetH } = resolveBackgroundSize(state.background);
+    const durArg = (trimmedDuration + 1).toFixed(2);
+
+    let bgLabel: string;
+    if (state.background.fillMode === "solid") {
+      const idx = addLavfiInput(
+        `color=c=${state.background.solidColor.replace("#", "0x")}:s=${targetW}x${targetH}:d=${durArg}`,
+      );
+      bgLabel = `${idx}:v`;
+    } else if (state.background.fillMode === "gradient") {
+      const from = parseHexColor(state.background.gradientFrom);
+      const to = parseHexColor(state.background.gradientTo);
+      const t =
+        state.background.gradientDirection === "horizontal"
+          ? "(X/W)"
+          : state.background.gradientDirection === "diagonal"
+            ? "((X+Y)/(W+H))"
+            : "(Y/H)";
+      const expr = (c1: number, c2: number) => `${c1}+(${c2}-${c1})*${t}`;
+      const idx = addLavfiInput(`color=c=black:s=${targetW}x${targetH}:d=${durArg}`);
+      const gradOut = newLabel("v");
+      filters.push(
+        `[${idx}:v]geq=r='${expr(from.r, to.r)}':g='${expr(from.g, to.g)}':b='${expr(from.b, to.b)}'[${gradOut}]`,
+      );
+      bgLabel = gradOut;
+    } else {
+      const split1 = newLabel("v");
+      const split2 = newLabel("v");
+      filters.push(`[${vLabel}]split=2[${split1}][${split2}]`);
+      const blurOut = newLabel("v");
+      filters.push(
+        `[${split1}]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},avgblur=sizeX=40:sizeY=40[${blurOut}]`,
+      );
+      bgLabel = blurOut;
+      vLabel = split2;
+    }
+
     const fgOut = newLabel("v");
-    filters.push(`[${split2}]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease[${fgOut}]`);
+    filters.push(`[${vLabel}]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease[${fgOut}]`);
     const composited = newLabel("v");
-    filters.push(`[${bgOut}][${fgOut}]overlay=(W-w)/2:(H-h)/2[${composited}]`);
+    filters.push(`[${bgLabel}][${fgOut}]overlay=(W-w)/2:(H-h)/2[${composited}]`);
     vLabel = composited;
     currentW = targetW;
     currentH = targetH;
@@ -266,13 +294,22 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     filters.push(
       `[${idx}:v]scale=${w}:-2,format=rgba,colorchannelmixer=aa=${layer.opacity.toFixed(2)}[${scaled}]`,
     );
-    const { x, y } = anchorExpr(layer.anchor);
+
+    let animatedLabel = scaled;
+    if (layer.animation !== "none") {
+      const animOut = newLabel("v");
+      const animFilters = buildOverlayAnimationFilters(layer.animation, scaled, animOut, layer.start, newLabel);
+      filters.push(...animFilters);
+      animatedLabel = animOut;
+    }
+
+    const { x, y } = freeOverlayExprs(layer.x, layer.y);
     const out = newLabel("v");
     const enable = `between(t\\,${layer.start.toFixed(2)}\\,${layer.end.toFixed(2)})`;
     // shortest=1 is essential here: looped image/video overlay inputs are
     // unbounded, and without this the output follows the infinite overlay
     // instead of stopping when the (bounded) main video ends.
-    filters.push(`[${vLabel}][${scaled}]overlay=x=${x}:y=${y}:enable='${enable}':shortest=1[${out}]`);
+    filters.push(`[${vLabel}][${animatedLabel}]overlay=x=${x}:y=${y}:enable='${enable}':shortest=1[${out}]`);
     vLabel = out;
   }
 
@@ -285,36 +322,74 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
 
     const colorHex = state.text.color.replace("#", "0x");
     const { x: xExpr, y: baseY } = positionExprs(state.text.x, state.text.y);
+    let finalXExpr = xExpr;
     let yExpr = baseY;
     let alphaExpr = "1";
+    const D = ANIM_DURATION;
 
-    if (state.text.animation === "fade") {
-      alphaExpr = `min(t/${ANIM_DURATION}\\,1)`;
-    } else if (state.text.animation === "slide-up") {
-      yExpr = `(${baseY})+((1-min(t/${ANIM_DURATION}\\,1))*${SLIDE_DISTANCE})`;
-    } else if (state.text.animation === "slide-down") {
-      yExpr = `(${baseY})-((1-min(t/${ANIM_DURATION}\\,1))*${SLIDE_DISTANCE})`;
+    switch (state.text.animation) {
+      case "fade":
+        alphaExpr = `min(t/${D}\\,1)`;
+        break;
+      case "slide-up":
+        yExpr = `(${baseY})+((1-min(t/${D}\\,1))*${SLIDE_DISTANCE})`;
+        break;
+      case "slide-down":
+        yExpr = `(${baseY})-((1-min(t/${D}\\,1))*${SLIDE_DISTANCE})`;
+        break;
+      case "slide-left":
+        finalXExpr = `(${xExpr})+((1-min(t/${D}\\,1))*${SLIDE_DISTANCE})`;
+        alphaExpr = `min(t/${D}\\,1)`;
+        break;
+      case "slide-right":
+        finalXExpr = `(${xExpr})-((1-min(t/${D}\\,1))*${SLIDE_DISTANCE})`;
+        alphaExpr = `min(t/${D}\\,1)`;
+        break;
+      case "pop":
+        alphaExpr = `min(t/0.2\\,1)`;
+        break;
+      case "bounce":
+        yExpr = `(${baseY})-(20*sin(min(t/${D}\\,1)*PI))`;
+        break;
+      default:
+        break;
     }
 
-    const drawtext = [
+    const rawText = state.text.uppercase ? state.text.content.toUpperCase() : state.text.content;
+    const drawtextParts = [
       `drawtext=fontfile=${font.ffmpegName}`,
-      `text='${escapeDrawtext(state.text.content)}'`,
+      `text='${escapeDrawtext(rawText)}'`,
       `fontsize=${state.text.fontSize}`,
       `fontcolor=${colorHex}`,
-      `x=${xExpr}`,
+      `x=${finalXExpr}`,
       `y=${yExpr}`,
       `alpha='${alphaExpr}'`,
-      "box=1:boxcolor=0x000000@0.45:boxborderw=16",
-    ].join(":");
+    ];
+    if (state.text.background) {
+      const bgOpacity = state.text.backgroundOpacity.toFixed(2);
+      drawtextParts.push(`box=1:boxcolor=${state.text.backgroundColor.replace("#", "0x")}@${bgOpacity}:boxborderw=16`);
+    }
+    if (state.text.outline) {
+      drawtextParts.push(`borderw=3:bordercolor=${state.text.outlineColor.replace("#", "0x")}`);
+    }
+    if (state.text.shadow) {
+      drawtextParts.push(`shadowx=3:shadowy=3:shadowcolor=${state.text.shadowColor.replace("#", "0x")}@0.8`);
+    }
 
     const out = newLabel("v");
-    filters.push(`[${vLabel}]${drawtext}[${out}]`);
+    filters.push(`[${vLabel}]${drawtextParts.join(":")}[${out}]`);
     vLabel = out;
   }
   if (fontBlobEntry) inputs.push(fontBlobEntry);
 
-  // ---- Audio chain: voice remover -> noise reduction -> speed -> music ----
+  // ---- Audio chain: voice remover -> noise reduction -> speed -> dub -> music ----
   let aLabel = `${mainIndex}:a`;
+  // Tracks whether `aLabel` is still a bare demuxer stream reference (e.g.
+  // "0:a" or, after a "replace" swap, "1:a") rather than a filtergraph pad —
+  // -map needs the bracketed form only for the latter. A same-as-mainIndex
+  // check isn't enough here: "replace" modes repoint aLabel at a *different*
+  // input's raw stream, which is just as unbracketed as the main one.
+  let aIsRaw = true;
   const audioStageFilters: string[] = [];
   if (state.voiceRemover) audioStageFilters.push(VOICE_REMOVER_FILTER);
   if (state.noise.enabled) audioStageFilters.push(noiseReductionFilter(state.noise.strength));
@@ -323,6 +398,30 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     const out = newLabel("a");
     filters.push(`[${aLabel}]${audioStageFilters.join(",")}[${out}]`);
     aLabel = out;
+    aIsRaw = false;
+  }
+
+  // ---- Dub: a replacement/overdub voice track, mixed against the original. ----
+  if (state.dub.enabled && state.dub.file) {
+    const dubExt = guessAudioExtension(state.dub.file);
+    const idx = addFileInput(`dub.${dubExt}`, state.dub.file);
+    const dubLabel = `${idx}:a`;
+    if (state.dub.mode === "replace") {
+      aLabel = dubLabel;
+      aIsRaw = true;
+    } else if (state.dub.mode === "duck") {
+      const duckedOut = newLabel("a");
+      filters.push(`[${aLabel}]volume=${state.dub.duckLevel.toFixed(2)}[${duckedOut}]`);
+      const mixed = newLabel("a");
+      filters.push(`[${duckedOut}][${dubLabel}]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[${mixed}]`);
+      aLabel = mixed;
+      aIsRaw = false;
+    } else {
+      const mixed = newLabel("a");
+      filters.push(`[${aLabel}][${dubLabel}]amix=inputs=2:duration=first:dropout_transition=2[${mixed}]`);
+      aLabel = mixed;
+      aIsRaw = false;
+    }
   }
 
   if (state.music.enabled && state.music.file) {
@@ -330,15 +429,17 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     const idx = addFileInput(`music.${audExt}`, state.music.file);
     if (state.music.mode === "replace") {
       aLabel = `${idx}:a`;
+      aIsRaw = true;
     } else {
       const out = newLabel("a");
       filters.push(
         `[${aLabel}][${idx}:a]amix=inputs=2:duration=first:dropout_transition=2[${out}]`,
       );
       aLabel = out;
+      aIsRaw = false;
     }
   }
-  const aLabelIsRaw = () => aLabel === `${mainIndex}:a`;
+  const aLabelIsRaw = () => aIsRaw;
 
   // ---- Extra clip: concatenate an intro or outro to extend total length ----
   // -map needs bracketed [label] for a filtergraph-generated pad, but the
@@ -367,9 +468,11 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
         "-t",
         dur.toFixed(2),
       ]);
+      const zoompan = kenBurnsZoompanFilter(state.extraClip.animation, currentW, currentH, dur, 30);
       const scaled = newLabel("v");
+      const tail = zoompan ? zoompan : "fps=30";
       filters.push(
-        `[${idx}:v]scale=${currentW}:${currentH}:force_original_aspect_ratio=decrease,pad=${currentW}:${currentH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[${scaled}]`,
+        `[${idx}:v]scale=${currentW}:${currentH}:force_original_aspect_ratio=decrease,pad=${currentW}:${currentH}:(ow-iw)/2:(oh-ih)/2,setsar=1,${tail}[${scaled}]`,
       );
       extraV = scaled;
       const silentIdx = addLavfiInput(`anullsrc=r=44100:cl=stereo`, ["-t", dur.toFixed(2)]);

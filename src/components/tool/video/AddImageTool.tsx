@@ -6,18 +6,21 @@ import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
 import FramedVideoStage from "./FramedVideoStage";
+import DraggableResizableOverlay from "./editor/DraggableResizableOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { guessVideoExtension, guessImageExtension, stripExtension } from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
-import { ANCHORS, anchorExpr, type Anchor } from "../../../lib/ffmpeg/overlay-position";
+import { freeOverlayExprs } from "../../../lib/ffmpeg/overlay-position";
 
 export default function AddImageTool() {
   const video = useVideoFile();
   const exportState = useFfmpegExport();
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [anchor, setAnchor] = useState<Anchor>("top-right");
+  const [imageAspect, setImageAspect] = useState(1);
+  const [x, setX] = useState(85);
+  const [y, setY] = useState(15);
   const [sizePercent, setSizePercent] = useState(20);
   const [opacity, setOpacity] = useState(1);
 
@@ -30,8 +33,19 @@ export default function AddImageTool() {
   const handleImageFiles = (files: File[]) => {
     const picked = files[0];
     if (!picked) return;
+    const url = URL.createObjectURL(picked);
     setImageFile(picked);
-    setImageUrl(URL.createObjectURL(picked));
+    setImageUrl(url);
+    setX(85);
+    setY(15);
+
+    const probe = new Image();
+    probe.onload = () => {
+      if (probe.naturalWidth > 0 && probe.naturalHeight > 0) {
+        setImageAspect(probe.naturalWidth / probe.naturalHeight);
+      }
+    };
+    probe.src = url;
   };
 
   const handleExport = async () => {
@@ -43,11 +57,11 @@ export default function AddImageTool() {
     const outputName = "output.mp4";
 
     const targetWidth = evenRound(video.videoWidth * (sizePercent / 100));
-    const { x, y } = anchorExpr(anchor);
+    const { x: xExpr, y: yExpr } = freeOverlayExprs(x, y);
 
     const filterComplex =
       `[1:v]scale=${targetWidth}:-2,format=rgba,colorchannelmixer=aa=${opacity.toFixed(2)}[wm];` +
-      `[0:v][wm]overlay=x=${x}:y=${y}[v]`;
+      `[0:v][wm]overlay=x=${xExpr}:y=${yExpr}[v]`;
 
     await exportState.run(
       {
@@ -68,6 +82,8 @@ export default function AddImageTool() {
           "0:a?",
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",
@@ -113,8 +129,6 @@ export default function AddImageTool() {
     );
   }
 
-  const { justify, align } = anchorExpr(anchor);
-
   return (
     <ToolSplitLayout
       controls={
@@ -129,30 +143,16 @@ export default function AddImageTool() {
               />
             ) : (
               <div className="space-y-4">
-                <div className="grid grid-cols-3 gap-1.5">
-                  {ANCHORS.map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      aria-label={a.id}
-                      onClick={() => setAnchor(a.id)}
-                      className={`grid h-9 w-9 place-items-center rounded-md border text-body-sm transition-colors ${
-                        anchor === a.id
-                          ? "border-primary-500 bg-primary-500 text-white"
-                          : "border-(--color-border) hover:border-(--color-border-strong)"
-                      }`}
-                    >
-                      {a.label}
-                    </button>
-                  ))}
-                </div>
+                <p className="text-caption text-(--color-text-muted)">
+                  Drag the image in the preview to place it anywhere, and drag its corner handle to resize.
+                </p>
 
                 <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
                   Size
                   <input
                     type="range"
-                    min={5}
-                    max={60}
+                    min={4}
+                    max={100}
                     value={sizePercent}
                     onChange={(e) => setSizePercent(Number(e.target.value))}
                     className="w-32 accent-(--color-primary-500)"
@@ -213,20 +213,26 @@ export default function AddImageTool() {
           >
             {(box) =>
               imageUrl && (
-                <div
-                  className="flex h-full w-full p-6"
-                  style={{
-                    justifyContent: justify === "start" ? "flex-start" : justify === "end" ? "flex-end" : "center",
-                    alignItems: align === "start" ? "flex-start" : align === "end" ? "flex-end" : "center",
+                <DraggableResizableOverlay
+                  x={x}
+                  y={y}
+                  sizePercent={sizePercent}
+                  box={box}
+                  aspectRatio={imageAspect}
+                  draggable
+                  onChange={(patch) => {
+                    setX(patch.x);
+                    setY(patch.y);
+                    setSizePercent(patch.sizePercent);
                   }}
                 >
                   <img
                     src={imageUrl}
                     alt=""
-                    style={{ width: box.width * (sizePercent / 100), opacity }}
+                    style={{ width: "100%", height: "100%", opacity }}
                     className="max-w-none"
                   />
-                </div>
+                </DraggableResizableOverlay>
               )
             }
           </FramedVideoStage>

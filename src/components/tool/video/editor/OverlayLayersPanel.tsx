@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { ImagePlus, Film, Smile, X } from "lucide-react";
 import EmojiPicker from "./EmojiPicker";
-import { ANCHORS, type Anchor } from "../../../../lib/ffmpeg/overlay-position";
 import { nextOverlayId, type OverlayLayer } from "../../../../lib/ffmpeg/overlay-layer";
+import { OVERLAY_ANIMATIONS } from "../../../../lib/ffmpeg/media-animation";
 import { renderEmojiToPng } from "../../../../lib/emoji-render";
 import { formatTime } from "../../../../lib/time";
 
@@ -32,11 +32,13 @@ export default function OverlayLayersPanel({
       file,
       previewUrl: URL.createObjectURL(file),
       label: file.name,
-      anchor: "center",
+      x: 50,
+      y: 50,
       sizePercent: kind === "image" ? 25 : 35,
       opacity: 1,
       start: 0,
       end: duration || 5,
+      animation: "none",
     });
   };
 
@@ -48,11 +50,13 @@ export default function OverlayLayersPanel({
       file: blob,
       previewUrl: URL.createObjectURL(blob),
       label: emoji,
-      anchor: "center",
+      x: 50,
+      y: 50,
       sizePercent: 15,
       opacity: 1,
       start: 0,
       end: duration || 5,
+      animation: "none",
     });
     setAddMode(null);
   };
@@ -117,25 +121,10 @@ export default function OverlayLayersPanel({
                 </button>
               </div>
 
+              <p className="mt-3 text-caption text-(--color-text-muted)">
+                Drag it in the preview to place it anywhere, and drag its corner handle to resize.
+              </p>
               <div className="mt-3 flex flex-wrap items-center gap-4">
-                <div className="grid grid-cols-3 gap-1">
-                  {ANCHORS.map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      aria-label={a.id}
-                      onClick={() => onUpdate(layer.id, { anchor: a.id as Anchor })}
-                      className={`grid h-6 w-6 place-items-center rounded text-caption ${
-                        layer.anchor === a.id
-                          ? "bg-primary-500 text-white"
-                          : "border border-(--color-border) hover:border-(--color-border-strong)"
-                      }`}
-                    >
-                      {a.label}
-                    </button>
-                  ))}
-                </div>
-
                 <label className="flex items-center gap-2 text-caption text-(--color-text-muted)">
                   Size
                   <input
@@ -160,6 +149,21 @@ export default function OverlayLayersPanel({
                   />
                 </label>
               </div>
+
+              <label className="mt-3 flex items-center gap-2 text-caption text-(--color-text-muted)">
+                Animation
+                <select
+                  value={layer.animation}
+                  onChange={(e) => onUpdate(layer.id, { animation: e.target.value as OverlayLayer["animation"] })}
+                  className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1 text-caption"
+                >
+                  {OVERLAY_ANIMATIONS.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <div className="mt-3 flex items-center gap-3 text-caption text-(--color-text-muted)">
                 <span>Show from</span>

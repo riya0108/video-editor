@@ -111,6 +111,8 @@ export default function RemoveLogoTool() {
           "0:a?",
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

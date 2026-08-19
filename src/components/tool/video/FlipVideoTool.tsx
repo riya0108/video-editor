@@ -33,6 +33,8 @@ export default function FlipVideoTool() {
           filter,
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

@@ -25,5 +25,10 @@ export default defineConfig({
   integrations: [react()],
   vite: {
     plugins: [tailwindcss(), crossOriginIsolationHeaders],
+    optimizeDeps: {
+      // kokoro-js bundles Emscripten (espeak-ng wasm) glue code that
+      // misbehaves under esbuild's dependency pre-bundling.
+      exclude: ["kokoro-js"],
+    },
   },
 });

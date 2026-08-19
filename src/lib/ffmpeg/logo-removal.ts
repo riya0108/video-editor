@@ -4,27 +4,10 @@ import type { FractionRect } from "../../components/tool/video/RectOverlay";
 export interface LogoRegion {
   id: string;
   rect: FractionRect;
-  /** 0-100. Drives both blur intensity and how far the soft feathered edge extends. */
+  /** 0-100. Drives how wide a fuzzy edge ffmpeg blends the patch into. */
   strength: number;
   /** null = applied for the whole video. */
   timeRange: { start: number; end: number } | null;
-}
-
-/**
- * boxblur's chroma plane is subsampled 2x (yuv420p), and ffmpeg rejects a
- * blur radius that doesn't leave room in that subsampled plane — in practice
- * radius must stay under roughly a quarter of the crop's shorter side, or
- * ffmpeg errors out ("Invalid chroma_param radius value ..., must be >= 0
- * and < N") and the whole export fails. Verified empirically against ffmpeg
- * 8.1: a 24px-tall crop tops out at radius 5, a 54px-tall crop at radius 12.
- */
-function maxBoxblurRadius(w: number, h: number): number {
-  return Math.max(1, Math.floor(Math.min(w, h) / 4) - 1);
-}
-
-function strengthToRadius(strength: number, w: number, h: number): number {
-  const wanted = Math.round((Math.max(0, Math.min(100, strength)) / 100) * 12) + 1;
-  return Math.min(wanted, maxBoxblurRadius(w, h));
 }
 
 function escapeFilterArg(value: string): string {
@@ -32,10 +15,23 @@ function escapeFilterArg(value: string): string {
 }
 
 /**
- * One region = crop+blur the exact box, plus a second, lighter crop+blur of
- * a padded halo underneath it — a cheap way to fake a feathered edge with
- * only standard ffmpeg filters (no per-pixel alpha mask). Regions chain
- * sequentially so multiple logos/watermarks can be removed in one export.
+ * This build's `delogo` only takes x/y/w/h/show/enable — no blend-radius
+ * option — so "strength" instead pads the removed box outward. A bigger box
+ * gives delogo more surrounding pixels to interpolate from, which blends
+ * better on busy backgrounds at the cost of removing a larger area.
+ */
+function strengthToPadding(strength: number, w: number, h: number): number {
+  const wanted = Math.round((Math.max(0, Math.min(100, strength)) / 100) * 0.25 * Math.min(w, h));
+  return Math.max(0, wanted);
+}
+
+/**
+ * One region = one `delogo` filter — ffmpeg's built-in watermark remover,
+ * which reconstructs the box from its edge pixels rather than just blurring
+ * it. Regions chain sequentially so multiple logos can be removed in one
+ * export. (An earlier version faked this with split+crop+boxblur+overlay,
+ * but that multi-branch graph reliably hung the wasm multithreaded build —
+ * delogo is a single filter per region and doesn't hit that.)
  */
 export function buildLogoRemovalFilter(
   regions: LogoRegion[],
@@ -46,41 +42,24 @@ export function buildLogoRemovalFilter(
   const parts: string[] = [];
 
   regions.forEach((region, i) => {
-    const w = evenRound(region.rect.w * videoWidth);
-    const h = evenRound(region.rect.h * videoHeight);
-    const x = evenRound(region.rect.x * videoWidth);
-    const y = evenRound(region.rect.y * videoHeight);
+    const baseW = evenRound(region.rect.w * videoWidth);
+    const baseH = evenRound(region.rect.h * videoHeight);
+    const baseX = evenRound(region.rect.x * videoWidth);
+    const baseY = evenRound(region.rect.y * videoHeight);
 
-    const featherPx = Math.min(40, Math.max(6, Math.round(Math.min(w, h) * 0.15)));
-    const px = evenRound(Math.max(0, x - featherPx), 0);
-    const py = evenRound(Math.max(0, y - featherPx), 0);
-    const pw = evenRound(Math.min(videoWidth - px, w + 2 * featherPx));
-    const ph = evenRound(Math.min(videoHeight - py, h + 2 * featherPx));
-
-    const outerRadius = Math.max(1, Math.round(strengthToRadius(region.strength, pw, ph) * 0.5));
-    const innerRadius = strengthToRadius(region.strength, w, h);
+    const pad = strengthToPadding(region.strength, baseW, baseH);
+    const x = evenRound(Math.max(0, baseX - pad));
+    const y = evenRound(Math.max(0, baseY - pad));
+    const w = evenRound(Math.min(videoWidth - x, baseW + 2 * pad));
+    const h = evenRound(Math.min(videoHeight - y, baseH + 2 * pad));
 
     const enable = region.timeRange
       ? `:enable='${escapeFilterArg(`between(t,${region.timeRange.start},${region.timeRange.end})`)}'`
       : "";
 
-    const base = `lb${i}`;
-    const outerCrop = `lo${i}`;
-    const innerCrop = `li${i}`;
-    const outerBlur = `lob${i}`;
-    const innerBlur = `lib${i}`;
-    const afterOuter = `ls${i}o`;
-    const afterInner = i === regions.length - 1 ? "logoout" : `ls${i}i`;
-
-    parts.push(`[${current}]split=3[${base}][${outerCrop}][${innerCrop}]`);
-    parts.push(`[${outerCrop}]crop=${pw}:${ph}:${px}:${py}[${outerCrop}c]`);
-    parts.push(`[${outerCrop}c]boxblur=luma_radius=${outerRadius}:luma_power=1[${outerBlur}]`);
-    parts.push(`[${innerCrop}]crop=${w}:${h}:${x}:${y}[${innerCrop}c]`);
-    parts.push(`[${innerCrop}c]boxblur=luma_radius=${innerRadius}:luma_power=2[${innerBlur}]`);
-    parts.push(`[${base}][${outerBlur}]overlay=${px}:${py}${enable}[${afterOuter}]`);
-    parts.push(`[${afterOuter}][${innerBlur}]overlay=${x}:${y}${enable}[${afterInner}]`);
-
-    current = afterInner;
+    const out = i === regions.length - 1 ? "logoout" : `ld${i}`;
+    parts.push(`[${current}]delogo=x=${x}:y=${y}:w=${w}:h=${h}${enable}[${out}]`);
+    current = out;
   });
 
   return { filterComplex: parts.join(";"), outputLabel: current };

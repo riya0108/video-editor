@@ -10,25 +10,19 @@ import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
-
-const PRESETS = [
-  { id: "youtube", label: "YouTube (1920×1080)", width: 1920, height: 1080 },
-  { id: "square", label: "Instagram Square (1080×1080)", width: 1080, height: 1080 },
-  { id: "story", label: "Reels / Story / TikTok (1080×1920)", width: 1080, height: 1920 },
-  { id: "twitter", label: "Twitter / X (1280×720)", width: 1280, height: 720 },
-  { id: "custom", label: "Custom size", width: 0, height: 0 },
-];
+import { SOCIAL_PRESET_GROUPS, aspectLabel } from "../../../lib/social-presets";
 
 export default function ResizeVideoTool() {
   const video = useVideoFile();
   const exportState = useFfmpegExport();
-  const [presetId, setPresetId] = useState("youtube");
+  const [presetId, setPresetId] = useState("youtube-long");
   const [customWidth, setCustomWidth] = useState(1280);
   const [customHeight, setCustomHeight] = useState(720);
 
-  const preset = PRESETS.find((p) => p.id === presetId)!;
-  const targetWidth = presetId === "custom" ? customWidth : preset.width;
-  const targetHeight = presetId === "custom" ? customHeight : preset.height;
+  const allPresets = SOCIAL_PRESET_GROUPS.flatMap((g) => g.presets);
+  const preset = allPresets.find((p) => p.id === presetId);
+  const targetWidth = presetId === "custom" ? customWidth : (preset?.width ?? 1280);
+  const targetHeight = presetId === "custom" ? customHeight : (preset?.height ?? 720);
 
   const handleExport = async () => {
     if (!video.file) return;
@@ -48,6 +42,8 @@ export default function ResizeVideoTool() {
           `scale=w=${w}:h=${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1`,
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",
@@ -66,7 +62,7 @@ export default function ResizeVideoTool() {
   const reset = () => {
     exportState.reset();
     video.reset();
-    setPresetId("youtube");
+    setPresetId("youtube-long");
   };
 
   if (!video.hasFile) {
@@ -97,21 +93,45 @@ export default function ResizeVideoTool() {
       controls={
         <>
           <ToolPanelSection icon={Maximize} label="Target size">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {PRESETS.map((p) => (
+            <div className="space-y-4">
+              {SOCIAL_PRESET_GROUPS.map((group) => (
+                <div key={group.platform}>
+                  <p className="mb-1.5 text-caption font-semibold text-(--color-text-muted)">{group.platform}</p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {group.presets.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setPresetId(p.id)}
+                        className={`rounded-lg border px-4 py-2.5 text-left text-body-sm font-medium transition-colors ${
+                          presetId === p.id
+                            ? "border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-300"
+                            : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                        }`}
+                      >
+                        {p.label}
+                        <span className="ml-1.5 text-caption text-(--color-text-faint)">
+                          {p.width}×{p.height}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              <div>
                 <button
-                  key={p.id}
                   type="button"
-                  onClick={() => setPresetId(p.id)}
-                  className={`rounded-lg border px-4 py-3 text-left text-body-sm font-medium transition-colors ${
-                    presetId === p.id
+                  onClick={() => setPresetId("custom")}
+                  className={`w-full rounded-lg border px-4 py-2.5 text-left text-body-sm font-medium transition-colors ${
+                    presetId === "custom"
                       ? "border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-300"
                       : "border-(--color-border) hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
                   }`}
                 >
-                  {p.label}
+                  Custom size
                 </button>
-              ))}
+              </div>
             </div>
 
             {presetId === "custom" && (
@@ -139,6 +159,11 @@ export default function ResizeVideoTool() {
                 </label>
               </div>
             )}
+
+            <p className="mt-3 text-caption text-(--color-text-muted)">
+              {targetWidth}×{targetHeight} ({aspectLabel(targetWidth, targetHeight)}) — fit inside with black bars,
+              nothing gets cropped or stretched.
+            </p>
           </ToolPanelSection>
 
           <ExportStatus

@@ -66,12 +66,12 @@ export default function TrimVideoTool() {
       {
         inputs: [{ name: inputName, data: video.file }],
         args: [
-          "-i",
-          inputName,
           "-ss",
           toFfmpegTimestamp(start),
+          "-i",
+          inputName,
           "-to",
-          toFfmpegTimestamp(end),
+          toFfmpegTimestamp(end - start),
           "-c",
           "copy",
           "-avoid_negative_ts",

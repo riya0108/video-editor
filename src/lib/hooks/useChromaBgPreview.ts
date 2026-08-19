@@ -1,28 +1,22 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { EditorBgBlurState, EditorChromaKeyState } from "../ffmpeg/editor-state";
+import type { EditorBackgroundState, EditorChromaKeyState } from "../ffmpeg/editor-state";
+import { resolveBackgroundSize } from "../ffmpeg/editor-state";
 import { drawChromaKeyed } from "../media/chroma-key-canvas";
-import { drawBgBlurFrame } from "../media/bg-blur-canvas";
-
-const BG_ASPECT_RATIOS: Record<EditorBgBlurState["aspect"], { w: number; h: number }> = {
-  "9:16": { w: 9, h: 16 },
-  "1:1": { w: 1, h: 1 },
-  "4:5": { w: 4, h: 5 },
-  "16:9": { w: 16, h: 9 },
-};
+import { drawBgFillFrame } from "../media/bg-blur-canvas";
 
 /**
- * Live preview for chroma key + background blur, which both need real pixel
- * access a plain <video> can't give. Owns the replacement image/video
+ * Live preview for chroma key + background reframe, which both need real
+ * pixel access a plain <video> can't give. Owns the replacement image/video
  * lifecycle for chroma key, and produces a single `onDrawFrame` callback for
  * FramedVideoStage's canvas mode that chains the two effects in the same
- * order build-editor-command.ts uses (colorkey, then bgBlur).
+ * order build-editor-command.ts uses (colorkey, then background fill).
  */
 export function useChromaBgPreview({
   chromaKey,
-  bgBlur,
+  background,
 }: {
   chromaKey: EditorChromaKeyState;
-  bgBlur: EditorBgBlurState;
+  background: EditorBackgroundState;
 }) {
   const workCanvasRef = useRef<HTMLCanvasElement | null>(null);
   if (!workCanvasRef.current && typeof document !== "undefined") {
@@ -69,8 +63,8 @@ export function useChromaBgPreview({
     };
   }, [chromaKey.replaceVideoFile]);
 
-  const canvasMode = chromaKey.enabled || bgBlur.enabled;
-  const effectiveAspect = bgBlur.enabled ? BG_ASPECT_RATIOS[bgBlur.aspect] : null;
+  const canvasMode = chromaKey.enabled || background.enabled;
+  const effectiveAspect = background.enabled ? resolveBackgroundSize(background) : null;
 
   const onDrawFrame = useMemo(() => {
     if (!canvasMode) return undefined;
@@ -98,9 +92,16 @@ export function useChromaBgPreview({
 
       ctx.clearRect(0, 0, dims.stage.width, dims.stage.height);
 
-      if (bgBlur.enabled) {
+      if (background.enabled) {
         const blurPx = Math.max(2, Math.round(dims.stage.width * 0.06));
-        drawBgBlurFrame(ctx, source, sourceW, sourceH, dims.stage, dims.box, blurPx);
+        drawBgFillFrame(ctx, source, sourceW, sourceH, dims.stage, dims.box, {
+          mode: background.fillMode,
+          blurPx,
+          solidColor: background.solidColor,
+          gradientFrom: background.gradientFrom,
+          gradientTo: background.gradientTo,
+          gradientDirection: background.gradientDirection,
+        });
       } else {
         const left = (dims.stage.width - dims.box.width) / 2;
         const top = (dims.stage.height - dims.box.height) / 2;
@@ -108,7 +109,7 @@ export function useChromaBgPreview({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasMode, chromaKey, bgBlur]);
+  }, [canvasMode, chromaKey, background]);
 
   return { canvasMode, effectiveAspect, onDrawFrame };
 }

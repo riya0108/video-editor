@@ -24,12 +24,12 @@ export default function AudioTrimTool() {
       {
         inputs: [{ name: inputName, data: audio.file }],
         args: [
-          "-i",
-          inputName,
           "-ss",
           toFfmpegTimestamp(region.start),
+          "-i",
+          inputName,
           "-to",
-          toFfmpegTimestamp(region.end),
+          toFfmpegTimestamp(region.end - region.start),
           "-c",
           "copy",
           outputName,

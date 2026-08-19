@@ -184,7 +184,7 @@ export default function FramedVideoStage({
           </div>
         )}
         {stageOverlay && (
-          <div className="absolute inset-0" style={{ width: stage.width, height: stage.height }}>
+          <div className="pointer-events-none absolute inset-0" style={{ width: stage.width, height: stage.height }}>
             {stageOverlay}
           </div>
         )}

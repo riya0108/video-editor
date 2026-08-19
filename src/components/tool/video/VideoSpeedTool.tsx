@@ -39,6 +39,8 @@ export default function VideoSpeedTool() {
           "[a]",
           "-c:v",
           "libx264",
+          "-threads",
+          "1",
           "-preset",
           "ultrafast",
           "-crf",

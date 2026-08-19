@@ -256,4 +256,8 @@ export const CAPTION_COLORS = [
   "#ef4444",
   "#22c55e",
   "#38bdf8",
+  "#a855f7",
+  "#ec4899",
+  "#f97316",
+  "#14b8a6",
 ];

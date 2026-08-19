@@ -1,4 +1,4 @@
-import type { Anchor } from "./overlay-position";
+import type { OverlayAnimation } from "./media-animation";
 
 export interface OverlayLayer {
   id: string;
@@ -6,11 +6,14 @@ export interface OverlayLayer {
   file: File | Blob;
   previewUrl: string;
   label: string;
-  anchor: Anchor;
+  /** Center point, as a percent of the frame (0-100). */
+  x: number;
+  y: number;
   sizePercent: number;
   opacity: number;
   start: number;
   end: number;
+  animation: OverlayAnimation;
 }
 
 let counter = 0;
