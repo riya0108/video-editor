@@ -1,13 +1,18 @@
 import { useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
 import SimplePreviewStage from "./SimplePreviewStage";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, guessImageExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  guessImageExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
 import { upscaleFilter } from "../../../lib/ffmpeg/upscale-filter";
 
@@ -60,7 +65,9 @@ export default function UpscaleMediaTool() {
   };
 
   const handleVideoError = () => {
-    setMetadataError("Your browser couldn't read this video. Try converting it to MP4 (H.264) first.");
+    setMetadataError(
+      "Your browser couldn't read this video. Try converting it to MP4 (H.264) first.",
+    );
   };
 
   const targetSize = (): { w: number; h: number } | null => {
@@ -138,12 +145,18 @@ export default function UpscaleMediaTool() {
 
   if (!file) {
     return (
-      <Dropzone
-        accept="image/*,video/*"
-        label="Drop an image or video here, or click to browse"
-        hint="Upscale its resolution with sharpened, lanczos-resampled scaling"
-        onFiles={handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Sparkles}
+        title="Upscale Video or Image"
+        description="Increase resolution with sharpened, lanczos-resampled scaling."
+      >
+        <Dropzone
+          accept="image/*,video/*"
+          label="Drop an image or video here, or click to browse"
+          hint="Upscale its resolution with sharpened, lanczos-resampled scaling"
+          onFiles={handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -225,7 +238,10 @@ export default function UpscaleMediaTool() {
               {width > 0 && height > 0 ? (
                 size ? (
                   <>
-                    {width}×{height} &rarr; <span className="font-semibold text-(--color-text)">{size.w}×{size.h}</span>
+                    {width}×{height} &rarr;{" "}
+                    <span className="font-semibold text-(--color-text)">
+                      {size.w}×{size.h}
+                    </span>
                   </>
                 ) : (
                   "Your file already meets or exceeds this target — nothing to upscale."
@@ -235,9 +251,10 @@ export default function UpscaleMediaTool() {
               )}
             </div>
             <p className="mt-3 text-caption text-(--color-text-muted)">
-              This is fast, filter-based upscaling (sharpened lanczos resampling) — not an AI model generating new
-              detail, so very large jumps (e.g. 4x on a small source) will look softer than a dedicated
-              super-resolution tool.
+              This is fast, filter-based upscaling (sharpened lanczos
+              resampling) — not an AI model generating new detail, so very large
+              jumps (e.g. 4x on a small source) will look softer than a
+              dedicated super-resolution tool.
             </p>
           </ToolPanelSection>
 

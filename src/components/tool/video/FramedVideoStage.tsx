@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
-const DEFAULT_STAGE_MAX_HEIGHT = 384; // matches the original fixed h-96 stage height
+const DEFAULT_STAGE_MAX_HEIGHT = 480; // taller default so wide-screen tool pages fill more of the workspace
+const ZERO_OFFSET = { x: 0, y: 0 };
 
 /**
  * Fits a video (object-fit: contain, without relying on CSS which can't
@@ -25,6 +26,10 @@ export default function FramedVideoStage({
   aspect = null,
   /** Caps the stage's height in pixels — draggable in the full Video Editor so the preview can trade space with the timeline. */
   maxHeight = DEFAULT_STAGE_MAX_HEIGHT,
+  /** Multiplies the normal "contain" fit scale — 1 = fit, >1 = zoomed in. Grows `box` in real layout pixels (not a CSS transform), so overlay children's boxWidth/boxHeight-based pixel math stays correct. */
+  zoom = 1,
+  /** Pixel offset applied on top of the centered position, for panning a zoomed-in stage. */
+  panOffset = ZERO_OFFSET,
   /** Render a live-processed <canvas> (fed by onDrawFrame) over the stage instead of the plain video — for effects (chroma key, background blur) that need real pixel access. The <video> stays mounted (hidden) as the frame/audio/playback source. */
   canvasMode = false,
   onDrawFrame,
@@ -46,6 +51,8 @@ export default function FramedVideoStage({
   overlayInteractive?: boolean;
   aspect?: { w: number; h: number } | null;
   maxHeight?: number;
+  zoom?: number;
+  panOffset?: { x: number; y: number };
   canvasMode?: boolean;
   onDrawFrame?: (
     ctx: CanvasRenderingContext2D,
@@ -83,9 +90,12 @@ export default function FramedVideoStage({
 
   let box = stage;
   if (naturalWidth > 0 && naturalHeight > 0 && stage.width > 0) {
-    const scale = Math.min(stage.width / naturalWidth, stage.height / naturalHeight);
+    const fitScale = Math.min(stage.width / naturalWidth, stage.height / naturalHeight);
+    const scale = fitScale * zoom;
     box = { width: naturalWidth * scale, height: naturalHeight * scale };
   }
+  const boxLeft = (stage.width - box.width) / 2 + panOffset.x;
+  const boxTop = (stage.height - box.height) / 2 + panOffset.y;
 
   // Keep the draw loop reading fresh values without re-subscribing every render.
   const latest = useRef({ stage, box, onDrawFrame });
@@ -159,6 +169,7 @@ export default function FramedVideoStage({
             width: box.width || undefined,
             height: box.height || undefined,
             visibility: canvasMode ? "hidden" : "visible",
+            transform: panOffset.x || panOffset.y ? `translate(${panOffset.x}px, ${panOffset.y}px)` : undefined,
           }}
         />
         {canvasMode && (
@@ -174,8 +185,8 @@ export default function FramedVideoStage({
             style={{
               width: box.width,
               height: box.height,
-              left: (stage.width - box.width) / 2,
-              top: (stage.height - box.height) / 2,
+              left: boxLeft,
+              top: boxTop,
             }}
           >
             <div className={`absolute inset-0 ${overlayInteractive ? "pointer-events-auto" : "pointer-events-none"}`}>

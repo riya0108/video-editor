@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Crop } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -9,7 +10,10 @@ import FramedVideoStage from "./FramedVideoStage";
 import RectOverlay, { type FractionRect } from "./RectOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
 
 const DEFAULT_RECT: FractionRect = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
@@ -20,7 +24,8 @@ export default function CropVideoTool() {
   const [rect, setRect] = useState<FractionRect>(DEFAULT_RECT);
 
   const handleExport = async () => {
-    if (!video.file || video.videoWidth === 0 || video.isMetadataLoading) return;
+    if (!video.file || video.videoWidth === 0 || video.isMetadataLoading)
+      return;
     const ext = guessVideoExtension(video.file);
     const inputName = `input.${ext}`;
     const outputName = "output.mp4";
@@ -65,12 +70,18 @@ export default function CropVideoTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Drag the box to choose what stays in frame"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Crop}
+        title="Crop Video"
+        description="Cut out unwanted edges or change the frame."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Drag the box to choose what stays in frame"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -92,11 +103,14 @@ export default function CropVideoTool() {
         <>
           <ToolPanelSection icon={Crop} label="Crop">
             <p className="text-body-sm text-(--color-text-muted)">
-              {video.isMetadataLoading ? "Reading your video…" : "Drag the box on the preview to choose what stays in frame."}
+              {video.isMetadataLoading
+                ? "Reading your video…"
+                : "Drag the box on the preview to choose what stays in frame."}
             </p>
             {video.videoWidth > 0 && (
               <p className="mt-2 text-caption tabular-nums text-(--color-text-muted)">
-                {evenRound(rect.w * video.videoWidth)} &times; {evenRound(rect.h * video.videoHeight)}px
+                {evenRound(rect.w * video.videoWidth)} &times;{" "}
+                {evenRound(rect.h * video.videoHeight)}px
               </p>
             )}
           </ToolPanelSection>
@@ -111,7 +125,11 @@ export default function CropVideoTool() {
 
           <button
             type="button"
-            disabled={exportState.isProcessing || video.isMetadataLoading || !!video.metadataError}
+            disabled={
+              exportState.isProcessing ||
+              video.isMetadataLoading ||
+              !!video.metadataError
+            }
             onClick={handleExport}
             className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -134,7 +152,14 @@ export default function CropVideoTool() {
             onLoadedMetadata={video.onLoadedMetadata}
             onError={video.onError}
           >
-            {(box) => <RectOverlay boxWidth={box.width} boxHeight={box.height} rect={rect} onChange={setRect} />}
+            {(box) => (
+              <RectOverlay
+                boxWidth={box.width}
+                boxHeight={box.height}
+                rect={rect}
+                onChange={setRect}
+              />
+            )}
           </FramedVideoStage>
         )
       }

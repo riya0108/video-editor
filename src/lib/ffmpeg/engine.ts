@@ -180,7 +180,15 @@ export async function runFfmpeg({
         written.push(input.name);
       }
 
-      await ffmpeg.exec(args);
+      // exec() resolves with an exit code rather than rejecting on failure
+      // (0 = ok, non-zero = error/timeout) — a filter error (e.g. delogo's
+      // "Logo area is outside of the frame") still leaves a 0-byte output
+      // file behind, so readFile() below would otherwise succeed with an
+      // empty result and look like a completed export.
+      const exitCode = await ffmpeg.exec(args);
+      if (exitCode !== 0) {
+        throw new FfmpegRunError(`ffmpeg exited with code ${exitCode}`, recentLogs.join("\n"));
+      }
 
       let output: Awaited<ReturnType<typeof ffmpeg.readFile>>;
       try {
@@ -189,6 +197,9 @@ export async function runFfmpeg({
         throw new FfmpegRunError("ffmpeg did not produce an output file", recentLogs.join("\n"));
       }
       const bytes = output as Uint8Array;
+      if (bytes.length === 0) {
+        throw new FfmpegRunError("ffmpeg produced an empty output file", recentLogs.join("\n"));
+      }
       const blob = new Blob([bytes.slice().buffer], { type: outputMimeType });
       const url = URL.createObjectURL(blob);
 

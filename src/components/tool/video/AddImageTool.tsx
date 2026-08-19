@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ImagePlus } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -9,7 +10,11 @@ import FramedVideoStage from "./FramedVideoStage";
 import DraggableResizableOverlay from "./editor/DraggableResizableOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, guessImageExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  guessImageExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
 import { freeOverlayExprs } from "../../../lib/ffmpeg/overlay-position";
 
@@ -49,7 +54,13 @@ export default function AddImageTool() {
   };
 
   const handleExport = async () => {
-    if (!video.file || !imageFile || video.videoWidth === 0 || video.isMetadataLoading) return;
+    if (
+      !video.file ||
+      !imageFile ||
+      video.videoWidth === 0 ||
+      video.isMetadataLoading
+    )
+      return;
     const ext = guessVideoExtension(video.file);
     const imgExt = guessImageExtension(imageFile);
     const inputName = `input.${ext}`;
@@ -108,12 +119,18 @@ export default function AddImageTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Place a logo, watermark, or photo on top"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={ImagePlus}
+        title="Add Image to Video"
+        description="Place a logo, watermark, or photo on top."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Place a logo, watermark, or photo on top"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -144,7 +161,8 @@ export default function AddImageTool() {
             ) : (
               <div className="space-y-4">
                 <p className="text-caption text-(--color-text-muted)">
-                  Drag the image in the preview to place it anywhere, and drag its corner handle to resize.
+                  Drag the image in the preview to place it anywhere, and drag
+                  its corner handle to resize.
                 </p>
 
                 <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
@@ -170,7 +188,9 @@ export default function AddImageTool() {
                     onChange={(e) => setOpacity(Number(e.target.value))}
                     className="w-32 accent-(--color-primary-500)"
                   />
-                  <span className="w-10 tabular-nums">{Math.round(opacity * 100)}%</span>
+                  <span className="w-10 tabular-nums">
+                    {Math.round(opacity * 100)}%
+                  </span>
                 </label>
               </div>
             )}
@@ -187,7 +207,10 @@ export default function AddImageTool() {
           <button
             type="button"
             disabled={
-              exportState.isProcessing || !imageFile || video.isMetadataLoading || !!video.metadataError
+              exportState.isProcessing ||
+              !imageFile ||
+              video.isMetadataLoading ||
+              !!video.metadataError
             }
             onClick={handleExport}
             className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"

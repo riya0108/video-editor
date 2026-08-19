@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { RotateCcw, RotateCw as RotateCwIcon } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -8,7 +9,10 @@ import ToolPanelSection from "../ToolPanelSection";
 import TransformedVideoPreview from "./TransformedVideoPreview";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 
 const ROTATE_FILTER: Record<1 | 2 | 3, string> = {
   1: "transpose=1",
@@ -65,12 +69,18 @@ export default function RotateVideoTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Fix sideways or upside-down footage"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={RotateCwIcon}
+        title="Rotate Video"
+        description="Fix sideways or upside-down footage."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Fix sideways or upside-down footage"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 

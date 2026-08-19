@@ -1,0 +1,19 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import ToolHeader from "../../../components/site/ToolHeader.astro";
+import TranscribeTool from "../../../components/tool/speech/TranscribeTool.tsx";
+import { getToolBySlug } from "../../../lib/tools-registry";
+
+const tool = getToolBySlug("speech", "transcribe")!;
+---
+
+<Layout title={`${tool.name} — Clipbench`} description={tool.description}>
+  <ToolHeader name={tool.name} description={tool.description} category={tool.category} />
+  <div class="mx-auto max-w-[1600px] px-4 py-8 sm:px-6 lg:px-8">
+    <TranscribeTool client:load />
+    <p class="mt-6 text-center text-caption text-(--color-text-muted)">
+      Uploaded files are transcribed entirely in your browser. Links are resolved to audio on the server (never
+      saved), then that audio is also transcribed locally.
+    </p>
+  </div>
+</Layout>

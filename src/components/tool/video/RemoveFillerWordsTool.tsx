@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Wand2, Sparkles } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ProgressBar from "../ProgressBar";
@@ -9,7 +10,10 @@ import ToolPanelSection from "../ToolPanelSection";
 import FramedVideoStage from "./FramedVideoStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 import { buildTrimConcatFilter } from "../../../lib/ffmpeg/build-trim-concat-filter";
 import {
   transcribeWords,
@@ -55,7 +59,9 @@ function SegmentRow({
       >
         {formatTime(segment.start, true)}
       </button>
-      <span className={`text-body-sm ${segment.kind === "filler" ? "font-medium" : "text-(--color-text-muted) italic"}`}>
+      <span
+        className={`text-body-sm ${segment.kind === "filler" ? "font-medium" : "text-(--color-text-muted) italic"}`}
+      >
         {segment.label}
       </span>
       <span className="ml-auto text-caption text-(--color-text-faint)">
@@ -72,12 +78,15 @@ export default function RemoveFillerWordsTool() {
   const [modelTier, setModelTier] = useState<CaptionModelTier>("fast");
   const [language, setLanguage] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analyzeProgress, setAnalyzeProgress] = useState<CaptionProgress | null>(null);
+  const [analyzeProgress, setAnalyzeProgress] =
+    useState<CaptionProgress | null>(null);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
 
   const [words, setWords] = useState<CaptionWord[] | null>(null);
   const [fillerSegments, setFillerSegments] = useState<RemovableSegment[]>([]);
-  const [silenceSegments, setSilenceSegments] = useState<RemovableSegment[]>([]);
+  const [silenceSegments, setSilenceSegments] = useState<RemovableSegment[]>(
+    [],
+  );
   const [removeFillers, setRemoveFillers] = useState(true);
   const [removeSilences, setRemoveSilences] = useState(true);
   const [silenceThreshold, setSilenceThreshold] = useState(0.6);
@@ -93,16 +102,25 @@ export default function RemoveFillerWordsTool() {
   }, [words, video.duration, silenceThreshold]);
 
   const activeSegments = useMemo(
-    () => [...(removeFillers ? fillerSegments : []), ...(removeSilences ? silenceSegments : [])],
+    () => [
+      ...(removeFillers ? fillerSegments : []),
+      ...(removeSilences ? silenceSegments : []),
+    ],
     [removeFillers, fillerSegments, removeSilences, silenceSegments],
   );
 
   const keepIntervals = useMemo(
-    () => (video.duration > 0 ? buildKeepIntervals(video.duration, activeSegments) : []),
+    () =>
+      video.duration > 0
+        ? buildKeepIntervals(video.duration, activeSegments)
+        : [],
     [video.duration, activeSegments],
   );
 
-  const keptDuration = keepIntervals.reduce((sum, k) => sum + (k.end - k.start), 0);
+  const keptDuration = keepIntervals.reduce(
+    (sum, k) => sum + (k.end - k.start),
+    0,
+  );
   const removedDuration = Math.max(0, video.duration - keptDuration);
 
   const analyze = async () => {
@@ -123,7 +141,9 @@ export default function RemoveFillerWordsTool() {
       }
     } catch (err) {
       console.error(err);
-      setAnalyzeError("Couldn't analyze this video's speech. Try a different file.");
+      setAnalyzeError(
+        "Couldn't analyze this video's speech. Try a different file.",
+      );
     } finally {
       setIsAnalyzing(false);
       setAnalyzeProgress(null);
@@ -132,7 +152,9 @@ export default function RemoveFillerWordsTool() {
 
   const toggleSegment = (list: "filler" | "silence", id: string) => {
     const setter = list === "filler" ? setFillerSegments : setSilenceSegments;
-    setter((segs) => segs.map((s) => (s.id === id ? { ...s, included: !s.included } : s)));
+    setter((segs) =>
+      segs.map((s) => (s.id === id ? { ...s, included: !s.included } : s)),
+    );
   };
 
   const seekTo = (t: number) => {
@@ -141,12 +163,19 @@ export default function RemoveFillerWordsTool() {
   };
 
   const handleExport = async () => {
-    if (!video.file || video.videoWidth === 0 || video.isMetadataLoading || keepIntervals.length === 0) return;
+    if (
+      !video.file ||
+      video.videoWidth === 0 ||
+      video.isMetadataLoading ||
+      keepIntervals.length === 0
+    )
+      return;
     const ext = guessVideoExtension(video.file);
     const inputName = `input.${ext}`;
     const outputName = "output.mp4";
 
-    const { filterComplex, videoLabel, audioLabel } = buildTrimConcatFilter(keepIntervals);
+    const { filterComplex, videoLabel, audioLabel } =
+      buildTrimConcatFilter(keepIntervals);
 
     await exportState.run(
       {
@@ -190,12 +219,20 @@ export default function RemoveFillerWordsTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Automatically finds filler words and dead air in your speech"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Wand2}
+        title="Remove Filler Words & Silences"
+        description={
+          'Auto-detect "um"s, "uh"s, and dead air, then cut them out.'
+        }
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Automatically finds filler words and dead air in your speech"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -218,19 +255,25 @@ export default function RemoveFillerWordsTool() {
           {!words ? (
             <ToolPanelSection icon={Sparkles} label="Analyze speech">
               <p className="text-body-sm text-(--color-text-muted)">
-                Transcribes the video's audio fully in your browser to find filler words ("um", "uh"…) and
-                silent gaps — nothing is uploaded anywhere.
+                Transcribes the video's audio fully in your browser to find
+                filler words ("um", "uh"…) and silent gaps — nothing is uploaded
+                anywhere.
               </p>
               <div className="mt-3 flex flex-wrap gap-3">
                 <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
                   Quality
                   <select
                     value={modelTier}
-                    onChange={(e) => setModelTier(e.target.value as CaptionModelTier)}
+                    onChange={(e) =>
+                      setModelTier(e.target.value as CaptionModelTier)
+                    }
                     className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
                   >
                     {(
-                      Object.entries(CAPTION_MODELS) as [CaptionModelTier, (typeof CAPTION_MODELS)[CaptionModelTier]][]
+                      Object.entries(CAPTION_MODELS) as [
+                        CaptionModelTier,
+                        (typeof CAPTION_MODELS)[CaptionModelTier],
+                      ][]
                     ).map(([id, m]) => (
                       <option key={id} value={id}>
                         {m.label} ({m.sizeHint})
@@ -264,24 +307,39 @@ export default function RemoveFillerWordsTool() {
               </button>
               {analyzeProgress && (
                 <ProgressBar
-                  label={analyzeProgress.phase === "downloading" ? "Downloading speech model…" : "Transcribing…"}
+                  label={
+                    analyzeProgress.phase === "downloading"
+                      ? "Downloading speech model…"
+                      : "Transcribing…"
+                  }
                   fraction={analyzeProgress.fraction}
                 />
               )}
-              {analyzeError && <p className="mt-2 text-body-sm text-danger-600">{analyzeError}</p>}
+              {analyzeError && (
+                <p className="mt-2 text-body-sm text-danger-600">
+                  {analyzeError}
+                </p>
+              )}
             </ToolPanelSection>
           ) : (
             <>
               <div className="rounded-lg border border-(--color-border) bg-(--color-bg-subtle) p-4">
                 <p className="text-body-sm">
-                  New duration: <span className="font-semibold tabular-nums">{formatTime(keptDuration, true)}</span>{" "}
+                  New duration:{" "}
+                  <span className="font-semibold tabular-nums">
+                    {formatTime(keptDuration, true)}
+                  </span>{" "}
                   <span className="text-(--color-text-muted)">
-                    (was {formatTime(video.duration, true)}, removing {formatTime(removedDuration, true)})
+                    (was {formatTime(video.duration, true)}, removing{" "}
+                    {formatTime(removedDuration, true)})
                   </span>
                 </p>
               </div>
 
-              <ToolPanelSection icon={Wand2} label={`Filler words (${fillerSegments.length} found)`}>
+              <ToolPanelSection
+                icon={Wand2}
+                label={`Filler words (${fillerSegments.length} found)`}
+              >
                 <label className="flex items-center gap-2 text-body-sm font-medium">
                   <input
                     type="checkbox"
@@ -305,7 +363,10 @@ export default function RemoveFillerWordsTool() {
                 )}
               </ToolPanelSection>
 
-              <ToolPanelSection icon={Wand2} label={`Silences (${silenceSegments.length} found)`}>
+              <ToolPanelSection
+                icon={Wand2}
+                label={`Silences (${silenceSegments.length} found)`}
+              >
                 <label className="flex items-center gap-2 text-body-sm font-medium">
                   <input
                     type="checkbox"
@@ -323,10 +384,14 @@ export default function RemoveFillerWordsTool() {
                     max={SILENCE_MAX}
                     step={0.1}
                     value={silenceThreshold}
-                    onChange={(e) => setSilenceThreshold(Number(e.target.value))}
+                    onChange={(e) =>
+                      setSilenceThreshold(Number(e.target.value))
+                    }
                     className="w-32 accent-(--color-primary-500)"
                   />
-                  <span className="w-12 tabular-nums">{silenceThreshold.toFixed(1)}s</span>
+                  <span className="w-12 tabular-nums">
+                    {silenceThreshold.toFixed(1)}s
+                  </span>
                 </label>
                 {silenceSegments.length > 0 && (
                   <div className="mt-2 max-h-48 space-y-1.5 overflow-y-auto pr-1">

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Music, Mic, Square } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -15,7 +16,11 @@ import {
   extensionForMimeType,
   pickSupportedMimeType,
 } from "../../../lib/media/pick-mime-type";
-import { guessVideoExtension, guessAudioExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  guessAudioExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 import { formatTime } from "../../../lib/time";
 
 // "Duck" is the dubbing case: the new track is a spoken-word replacement
@@ -51,7 +56,9 @@ export default function AddAudioTool() {
   useEffect(() => {
     if (!dubRecorder.result) return;
     const ext = extensionForMimeType(dubRecorder.result.blob.type);
-    const file = new File([dubRecorder.result.blob], `dub-recording.${ext}`, { type: dubRecorder.result.blob.type });
+    const file = new File([dubRecorder.result.blob], `dub-recording.${ext}`, {
+      type: dubRecorder.result.blob.type,
+    });
     setAudioFile(file);
     setAudioUrl(URL.createObjectURL(file));
     setMode("duck");
@@ -164,12 +171,18 @@ export default function AddAudioTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Mix in music, dub over the voice, or add a voiceover track"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Music}
+        title="Add Audio to Video"
+        description="Mix in music, or record/upload a dubbed voice track."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Mix in music, dub over the voice, or add a voiceover track"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -200,7 +213,9 @@ export default function AddAudioTool() {
                 />
                 <div className="flex items-center gap-2">
                   <div className="h-px flex-1 bg-(--color-border)" />
-                  <span className="text-caption text-(--color-text-muted)">or</span>
+                  <span className="text-caption text-(--color-text-muted)">
+                    or
+                  </span>
                   <div className="h-px flex-1 bg-(--color-border)" />
                 </div>
                 {dubRecorder.state !== "recording" ? (
@@ -223,12 +238,16 @@ export default function AddAudioTool() {
                   </button>
                 )}
                 {(recordError || dubRecorder.error) && (
-                  <p className="text-caption text-danger-600">{recordError ?? dubRecorder.error}</p>
+                  <p className="text-caption text-danger-600">
+                    {recordError ?? dubRecorder.error}
+                  </p>
                 )}
               </div>
             ) : (
               <div className="space-y-4">
-                {audioUrl && <audio src={audioUrl} controls className="w-full" />}
+                {audioUrl && (
+                  <audio src={audioUrl} controls className="w-full" />
+                )}
                 <div className="flex items-center justify-center gap-1 rounded-md border border-(--color-border) p-1">
                   <button
                     type="button"
@@ -265,9 +284,12 @@ export default function AddAudioTool() {
                   </button>
                 </div>
                 <p className="text-caption text-(--color-text-muted)">
-                  {mode === "replace" && "The original audio is dropped entirely."}
-                  {mode === "mix" && "Both tracks play together at even volume."}
-                  {mode === "duck" && "This track plays clearly, with the original kept quiet underneath — ideal for a dubbed voiceover."}
+                  {mode === "replace" &&
+                    "The original audio is dropped entirely."}
+                  {mode === "mix" &&
+                    "Both tracks play together at even volume."}
+                  {mode === "duck" &&
+                    "This track plays clearly, with the original kept quiet underneath — ideal for a dubbed voiceover."}
                 </p>
                 <button
                   type="button"

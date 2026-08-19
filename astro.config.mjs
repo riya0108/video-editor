@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 
 import react from '@astrojs/react';
 import tailwindcss from '@tailwindcss/vite';
+import node from '@astrojs/node';
 
 /** @type {import('vite').Plugin} */
 // Cross-origin isolation is required for @ffmpeg/core-mt (SharedArrayBuffer).
@@ -23,6 +24,14 @@ const crossOriginIsolationHeaders = {
 // https://astro.build/config
 export default defineConfig({
   integrations: [react()],
+  // Everything stays statically prerendered (output defaults to "static").
+  // This adapter only powers the one on-demand route that needs a real
+  // server: src/pages/api/transcribe-source.ts, which shells out to yt-dlp
+  // to resolve YouTube/Instagram/TikTok/etc. links — that route opts in
+  // itself via `export const prerender = false`. Everything else is
+  // unaffected. Deploying this app now requires a persistent Node process
+  // (with yt-dlp + ffmpeg on PATH) rather than pure static hosting.
+  adapter: node({ mode: 'standalone' }),
   vite: {
     plugins: [tailwindcss(), crossOriginIsolationHeaders],
     optimizeDeps: {

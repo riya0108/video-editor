@@ -1,11 +1,16 @@
 import { Rewind } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import AudioWaveform from "./AudioWaveform";
 import { useAudioFile } from "../../../lib/hooks/useAudioFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessAudioExtension, stripExtension, AUDIO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessAudioExtension,
+  stripExtension,
+  AUDIO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 
 export default function ReverseAudioTool() {
   const audio = useAudioFile();
@@ -35,12 +40,18 @@ export default function ReverseAudioTool() {
 
   if (!audio.hasFile) {
     return (
-      <Dropzone
-        accept="audio/*"
-        label="Drop an audio file here, or click to browse"
-        hint="Play a track backwards"
-        onFiles={audio.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Rewind}
+        title="Reverse Audio"
+        description="Play a track backwards."
+      >
+        <Dropzone
+          accept="audio/*"
+          label="Drop an audio file here, or click to browse"
+          hint="Play a track backwards"
+          onFiles={audio.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 

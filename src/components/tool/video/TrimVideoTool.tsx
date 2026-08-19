@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Play, Pause, Scissors } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import TrimSlider from "../TrimSlider";
@@ -8,7 +9,11 @@ import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension, VIDEO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+  VIDEO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 import { formatTime, toFfmpegTimestamp } from "../../../lib/time";
 
 export default function TrimVideoTool() {
@@ -92,12 +97,18 @@ export default function TrimVideoTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="MP4, WebM, MOV, and more — processed entirely on your device"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Scissors}
+        title="Trim Video"
+        description="Cut a video down to the exact part you need."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="MP4, WebM, MOV, and more — processed entirely on your device"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -175,7 +186,11 @@ export default function TrimVideoTool() {
                 aria-label={isPlaying ? "Pause" : "Play"}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary-500 text-white transition-colors hover:bg-primary-600"
               >
-                {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
+                {isPlaying ? (
+                  <Pause size={18} />
+                ) : (
+                  <Play size={18} className="ml-0.5" />
+                )}
               </button>
             </div>
           </div>

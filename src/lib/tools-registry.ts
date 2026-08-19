@@ -31,7 +31,7 @@ export const categoryMeta: Record<
   },
   speech: {
     label: "Speech",
-    description: "Turn text into natural-sounding voiceovers.",
+    description: "Convert between text and speech — voiceovers and transcripts.",
     accent: "success",
   },
 };
@@ -163,6 +163,15 @@ export const tools: ToolDefinition[] = [
     status: "available",
   },
   {
+    slug: "remove-passerby",
+    category: "video",
+    name: "Remove a Person from Video",
+    description: "Erase someone walking through your shot, with an AI-assisted region tracker.",
+    icon: "user-round-x",
+    keywords: ["passerby", "object removal", "delogo", "remove person", "background"],
+    status: "available",
+  },
+  {
     slug: "remove-filler-words",
     category: "video",
     name: "Remove Filler Words & Silences",
@@ -286,6 +295,16 @@ export const tools: ToolDefinition[] = [
     description: "Turn written text into a natural voiceover.",
     icon: "message-square-text",
     keywords: ["tts", "voiceover", "narration"],
+    status: "available",
+    featured: true,
+  },
+  {
+    slug: "transcribe",
+    category: "speech",
+    name: "Video Transcript",
+    description: "Get a text transcript from an uploaded file or a YouTube, Instagram, or TikTok link.",
+    icon: "file-text",
+    keywords: ["transcription", "speech to text", "subtitles", "youtube", "instagram", "tiktok", "captions", "whisper"],
     status: "available",
     featured: true,
   },

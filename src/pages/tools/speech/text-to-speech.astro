@@ -9,7 +9,7 @@ const tool = getToolBySlug("speech", "text-to-speech")!;
 
 <Layout title={`${tool.name} — Clipbench`} description={tool.description}>
   <ToolHeader name={tool.name} description={tool.description} category={tool.category} />
-  <div class="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+  <div class="mx-auto max-w-[1600px] px-4 py-8 sm:px-6 lg:px-8">
     <TextToSpeechTool client:load />
     <p class="mt-6 text-center text-caption text-(--color-text-muted)">
       Speech is generated locally by your browser and is never uploaded anywhere.

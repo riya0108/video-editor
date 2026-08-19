@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Maximize } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -8,7 +9,10 @@ import ToolPanelSection from "../ToolPanelSection";
 import SimplePreviewStage from "./SimplePreviewStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
 import { SOCIAL_PRESET_GROUPS, aspectLabel } from "../../../lib/social-presets";
 
@@ -21,8 +25,10 @@ export default function ResizeVideoTool() {
 
   const allPresets = SOCIAL_PRESET_GROUPS.flatMap((g) => g.presets);
   const preset = allPresets.find((p) => p.id === presetId);
-  const targetWidth = presetId === "custom" ? customWidth : (preset?.width ?? 1280);
-  const targetHeight = presetId === "custom" ? customHeight : (preset?.height ?? 720);
+  const targetWidth =
+    presetId === "custom" ? customWidth : (preset?.width ?? 1280);
+  const targetHeight =
+    presetId === "custom" ? customHeight : (preset?.height ?? 720);
 
   const handleExport = async () => {
     if (!video.file) return;
@@ -67,12 +73,18 @@ export default function ResizeVideoTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Fit it to any platform's ideal size"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Maximize}
+        title="Resize Video"
+        description="Auto-fit Instagram, Facebook, WhatsApp, YouTube, and more — or a custom size."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Fit it to any platform's ideal size"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -96,7 +108,9 @@ export default function ResizeVideoTool() {
             <div className="space-y-4">
               {SOCIAL_PRESET_GROUPS.map((group) => (
                 <div key={group.platform}>
-                  <p className="mb-1.5 text-caption font-semibold text-(--color-text-muted)">{group.platform}</p>
+                  <p className="mb-1.5 text-caption font-semibold text-(--color-text-muted)">
+                    {group.platform}
+                  </p>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {group.presets.map((p) => (
                       <button
@@ -142,7 +156,9 @@ export default function ResizeVideoTool() {
                     type="number"
                     min={2}
                     value={customWidth}
-                    onChange={(e) => setCustomWidth(Number(e.target.value) || 0)}
+                    onChange={(e) =>
+                      setCustomWidth(Number(e.target.value) || 0)
+                    }
                     className="w-24 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
                   />
                 </label>
@@ -153,7 +169,9 @@ export default function ResizeVideoTool() {
                     type="number"
                     min={2}
                     value={customHeight}
-                    onChange={(e) => setCustomHeight(Number(e.target.value) || 0)}
+                    onChange={(e) =>
+                      setCustomHeight(Number(e.target.value) || 0)
+                    }
                     className="w-24 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
                   />
                 </label>
@@ -161,8 +179,9 @@ export default function ResizeVideoTool() {
             )}
 
             <p className="mt-3 text-caption text-(--color-text-muted)">
-              {targetWidth}×{targetHeight} ({aspectLabel(targetWidth, targetHeight)}) — fit inside with black bars,
-              nothing gets cropped or stretched.
+              {targetWidth}×{targetHeight} (
+              {aspectLabel(targetWidth, targetHeight)}) — fit inside with black
+              bars, nothing gets cropped or stretched.
             </p>
           </ToolPanelSection>
 
@@ -176,7 +195,9 @@ export default function ResizeVideoTool() {
 
           <button
             type="button"
-            disabled={exportState.isProcessing || targetWidth < 2 || targetHeight < 2}
+            disabled={
+              exportState.isProcessing || targetWidth < 2 || targetHeight < 2
+            }
             onClick={handleExport}
             className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
           >

@@ -16,13 +16,14 @@ export interface CutoutProgress {
   fraction: number;
 }
 
-type Segmenter = (
+export type Segmenter = (
   image: unknown,
 ) => Promise<{ mask: RawImage; label: string | null; score: number | null }[]>;
 
 let cachedSegmenter: Promise<Segmenter> | null = null;
 
-async function loadSegmenter(onProgress?: (p: CutoutProgress) => void): Promise<Segmenter> {
+/** Shared with other tools (e.g. passerby-track.ts) so the ~44MB RMBG-1.4 model is only ever downloaded once. */
+export async function loadSegmenter(onProgress?: (p: CutoutProgress) => void): Promise<Segmenter> {
   if (cachedSegmenter) return cachedSegmenter;
   const { pipeline } = await import("@huggingface/transformers");
   const promise = pipeline("image-segmentation", PERSON_SEGMENTATION_MODEL, {
@@ -56,7 +57,7 @@ export function pickCutoutSampleFps(durationSeconds: number): number {
   return Math.min(MAX_SAMPLE_FPS, Math.max(MIN_SAMPLE_FPS, fps));
 }
 
-function waitForSeek(video: HTMLVideoElement): Promise<void> {
+export function waitForSeek(video: HTMLVideoElement): Promise<void> {
   return new Promise((resolve) => {
     const handler = () => {
       video.removeEventListener("seeked", handler);

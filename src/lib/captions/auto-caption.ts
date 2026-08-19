@@ -147,7 +147,7 @@ function interpolateWordTimestamps(text: string, start: number, end: number): Ca
  * detection without needing a specially-exported model.
  */
 export async function transcribeWords(
-  videoFile: File,
+  videoFile: Blob,
   { modelTier, language, onProgress }: GenerateCaptionsOptions,
 ): Promise<TranscribeWordsResult> {
   const { read_audio } = await import("@huggingface/transformers");

@@ -1,12 +1,17 @@
 import { useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import AudioWaveform from "./AudioWaveform";
 import { useAudioFile } from "../../../lib/hooks/useAudioFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessAudioExtension, stripExtension, AUDIO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessAudioExtension,
+  stripExtension,
+  AUDIO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 
 export default function AudioVolumeTool() {
   const audio = useAudioFile();
@@ -41,12 +46,18 @@ export default function AudioVolumeTool() {
 
   if (!audio.hasFile) {
     return (
-      <Dropzone
-        accept="audio/*"
-        label="Drop an audio file here, or click to browse"
-        hint="Make it louder, quieter, or silent"
-        onFiles={audio.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Volume2}
+        title="Change Volume"
+        description="Make an audio file louder, quieter, or normalized."
+      >
+        <Dropzone
+          accept="audio/*"
+          label="Drop an audio file here, or click to browse"
+          hint="Make it louder, quieter, or silent"
+          onFiles={audio.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 

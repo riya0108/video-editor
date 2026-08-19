@@ -1,12 +1,17 @@
 import { useState } from "react";
 import { Scissors } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import AudioWaveform, { type AudioRegion } from "./AudioWaveform";
 import { useAudioFile } from "../../../lib/hooks/useAudioFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessAudioExtension, stripExtension, AUDIO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessAudioExtension,
+  stripExtension,
+  AUDIO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 import { formatTime, toFfmpegTimestamp } from "../../../lib/time";
 
 export default function AudioTrimTool() {
@@ -49,12 +54,18 @@ export default function AudioTrimTool() {
 
   if (!audio.hasFile) {
     return (
-      <Dropzone
-        accept="audio/*"
-        label="Drop an audio file here, or click to browse"
-        hint="MP3, WAV, M4A, and more — processed entirely on your device"
-        onFiles={audio.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Scissors}
+        title="Trim Audio"
+        description="Cut an audio file down to the part you need."
+      >
+        <Dropzone
+          accept="audio/*"
+          label="Drop an audio file here, or click to browse"
+          hint="MP3, WAV, M4A, and more — processed entirely on your device"
+          onFiles={audio.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -75,12 +86,18 @@ export default function AudioTrimTool() {
   return (
     <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
       {audio.sourceUrl && (
-        <AudioWaveform url={audio.sourceUrl} enableRegion onRegionChange={setRegion} />
+        <AudioWaveform
+          url={audio.sourceUrl}
+          enableRegion
+          onRegionChange={setRegion}
+        />
       )}
 
       <p className="mt-3 text-center text-body-sm text-(--color-text-muted)">
         Drag the highlighted region's edges to choose what to keep. Selected:{" "}
-        <span className="font-semibold text-(--color-text)">{formatTime(selected)}</span>
+        <span className="font-semibold text-(--color-text)">
+          {formatTime(selected)}
+        </span>
       </p>
 
       <ExportStatus

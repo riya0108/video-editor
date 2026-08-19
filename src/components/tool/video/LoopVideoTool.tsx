@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Repeat, Minus, Plus } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -8,7 +9,11 @@ import ToolPanelSection from "../ToolPanelSection";
 import SimplePreviewStage from "./SimplePreviewStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension, VIDEO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+  VIDEO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 import { formatTime } from "../../../lib/time";
 
 export default function LoopVideoTool() {
@@ -49,12 +54,18 @@ export default function LoopVideoTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Repeat a clip to reach a target length"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Repeat}
+        title="Loop Video"
+        description="Repeat a clip to hit a target length."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Repeat a clip to reach a target length"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -76,7 +87,9 @@ export default function LoopVideoTool() {
         <>
           <ToolPanelSection icon={Repeat} label="Repeat">
             <div className="flex flex-col items-center gap-3">
-              <span className="text-body-sm font-medium text-(--color-text-muted)">Repeat this clip</span>
+              <span className="text-body-sm font-medium text-(--color-text-muted)">
+                Repeat this clip
+              </span>
               <div className="flex items-center gap-4">
                 <button
                   type="button"
@@ -86,7 +99,9 @@ export default function LoopVideoTool() {
                 >
                   <Minus size={16} />
                 </button>
-                <span className="w-20 text-center text-h3 font-bold tabular-nums">{repeats}&times;</span>
+                <span className="w-20 text-center text-h3 font-bold tabular-nums">
+                  {repeats}&times;
+                </span>
                 <button
                   type="button"
                   aria-label="More repeats"

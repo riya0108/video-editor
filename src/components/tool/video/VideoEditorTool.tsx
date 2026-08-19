@@ -28,6 +28,7 @@ import {
   Square,
 } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import FramedVideoStage from "./FramedVideoStage";
@@ -39,7 +40,9 @@ import PanelHeader from "./editor/PanelHeader";
 import ChromaKeyPanel from "./editor/ChromaKeyPanel";
 import OverlayLayersPanel from "./editor/OverlayLayersPanel";
 import PickColorOverlay from "./editor/PickColorOverlay";
-import FloatingTextToolbar, { MAX_TEXT_SIZE } from "./editor/FloatingTextToolbar";
+import FloatingTextToolbar, {
+  MAX_TEXT_SIZE,
+} from "./editor/FloatingTextToolbar";
 import PositionedTextBlock from "./editor/PositionedTextBlock";
 import DraggableResizableOverlay from "./editor/DraggableResizableOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
@@ -65,12 +68,22 @@ import { sampleVideoColor } from "../../../lib/sample-video-color";
 import { buildEditorCommand } from "../../../lib/ffmpeg/build-editor-command";
 import { TEXT_FONTS } from "../../../lib/ffmpeg/fonts";
 import { TEXT_COLORS } from "../../../lib/ffmpeg/text-colors";
-import { QUALITY_LABELS, resolveQualityTarget } from "../../../lib/ffmpeg/upscale-filter";
+import {
+  QUALITY_LABELS,
+  resolveQualityTarget,
+} from "../../../lib/ffmpeg/upscale-filter";
 import { nearestCutoutFrame } from "../../../lib/captions/person-cutout";
-import { POSITION_PRESETS, isAtPositionPreset, type TextPositionPreset } from "../../../lib/ffmpeg/text-position-presets";
+import {
+  POSITION_PRESETS,
+  isAtPositionPreset,
+  type TextPositionPreset,
+} from "../../../lib/ffmpeg/text-position-presets";
 import { resolveBackgroundSize } from "../../../lib/ffmpeg/editor-state";
 import { SOCIAL_PRESET_GROUPS } from "../../../lib/social-presets";
-import { IMAGE_ENTRANCE_ANIMATIONS, type ImageEntranceAnimation } from "../../../lib/ffmpeg/media-animation";
+import {
+  IMAGE_ENTRANCE_ANIMATIONS,
+  type ImageEntranceAnimation,
+} from "../../../lib/ffmpeg/media-animation";
 import type { OverlayLayer } from "../../../lib/ffmpeg/overlay-layer";
 import type {
   EditorChromaKeyState,
@@ -96,9 +109,18 @@ const DEFAULT_PREVIEW_HEIGHT = 384;
 const MIN_PREVIEW_HEIGHT = 220;
 const MAX_PREVIEW_HEIGHT = 720;
 
-const QUALITY_TARGETS: EditorQualityState["target"][] = ["original", "720p", "1080p", "4k"];
+const QUALITY_TARGETS: EditorQualityState["target"][] = [
+  "original",
+  "720p",
+  "1080p",
+  "4k",
+];
 
-const PREVIEW_ASPECTS: { id: string; label: string; ratio: { w: number; h: number } | null }[] = [
+const PREVIEW_ASPECTS: {
+  id: string;
+  label: string;
+  ratio: { w: number; h: number } | null;
+}[] = [
   { id: "original", label: "Original", ratio: null },
   { id: "9:16", label: "9:16", ratio: { w: 9, h: 16 } },
   { id: "16:9", label: "16:9", ratio: { w: 16, h: 9 } },
@@ -199,7 +221,14 @@ function makeInitialDocument(): EditorDocument {
     },
     music: { enabled: false, file: null, mode: "mix" },
     dub: { enabled: false, file: null, mode: "replace", duckLevel: 0.15 },
-    extraClip: { enabled: false, file: null, kind: "video", position: "after", imageDuration: 3, animation: "none" },
+    extraClip: {
+      enabled: false,
+      file: null,
+      kind: "video",
+      position: "after",
+      imageDuration: 3,
+      animation: "none",
+    },
     overlaysOpen: false,
     overlays: [],
     text: {
@@ -235,13 +264,19 @@ export default function VideoEditorTool() {
   const doc = history.state;
   function patch<K extends keyof EditorDocument>(
     key: K,
-    updater: EditorDocument[K] | ((prev: EditorDocument[K]) => EditorDocument[K]),
+    updater:
+      EditorDocument[K] | ((prev: EditorDocument[K]) => EditorDocument[K]),
     label?: string,
   ) {
     history.set(
       (prev) => ({
         ...prev,
-        [key]: typeof updater === "function" ? (updater as (p: EditorDocument[K]) => EditorDocument[K])(prev[key]) : updater,
+        [key]:
+          typeof updater === "function"
+            ? (updater as (p: EditorDocument[K]) => EditorDocument[K])(
+                prev[key],
+              )
+            : updater,
       }),
       label ?? String(key),
     );
@@ -253,7 +288,9 @@ export default function VideoEditorTool() {
 
   // Natural width/height of each overlay layer's media, measured once it
   // loads — used so its drag handle scales the box at the right aspect ratio.
-  const [overlayAspects, setOverlayAspects] = useState<Record<string, number>>({});
+  const [overlayAspects, setOverlayAspects] = useState<Record<string, number>>(
+    {},
+  );
 
   // Remembers the last sub-panel visited within each rail group, so
   // reopening a group (e.g. "Tools") returns to where the user left off
@@ -266,10 +303,14 @@ export default function VideoEditorTool() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewAspectId, setPreviewAspectId] = useState("original");
-  const previewAspect = PREVIEW_ASPECTS.find((a) => a.id === previewAspectId)?.ratio ?? null;
+  const previewAspect =
+    PREVIEW_ASPECTS.find((a) => a.id === previewAspectId)?.ratio ?? null;
 
   const [pickingColor, setPickingColor] = useState(false);
-  const chromaBg = useChromaBgPreview({ chromaKey: doc.chromaKey, background: doc.background });
+  const chromaBg = useChromaBgPreview({
+    chromaKey: doc.chromaKey,
+    background: doc.background,
+  });
   const voiceNoiseAudio = useVoiceNoiseAudioGraph({
     videoRef: video.videoRef,
     voiceRemover: doc.voiceRemover,
@@ -298,7 +339,9 @@ export default function VideoEditorTool() {
   }, [doc.extraClip.file]);
 
   const extraClipDuration =
-    doc.extraClip.kind === "image" ? Math.max(0.5, doc.extraClip.imageDuration) : extraVideoDuration;
+    doc.extraClip.kind === "image"
+      ? Math.max(0.5, doc.extraClip.imageDuration)
+      : extraVideoDuration;
 
   const clipTimeline = useClipTimeline({
     mainVideoRef: video.videoRef,
@@ -328,7 +371,9 @@ export default function VideoEditorTool() {
   useEffect(() => {
     if (!dubRecorder.result) return;
     const ext = extensionForMimeType(dubRecorder.result.blob.type);
-    const file = new File([dubRecorder.result.blob], `dub-recording.${ext}`, { type: dubRecorder.result.blob.type });
+    const file = new File([dubRecorder.result.blob], `dub-recording.${ext}`, {
+      type: dubRecorder.result.blob.type,
+    });
     patch("dub", (s) => ({ ...s, file, enabled: true }), "Dub");
     dubRecorder.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -353,13 +398,22 @@ export default function VideoEditorTool() {
   useEffect(() => () => stopAllTracks(dubStreamRef.current), []);
 
   const [previewHeight, setPreviewHeight] = useState(DEFAULT_PREVIEW_HEIGHT);
-  const previewResize = useRef<{ pointerY: number; startHeight: number } | null>(null);
+  const previewResize = useRef<{
+    pointerY: number;
+    startHeight: number;
+  } | null>(null);
 
   useEffect(() => {
     const handleMove = (e: PointerEvent) => {
       if (!previewResize.current) return;
       const { pointerY, startHeight } = previewResize.current;
-      setPreviewHeight(clamp(startHeight + (e.clientY - pointerY), MIN_PREVIEW_HEIGHT, MAX_PREVIEW_HEIGHT));
+      setPreviewHeight(
+        clamp(
+          startHeight + (e.clientY - pointerY),
+          MIN_PREVIEW_HEIGHT,
+          MAX_PREVIEW_HEIGHT,
+        ),
+      );
     };
     const handleUp = () => {
       previewResize.current = null;
@@ -442,7 +496,11 @@ export default function VideoEditorTool() {
   const handlePickColor = (fx: number, fy: number) => {
     const el = video.videoRef.current;
     if (!el) return;
-    patch("chromaKey", (s) => ({ ...s, colorHex: sampleVideoColor(el, fx, fy) }), "Color key");
+    patch(
+      "chromaKey",
+      (s) => ({ ...s, colorHex: sampleVideoColor(el, fx, fy) }),
+      "Color key",
+    );
     setPickingColor(false);
   };
 
@@ -468,7 +526,11 @@ export default function VideoEditorTool() {
       overlays: doc.overlays,
       extraClip: doc.extraClip,
       text: doc.text,
-      captions: { enabled: doc.captionsEnabled, cues: captions.cues, style: captions.style },
+      captions: {
+        enabled: doc.captionsEnabled,
+        cues: captions.cues,
+        style: captions.style,
+      },
       personCutoutFrames: personCutout.frames,
       quality: doc.quality,
     });
@@ -493,26 +555,18 @@ export default function VideoEditorTool() {
 
   if (!video.hasFile) {
     return (
-      <div className="flex min-h-full flex-col items-center justify-center gap-8 px-4 py-16 sm:px-6 lg:px-8">
-        <div className="flex w-full max-w-2xl flex-col items-center gap-3 text-center">
-          <span className="grid h-14 w-14 place-items-center rounded-2xl bg-primary-100 text-primary-600 dark:bg-primary-900 dark:text-primary-300">
-            <Clapperboard size={26} />
-          </span>
-          <h1 className="text-h2 font-bold tracking-tight">Video Editor</h1>
-          <p className="max-w-md text-body-sm text-(--color-text-muted)">
-            Trim, resize for any platform, dub audio, animate text — with full undo/redo history.
-          </p>
-        </div>
-
-        <div className="w-full max-w-2xl">
-          <Dropzone
-            accept="video/*"
-            label="Drop a video here, or click to browse"
-            hint="MP4, WebM, MOV, and more — processed entirely on your device"
-            onFiles={video.handleFiles}
-          />
-        </div>
-      </div>
+      <ToolUploadScreen
+        icon={Clapperboard}
+        title="Video Editor"
+        description="Trim, resize for any platform, dub audio, animate text — with full undo/redo history."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="MP4, WebM, MOV, and more — processed entirely on your device"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -556,7 +610,15 @@ export default function VideoEditorTool() {
       })),
       minSegmentLength: 0.2,
       onSegmentChange: (id, patchSeg) =>
-        captions.updateCue(id, { start: patchSeg.start - laneOffset, end: patchSeg.end - laneOffset }, start, end),
+        captions.updateCue(
+          id,
+          {
+            start: patchSeg.start - laneOffset,
+            end: patchSeg.end - laneOffset,
+          },
+          start,
+          end,
+        ),
       onSegmentDelete: (id) => captions.removeCue(id),
     });
   }
@@ -565,8 +627,16 @@ export default function VideoEditorTool() {
       id: "text",
       label: "Text",
       colorClass: "bg-accent-500",
-      segments: [{ id: "text", start: start + laneOffset, end: end + laneOffset, label: doc.text.content }],
-      onSegmentDelete: () => patch("text", (s) => ({ ...s, enabled: false }), "Text"),
+      segments: [
+        {
+          id: "text",
+          start: start + laneOffset,
+          end: end + laneOffset,
+          label: doc.text.content,
+        },
+      ],
+      onSegmentDelete: () =>
+        patch("text", (s) => ({ ...s, enabled: false }), "Text"),
     });
   }
   if (doc.overlaysOpen && doc.overlays.length > 0) {
@@ -596,7 +666,8 @@ export default function VideoEditorTool() {
             ),
           "Overlays",
         ),
-      onSegmentDelete: (id) => patch("overlays", (os) => os.filter((o) => o.id !== id), "Overlays"),
+      onSegmentDelete: (id) =>
+        patch("overlays", (os) => os.filter((o) => o.id !== id), "Overlays"),
     });
   }
   if (doc.music.enabled && doc.music.file) {
@@ -604,8 +675,16 @@ export default function VideoEditorTool() {
       id: "music",
       label: "Music",
       colorClass: "bg-warning-500",
-      segments: [{ id: "music", start: start + laneOffset, end: end + laneOffset, label: doc.music.file.name }],
-      onSegmentDelete: () => patch("music", (s) => ({ ...s, enabled: false }), "Music"),
+      segments: [
+        {
+          id: "music",
+          start: start + laneOffset,
+          end: end + laneOffset,
+          label: doc.music.file.name,
+        },
+      ],
+      onSegmentDelete: () =>
+        patch("music", (s) => ({ ...s, enabled: false }), "Music"),
     });
   }
   if (doc.dub.enabled && doc.dub.file) {
@@ -613,28 +692,68 @@ export default function VideoEditorTool() {
       id: "dub",
       label: "Dub",
       colorClass: "bg-danger-500",
-      segments: [{ id: "dub", start: start + laneOffset, end: end + laneOffset, label: doc.dub.file.name }],
-      onSegmentDelete: () => patch("dub", (s) => ({ ...s, enabled: false }), "Dub"),
+      segments: [
+        {
+          id: "dub",
+          start: start + laneOffset,
+          end: end + laneOffset,
+          label: doc.dub.file.name,
+        },
+      ],
+      onSegmentDelete: () =>
+        patch("dub", (s) => ({ ...s, enabled: false }), "Dub"),
     });
   }
 
-  type RailItem = { id: RailId; icon: typeof CropIcon; label: string; enabled: boolean };
-  type RailGroup = { id: string; icon: typeof CropIcon; label: string; items: RailItem[] };
+  type RailItem = {
+    id: RailId;
+    icon: typeof CropIcon;
+    label: string;
+    enabled: boolean;
+  };
+  type RailGroup = {
+    id: string;
+    icon: typeof CropIcon;
+    label: string;
+    items: RailItem[];
+  };
 
   // Related single-feature panels are grouped under one rail button so the
   // whole rail fits on screen without scrolling — opening a group shows a
   // sub-tab strip at the top of its flyout to switch between its items.
   const GROUPS: RailGroup[] = [
-    { id: "media", icon: Clapperboard, label: "Media", items: [{ id: "media", icon: Clapperboard, label: "Media", enabled: false }] },
+    {
+      id: "media",
+      icon: Clapperboard,
+      label: "Media",
+      items: [
+        { id: "media", icon: Clapperboard, label: "Media", enabled: false },
+      ],
+    },
     {
       id: "tools",
       icon: Wrench,
       label: "Tools",
       items: [
-        { id: "crop", icon: CropIcon, label: "Crop", enabled: doc.crop.enabled },
-        { id: "speed", icon: Gauge, label: "Speed", enabled: doc.speedFadeOpen },
+        {
+          id: "crop",
+          icon: CropIcon,
+          label: "Crop",
+          enabled: doc.crop.enabled,
+        },
+        {
+          id: "speed",
+          icon: Gauge,
+          label: "Speed",
+          enabled: doc.speedFadeOpen,
+        },
         { id: "logo", icon: Eraser, label: "Logo", enabled: doc.logo.enabled },
-        { id: "quality", icon: Sparkles, label: "Upscale", enabled: doc.quality.target !== "original" },
+        {
+          id: "quality",
+          icon: Sparkles,
+          label: "Upscale",
+          enabled: doc.quality.target !== "original",
+        },
       ],
     },
     {
@@ -642,8 +761,18 @@ export default function VideoEditorTool() {
       icon: Wand2,
       label: "Effects",
       items: [
-        { id: "color", icon: Palette, label: "Color key", enabled: doc.chromaKey.enabled },
-        { id: "resize", icon: Maximize, label: "Resize", enabled: doc.background.enabled },
+        {
+          id: "color",
+          icon: Palette,
+          label: "Color key",
+          enabled: doc.chromaKey.enabled,
+        },
+        {
+          id: "resize",
+          icon: Maximize,
+          label: "Resize",
+          enabled: doc.background.enabled,
+        },
       ],
     },
     {
@@ -651,13 +780,30 @@ export default function VideoEditorTool() {
       icon: Volume2,
       label: "Audio",
       items: [
-        { id: "voice", icon: MicOff, label: "Voice", enabled: doc.voiceRemover },
+        {
+          id: "voice",
+          icon: MicOff,
+          label: "Voice",
+          enabled: doc.voiceRemover,
+        },
         { id: "noise", icon: Wind, label: "Noise", enabled: doc.noise.enabled },
-        { id: "music", icon: Music, label: "Music", enabled: doc.music.enabled },
+        {
+          id: "music",
+          icon: Music,
+          label: "Music",
+          enabled: doc.music.enabled,
+        },
         { id: "dub", icon: Languages, label: "Dub", enabled: doc.dub.enabled },
       ],
     },
-    { id: "text", icon: Type, label: "Text", items: [{ id: "text", icon: Type, label: "Text", enabled: doc.text.enabled }] },
+    {
+      id: "text",
+      icon: Type,
+      label: "Text",
+      items: [
+        { id: "text", icon: Type, label: "Text", enabled: doc.text.enabled },
+      ],
+    },
     {
       id: "captions",
       icon: CaptionsIcon,
@@ -676,13 +822,24 @@ export default function VideoEditorTool() {
       icon: Layers,
       label: "Layers",
       items: [
-        { id: "overlays", icon: Layers, label: "Overlays", enabled: doc.overlaysOpen },
-        { id: "clips", icon: Film, label: "Clips", enabled: doc.extraClip.enabled },
+        {
+          id: "overlays",
+          icon: Layers,
+          label: "Overlays",
+          enabled: doc.overlaysOpen,
+        },
+        {
+          id: "clips",
+          icon: Film,
+          label: "Clips",
+          enabled: doc.extraClip.enabled,
+        },
       ],
     },
   ];
 
-  const activeGroup = GROUPS.find((g) => g.items.some((i) => i.id === activePanel)) ?? null;
+  const activeGroup =
+    GROUPS.find((g) => g.items.some((i) => i.id === activePanel)) ?? null;
 
   const handleGroupClick = (group: RailGroup) => {
     const isOpen = group.items.some((i) => i.id === activePanel);
@@ -691,7 +848,8 @@ export default function VideoEditorTool() {
       return;
     }
     const remembered = lastGroupItem.current[group.id];
-    const target = group.items.find((i) => i.id === remembered) ?? group.items[0];
+    const target =
+      group.items.find((i) => i.id === remembered) ?? group.items[0];
     lastGroupItem.current[group.id] = target.id;
     setActivePanel(target.id);
   };
@@ -756,8 +914,14 @@ export default function VideoEditorTool() {
                     }`}
                   >
                     {entry.label}
-                    <span className={`ml-2 tabular-nums ${i === history.cursor ? "text-white/80" : "text-(--color-text-faint)"}`}>
-                      {new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    <span
+                      className={`ml-2 tabular-nums ${i === history.cursor ? "text-white/80" : "text-(--color-text-faint)"}`}
+                    >
+                      {new Date(entry.at).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
                     </span>
                   </button>
                 ))}
@@ -765,7 +929,9 @@ export default function VideoEditorTool() {
             )}
           </div>
         </div>
-        <p className="min-w-0 truncate text-caption text-(--color-text-muted)">{video.file?.name}</p>
+        <p className="min-w-0 truncate text-caption text-(--color-text-muted)">
+          {video.file?.name}
+        </p>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row md:items-stretch">
@@ -804,7 +970,9 @@ export default function VideoEditorTool() {
                     }`}
                   >
                     <item.icon size={15} />
-                    <span className="text-[10px] leading-tight font-medium">{item.label}</span>
+                    <span className="text-[10px] leading-tight font-medium">
+                      {item.label}
+                    </span>
                     {item.enabled && activePanel !== item.id && (
                       <span
                         className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-primary-500"
@@ -818,12 +986,16 @@ export default function VideoEditorTool() {
 
             {activePanel === "media" && (
               <>
-                <PanelHeader label="Media" description="Your source file for this edit." />
+                <PanelHeader
+                  label="Media"
+                  description="Your source file for this edit."
+                />
                 <div className="space-y-3 text-body-sm">
                   <div className="rounded-lg border border-(--color-border) bg-(--color-bg-subtle) p-3">
                     <p className="truncate font-medium">{video.file?.name}</p>
                     <p className="mt-1 text-caption text-(--color-text-muted)">
-                      {video.videoWidth}×{video.videoHeight} · {formatTime(video.duration)}
+                      {video.videoWidth}×{video.videoHeight} ·{" "}
+                      {formatTime(video.duration)}
                     </p>
                   </div>
                   <label className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)">
@@ -849,7 +1021,9 @@ export default function VideoEditorTool() {
                 <PanelHeader
                   label="Crop"
                   enabled={doc.crop.enabled}
-                  onToggle={(enabled) => patch("crop", (s) => ({ ...s, enabled }), "Crop")}
+                  onToggle={(enabled) =>
+                    patch("crop", (s) => ({ ...s, enabled }), "Crop")
+                  }
                 />
                 <p className="text-caption text-(--color-text-muted)">
                   Drag the box over the preview to choose what stays in frame.
@@ -874,7 +1048,9 @@ export default function VideoEditorTool() {
                     );
                   }}
                 />
-                <div className={`space-y-3 ${doc.speedFadeOpen ? "" : "pointer-events-none opacity-40"}`}>
+                <div
+                  className={`space-y-3 ${doc.speedFadeOpen ? "" : "pointer-events-none opacity-40"}`}
+                >
                   <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
                     Speed
                     <input
@@ -884,10 +1060,14 @@ export default function VideoEditorTool() {
                       step={0.05}
                       value={doc.speed}
                       disabled={!doc.speedFadeOpen}
-                      onChange={(e) => patch("speed", Number(e.target.value), "Speed")}
+                      onChange={(e) =>
+                        patch("speed", Number(e.target.value), "Speed")
+                      }
                       className="flex-1 accent-(--color-primary-500)"
                     />
-                    <span className="w-12 text-right tabular-nums">{doc.speed.toFixed(2)}x</span>
+                    <span className="w-12 text-right tabular-nums">
+                      {doc.speed.toFixed(2)}x
+                    </span>
                   </label>
                   <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
                     Fade in
@@ -898,10 +1078,18 @@ export default function VideoEditorTool() {
                       step={0.1}
                       value={doc.fade.in}
                       disabled={!doc.speedFadeOpen}
-                      onChange={(e) => patch("fade", (s) => ({ ...s, in: Number(e.target.value) }), "Fade")}
+                      onChange={(e) =>
+                        patch(
+                          "fade",
+                          (s) => ({ ...s, in: Number(e.target.value) }),
+                          "Fade",
+                        )
+                      }
                       className="flex-1 accent-(--color-primary-500)"
                     />
-                    <span className="w-12 text-right tabular-nums">{doc.fade.in.toFixed(1)}s</span>
+                    <span className="w-12 text-right tabular-nums">
+                      {doc.fade.in.toFixed(1)}s
+                    </span>
                   </label>
                   <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
                     Fade out
@@ -912,10 +1100,18 @@ export default function VideoEditorTool() {
                       step={0.1}
                       value={doc.fade.out}
                       disabled={!doc.speedFadeOpen}
-                      onChange={(e) => patch("fade", (s) => ({ ...s, out: Number(e.target.value) }), "Fade")}
+                      onChange={(e) =>
+                        patch(
+                          "fade",
+                          (s) => ({ ...s, out: Number(e.target.value) }),
+                          "Fade",
+                        )
+                      }
                       className="flex-1 accent-(--color-primary-500)"
                     />
-                    <span className="w-12 text-right tabular-nums">{doc.fade.out.toFixed(1)}s</span>
+                    <span className="w-12 text-right tabular-nums">
+                      {doc.fade.out.toFixed(1)}s
+                    </span>
                   </label>
                 </div>
               </>
@@ -926,11 +1122,15 @@ export default function VideoEditorTool() {
                 <PanelHeader
                   label="Remove a color / green screen"
                   enabled={doc.chromaKey.enabled}
-                  onToggle={(enabled) => patch("chromaKey", (s) => ({ ...s, enabled }), "Color key")}
+                  onToggle={(enabled) =>
+                    patch("chromaKey", (s) => ({ ...s, enabled }), "Color key")
+                  }
                 />
                 <ChromaKeyPanel
                   state={doc.chromaKey}
-                  onChange={(p) => patch("chromaKey", (s) => ({ ...s, ...p }), "Color key")}
+                  onChange={(p) =>
+                    patch("chromaKey", (s) => ({ ...s, ...p }), "Color key")
+                  }
                   picking={pickingColor}
                   onTogglePicking={() => setPickingColor((p) => !p)}
                 />
@@ -942,7 +1142,9 @@ export default function VideoEditorTool() {
                 <PanelHeader
                   label="Remove logo"
                   enabled={doc.logo.enabled}
-                  onToggle={(enabled) => patch("logo", (s) => ({ ...s, enabled }), "Logo")}
+                  onToggle={(enabled) =>
+                    patch("logo", (s) => ({ ...s, enabled }), "Logo")
+                  }
                 />
                 <p className="text-caption text-(--color-text-muted)">
                   Drag the red box over the logo or watermark in the preview.
@@ -958,8 +1160,9 @@ export default function VideoEditorTool() {
                   onToggle={(v) => patch("voiceRemover", v, "Voice remover")}
                 />
                 <p className="text-caption text-(--color-text-muted)">
-                  Best-effort: cancels audio that's identical in both stereo channels (usually lead vocals). Works
-                  better on some mixes than others, and has no effect on mono audio.
+                  Best-effort: cancels audio that's identical in both stereo
+                  channels (usually lead vocals). Works better on some mixes
+                  than others, and has no effect on mono audio.
                 </p>
               </>
             )}
@@ -969,7 +1172,9 @@ export default function VideoEditorTool() {
                 <PanelHeader
                   label="Reduce background noise"
                   enabled={doc.noise.enabled}
-                  onToggle={(enabled) => patch("noise", (s) => ({ ...s, enabled }), "Noise")}
+                  onToggle={(enabled) =>
+                    patch("noise", (s) => ({ ...s, enabled }), "Noise")
+                  }
                 />
                 <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
                   Strength
@@ -979,10 +1184,18 @@ export default function VideoEditorTool() {
                     max={40}
                     step={1}
                     value={doc.noise.strength}
-                    onChange={(e) => patch("noise", (s) => ({ ...s, strength: Number(e.target.value) }), "Noise")}
+                    onChange={(e) =>
+                      patch(
+                        "noise",
+                        (s) => ({ ...s, strength: Number(e.target.value) }),
+                        "Noise",
+                      )
+                    }
                     className="flex-1 accent-(--color-primary-500)"
                   />
-                  <span className="w-10 text-right tabular-nums">{doc.noise.strength}</span>
+                  <span className="w-10 text-right tabular-nums">
+                    {doc.noise.strength}
+                  </span>
                 </label>
               </>
             )}
@@ -993,18 +1206,28 @@ export default function VideoEditorTool() {
                   label="Resize for a platform"
                   description="Fits your video onto a preset (or custom) canvas and fills the empty space."
                   enabled={doc.background.enabled}
-                  onToggle={(enabled) => patch("background", (s) => ({ ...s, enabled }), "Resize")}
+                  onToggle={(enabled) =>
+                    patch("background", (s) => ({ ...s, enabled }), "Resize")
+                  }
                 />
                 <div className="space-y-4">
                   {SOCIAL_PRESET_GROUPS.map((group) => (
                     <div key={group.platform}>
-                      <p className="mb-1.5 text-caption font-semibold text-(--color-text-muted)">{group.platform}</p>
+                      <p className="mb-1.5 text-caption font-semibold text-(--color-text-muted)">
+                        {group.platform}
+                      </p>
                       <div className="flex flex-wrap gap-1.5">
                         {group.presets.map((p) => (
                           <button
                             key={p.id}
                             type="button"
-                            onClick={() => patch("background", (s) => ({ ...s, presetId: p.id }), "Resize")}
+                            onClick={() =>
+                              patch(
+                                "background",
+                                (s) => ({ ...s, presetId: p.id }),
+                                "Resize",
+                              )
+                            }
                             className={`rounded-full border px-3 py-1 text-caption font-medium transition-colors ${
                               doc.background.presetId === p.id
                                 ? "border-primary-500 bg-primary-500 text-white"
@@ -1021,7 +1244,13 @@ export default function VideoEditorTool() {
                   <div>
                     <button
                       type="button"
-                      onClick={() => patch("background", (s) => ({ ...s, presetId: "custom" }), "Resize")}
+                      onClick={() =>
+                        patch(
+                          "background",
+                          (s) => ({ ...s, presetId: "custom" }),
+                          "Resize",
+                        )
+                      }
                       className={`rounded-full border px-3 py-1 text-caption font-medium transition-colors ${
                         doc.background.presetId === "custom"
                           ? "border-primary-500 bg-primary-500 text-white"
@@ -1037,17 +1266,35 @@ export default function VideoEditorTool() {
                           min={2}
                           value={doc.background.customWidth}
                           onChange={(e) =>
-                            patch("background", (s) => ({ ...s, customWidth: Number(e.target.value) || s.customWidth }), "Resize")
+                            patch(
+                              "background",
+                              (s) => ({
+                                ...s,
+                                customWidth:
+                                  Number(e.target.value) || s.customWidth,
+                              }),
+                              "Resize",
+                            )
                           }
                           className="w-20 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
                         />
-                        <span className="text-(--color-text-faint)">&times;</span>
+                        <span className="text-(--color-text-faint)">
+                          &times;
+                        </span>
                         <input
                           type="number"
                           min={2}
                           value={doc.background.customHeight}
                           onChange={(e) =>
-                            patch("background", (s) => ({ ...s, customHeight: Number(e.target.value) || s.customHeight }), "Resize")
+                            patch(
+                              "background",
+                              (s) => ({
+                                ...s,
+                                customHeight:
+                                  Number(e.target.value) || s.customHeight,
+                              }),
+                              "Resize",
+                            )
                           }
                           className="w-20 rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm tabular-nums outline-none focus:border-primary-400"
                         />
@@ -1059,13 +1306,21 @@ export default function VideoEditorTool() {
                   </div>
 
                   <div>
-                    <p className="mb-1.5 text-caption font-semibold text-(--color-text-muted)">Fill style</p>
+                    <p className="mb-1.5 text-caption font-semibold text-(--color-text-muted)">
+                      Fill style
+                    </p>
                     <div className="flex gap-1 rounded-md border border-(--color-border) p-1">
                       {FILL_MODES.map((m) => (
                         <button
                           key={m.id}
                           type="button"
-                          onClick={() => patch("background", (s) => ({ ...s, fillMode: m.id }), "Resize")}
+                          onClick={() =>
+                            patch(
+                              "background",
+                              (s) => ({ ...s, fillMode: m.id }),
+                              "Resize",
+                            )
+                          }
                           className={`flex-1 rounded px-2 py-1.5 text-caption font-medium transition-colors ${
                             doc.background.fillMode === m.id
                               ? "bg-primary-500 text-white"
@@ -1084,7 +1339,13 @@ export default function VideoEditorTool() {
                       <input
                         type="color"
                         value={doc.background.solidColor}
-                        onChange={(e) => patch("background", (s) => ({ ...s, solidColor: e.target.value }), "Resize")}
+                        onChange={(e) =>
+                          patch(
+                            "background",
+                            (s) => ({ ...s, solidColor: e.target.value }),
+                            "Resize",
+                          )
+                        }
                         className="h-7 w-10 cursor-pointer rounded border border-(--color-border) bg-transparent"
                       />
                     </label>
@@ -1097,7 +1358,13 @@ export default function VideoEditorTool() {
                         <input
                           type="color"
                           value={doc.background.gradientFrom}
-                          onChange={(e) => patch("background", (s) => ({ ...s, gradientFrom: e.target.value }), "Resize")}
+                          onChange={(e) =>
+                            patch(
+                              "background",
+                              (s) => ({ ...s, gradientFrom: e.target.value }),
+                              "Resize",
+                            )
+                          }
                           className="h-7 w-10 cursor-pointer rounded border border-(--color-border) bg-transparent"
                         />
                       </label>
@@ -1106,14 +1373,28 @@ export default function VideoEditorTool() {
                         <input
                           type="color"
                           value={doc.background.gradientTo}
-                          onChange={(e) => patch("background", (s) => ({ ...s, gradientTo: e.target.value }), "Resize")}
+                          onChange={(e) =>
+                            patch(
+                              "background",
+                              (s) => ({ ...s, gradientTo: e.target.value }),
+                              "Resize",
+                            )
+                          }
                           className="h-7 w-10 cursor-pointer rounded border border-(--color-border) bg-transparent"
                         />
                       </label>
                       <select
                         value={doc.background.gradientDirection}
                         onChange={(e) =>
-                          patch("background", (s) => ({ ...s, gradientDirection: e.target.value as GradientDirection }), "Resize")
+                          patch(
+                            "background",
+                            (s) => ({
+                              ...s,
+                              gradientDirection: e.target
+                                .value as GradientDirection,
+                            }),
+                            "Resize",
+                          )
                         }
                         className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
                       >
@@ -1132,12 +1413,20 @@ export default function VideoEditorTool() {
                 <PanelHeader
                   label="Add text"
                   enabled={doc.text.enabled}
-                  onToggle={(enabled) => patch("text", (s) => ({ ...s, enabled }), "Text")}
+                  onToggle={(enabled) =>
+                    patch("text", (s) => ({ ...s, enabled }), "Text")
+                  }
                 />
                 <div className="space-y-3">
                   <textarea
                     value={doc.text.content}
-                    onChange={(e) => patch("text", (s) => ({ ...s, content: e.target.value }), "Text")}
+                    onChange={(e) =>
+                      patch(
+                        "text",
+                        (s) => ({ ...s, content: e.target.value }),
+                        "Text",
+                      )
+                    }
                     rows={2}
                     placeholder="Type your text…"
                     className="w-full resize-none rounded-md border border-(--color-border) bg-(--color-surface) px-3 py-2 text-body-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-200"
@@ -1149,18 +1438,28 @@ export default function VideoEditorTool() {
                           key={c}
                           type="button"
                           aria-label={`Text color ${c}`}
-                          onClick={() => patch("text", (s) => ({ ...s, color: c }), "Text")}
+                          onClick={() =>
+                            patch("text", (s) => ({ ...s, color: c }), "Text")
+                          }
                           className={`h-6 w-6 rounded-full border-2 ${doc.text.color === c ? "border-primary-500" : "border-(--color-border)"}`}
                           style={{ backgroundColor: c }}
                         />
                       ))}
                     </div>
                     <div className="flex items-center gap-1 rounded-md border border-(--color-border) p-1">
-                      {(["top", "center", "bottom"] as TextPositionPreset[]).map((p) => (
+                      {(
+                        ["top", "center", "bottom"] as TextPositionPreset[]
+                      ).map((p) => (
                         <button
                           key={p}
                           type="button"
-                          onClick={() => patch("text", (s) => ({ ...s, ...POSITION_PRESETS[p] }), "Text")}
+                          onClick={() =>
+                            patch(
+                              "text",
+                              (s) => ({ ...s, ...POSITION_PRESETS[p] }),
+                              "Text",
+                            )
+                          }
                           className={`rounded px-3 py-1 text-caption font-medium capitalize transition-colors ${isAtPositionPreset(doc.text.x, doc.text.y, p) ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
                         >
                           {p}
@@ -1174,19 +1473,35 @@ export default function VideoEditorTool() {
                         min={16}
                         max={MAX_TEXT_SIZE}
                         value={doc.text.fontSize}
-                        onChange={(e) => patch("text", (s) => ({ ...s, fontSize: Number(e.target.value) }), "Text")}
+                        onChange={(e) =>
+                          patch(
+                            "text",
+                            (s) => ({ ...s, fontSize: Number(e.target.value) }),
+                            "Text",
+                          )
+                        }
                         className="w-full min-w-0 flex-1 accent-(--color-primary-500)"
                       />
-                      <span className="w-9 shrink-0 text-right tabular-nums">{doc.text.fontSize}</span>
+                      <span className="w-9 shrink-0 text-right tabular-nums">
+                        {doc.text.fontSize}
+                      </span>
                     </label>
                   </div>
-                  <p className="text-caption text-(--color-text-muted)">Drag the text in the preview to place it anywhere.</p>
+                  <p className="text-caption text-(--color-text-muted)">
+                    Drag the text in the preview to place it anywhere.
+                  </p>
                   <div className="flex flex-wrap items-center gap-4">
                     <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
                       Font
                       <select
                         value={doc.text.fontId}
-                        onChange={(e) => patch("text", (s) => ({ ...s, fontId: e.target.value }), "Text")}
+                        onChange={(e) =>
+                          patch(
+                            "text",
+                            (s) => ({ ...s, fontId: e.target.value }),
+                            "Text",
+                          )
+                        }
                         className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
                       >
                         {TEXT_FONTS.map((f) => (
@@ -1200,7 +1515,16 @@ export default function VideoEditorTool() {
                       Animation
                       <select
                         value={doc.text.animation}
-                        onChange={(e) => patch("text", (s) => ({ ...s, animation: e.target.value as TextAnimation }), "Text")}
+                        onChange={(e) =>
+                          patch(
+                            "text",
+                            (s) => ({
+                              ...s,
+                              animation: e.target.value as TextAnimation,
+                            }),
+                            "Text",
+                          )
+                        }
                         className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
                       >
                         {TEXT_ANIMATIONS.map((a) => (
@@ -1213,13 +1537,21 @@ export default function VideoEditorTool() {
                   </div>
 
                   <div className="border-t border-(--color-border) pt-3">
-                    <p className="mb-2 text-caption font-semibold text-(--color-text-muted)">Effects</p>
+                    <p className="mb-2 text-caption font-semibold text-(--color-text-muted)">
+                      Effects
+                    </p>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                       <label className="flex items-center gap-1.5 text-caption text-(--color-text-muted)">
                         <input
                           type="checkbox"
                           checked={doc.text.background}
-                          onChange={(e) => patch("text", (s) => ({ ...s, background: e.target.checked }), "Text")}
+                          onChange={(e) =>
+                            patch(
+                              "text",
+                              (s) => ({ ...s, background: e.target.checked }),
+                              "Text",
+                            )
+                          }
                           className="accent-(--color-primary-500)"
                         />
                         Background
@@ -1227,7 +1559,16 @@ export default function VideoEditorTool() {
                           <input
                             type="color"
                             value={doc.text.backgroundColor}
-                            onChange={(e) => patch("text", (s) => ({ ...s, backgroundColor: e.target.value }), "Text")}
+                            onChange={(e) =>
+                              patch(
+                                "text",
+                                (s) => ({
+                                  ...s,
+                                  backgroundColor: e.target.value,
+                                }),
+                                "Text",
+                              )
+                            }
                             className="h-5 w-5 cursor-pointer rounded border border-(--color-border) bg-transparent"
                           />
                         )}
@@ -1236,7 +1577,13 @@ export default function VideoEditorTool() {
                         <input
                           type="checkbox"
                           checked={doc.text.outline}
-                          onChange={(e) => patch("text", (s) => ({ ...s, outline: e.target.checked }), "Text")}
+                          onChange={(e) =>
+                            patch(
+                              "text",
+                              (s) => ({ ...s, outline: e.target.checked }),
+                              "Text",
+                            )
+                          }
                           className="accent-(--color-primary-500)"
                         />
                         Outline
@@ -1244,7 +1591,13 @@ export default function VideoEditorTool() {
                           <input
                             type="color"
                             value={doc.text.outlineColor}
-                            onChange={(e) => patch("text", (s) => ({ ...s, outlineColor: e.target.value }), "Text")}
+                            onChange={(e) =>
+                              patch(
+                                "text",
+                                (s) => ({ ...s, outlineColor: e.target.value }),
+                                "Text",
+                              )
+                            }
                             className="h-5 w-5 cursor-pointer rounded border border-(--color-border) bg-transparent"
                           />
                         )}
@@ -1253,7 +1606,13 @@ export default function VideoEditorTool() {
                         <input
                           type="checkbox"
                           checked={doc.text.shadow}
-                          onChange={(e) => patch("text", (s) => ({ ...s, shadow: e.target.checked }), "Text")}
+                          onChange={(e) =>
+                            patch(
+                              "text",
+                              (s) => ({ ...s, shadow: e.target.checked }),
+                              "Text",
+                            )
+                          }
                           className="accent-(--color-primary-500)"
                         />
                         Shadow
@@ -1261,7 +1620,13 @@ export default function VideoEditorTool() {
                           <input
                             type="color"
                             value={doc.text.shadowColor}
-                            onChange={(e) => patch("text", (s) => ({ ...s, shadowColor: e.target.value }), "Text")}
+                            onChange={(e) =>
+                              patch(
+                                "text",
+                                (s) => ({ ...s, shadowColor: e.target.value }),
+                                "Text",
+                              )
+                            }
                             className="h-5 w-5 cursor-pointer rounded border border-(--color-border) bg-transparent"
                           />
                         )}
@@ -1270,7 +1635,13 @@ export default function VideoEditorTool() {
                         <input
                           type="checkbox"
                           checked={doc.text.uppercase}
-                          onChange={(e) => patch("text", (s) => ({ ...s, uppercase: e.target.checked }), "Text")}
+                          onChange={(e) =>
+                            patch(
+                              "text",
+                              (s) => ({ ...s, uppercase: e.target.checked }),
+                              "Text",
+                            )
+                          }
                           className="accent-(--color-primary-500)"
                         />
                         UPPERCASE
@@ -1308,16 +1679,34 @@ export default function VideoEditorTool() {
                   enabled={doc.overlaysOpen}
                   onToggle={(enabled) => {
                     history.set(
-                      (prev) => ({ ...prev, overlaysOpen: enabled, overlays: enabled ? prev.overlays : [] }),
+                      (prev) => ({
+                        ...prev,
+                        overlaysOpen: enabled,
+                        overlays: enabled ? prev.overlays : [],
+                      }),
                       "Overlays",
                     );
                   }}
                 />
                 <OverlayLayersPanel
                   layers={doc.overlays}
-                  onAdd={(layer) => patch("overlays", (o) => [...o, layer], "Overlays")}
-                  onUpdate={(id, p) => patch("overlays", (o) => o.map((l) => (l.id === id ? { ...l, ...p } : l)), "Overlays")}
-                  onRemove={(id) => patch("overlays", (o) => o.filter((l) => l.id !== id), "Overlays")}
+                  onAdd={(layer) =>
+                    patch("overlays", (o) => [...o, layer], "Overlays")
+                  }
+                  onUpdate={(id, p) =>
+                    patch(
+                      "overlays",
+                      (o) => o.map((l) => (l.id === id ? { ...l, ...p } : l)),
+                      "Overlays",
+                    )
+                  }
+                  onRemove={(id) =>
+                    patch(
+                      "overlays",
+                      (o) => o.filter((l) => l.id !== id),
+                      "Overlays",
+                    )
+                  }
                   duration={trimmedDuration}
                 />
               </>
@@ -1328,29 +1717,51 @@ export default function VideoEditorTool() {
                 <PanelHeader
                   label="Add music"
                   enabled={doc.music.enabled}
-                  onToggle={(enabled) => patch("music", (s) => ({ ...s, enabled }), "Music")}
+                  onToggle={(enabled) =>
+                    patch("music", (s) => ({ ...s, enabled }), "Music")
+                  }
                 />
                 {!doc.music.file ? (
                   <Dropzone
                     accept="audio/*"
                     label="Drop a music file here"
                     hint="MP3, WAV, M4A, and more"
-                    onFiles={(files) => patch("music", (s) => ({ ...s, file: files[0] ?? null }), "Music")}
+                    onFiles={(files) =>
+                      patch(
+                        "music",
+                        (s) => ({ ...s, file: files[0] ?? null }),
+                        "Music",
+                      )
+                    }
                   />
                 ) : (
                   <div className="space-y-3">
-                    <p className="text-body-sm text-(--color-text-muted)">{doc.music.file.name}</p>
+                    <p className="text-body-sm text-(--color-text-muted)">
+                      {doc.music.file.name}
+                    </p>
                     <div className="flex items-center gap-1 rounded-md border border-(--color-border) p-1">
                       <button
                         type="button"
-                        onClick={() => patch("music", (s) => ({ ...s, mode: "mix" }), "Music")}
+                        onClick={() =>
+                          patch(
+                            "music",
+                            (s) => ({ ...s, mode: "mix" }),
+                            "Music",
+                          )
+                        }
                         className={`rounded px-3 py-1 text-caption font-medium transition-colors ${doc.music.mode === "mix" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
                       >
                         Mix with original
                       </button>
                       <button
                         type="button"
-                        onClick={() => patch("music", (s) => ({ ...s, mode: "replace" }), "Music")}
+                        onClick={() =>
+                          patch(
+                            "music",
+                            (s) => ({ ...s, mode: "replace" }),
+                            "Music",
+                          )
+                        }
                         className={`rounded px-3 py-1 text-caption font-medium transition-colors ${doc.music.mode === "replace" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
                       >
                         Replace original
@@ -1367,7 +1778,9 @@ export default function VideoEditorTool() {
                   label="Dub / replace voice"
                   description="Record or upload a replacement voice track, in any language."
                   enabled={doc.dub.enabled}
-                  onToggle={(enabled) => patch("dub", (s) => ({ ...s, enabled }), "Dub")}
+                  onToggle={(enabled) =>
+                    patch("dub", (s) => ({ ...s, enabled }), "Dub")
+                  }
                 />
                 {!doc.dub.file ? (
                   <div className="space-y-3">
@@ -1377,12 +1790,19 @@ export default function VideoEditorTool() {
                       hint="MP3, WAV, M4A, and more"
                       onFiles={(files) => {
                         const f = files[0];
-                        if (f) patch("dub", (s) => ({ ...s, file: f, enabled: true }), "Dub");
+                        if (f)
+                          patch(
+                            "dub",
+                            (s) => ({ ...s, file: f, enabled: true }),
+                            "Dub",
+                          );
                       }}
                     />
                     <div className="flex items-center gap-2">
                       <div className="h-px flex-1 bg-(--color-border)" />
-                      <span className="text-caption text-(--color-text-muted)">or</span>
+                      <span className="text-caption text-(--color-text-muted)">
+                        or
+                      </span>
                       <div className="h-px flex-1 bg-(--color-border)" />
                     </div>
                     {dubRecorder.state !== "recording" ? (
@@ -1401,19 +1821,26 @@ export default function VideoEditorTool() {
                         className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-danger-500 px-4 py-2 text-body-sm font-semibold text-white transition-colors hover:bg-danger-600"
                       >
                         <Square size={13} />
-                        Stop recording · {formatTime(dubRecorder.elapsedMs / 1000)}
+                        Stop recording ·{" "}
+                        {formatTime(dubRecorder.elapsedMs / 1000)}
                       </button>
                     )}
                     {(dubRecordError || dubRecorder.error) && (
-                      <p className="text-caption text-danger-600">{dubRecordError ?? dubRecorder.error}</p>
+                      <p className="text-caption text-danger-600">
+                        {dubRecordError ?? dubRecorder.error}
+                      </p>
                     )}
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {dubUrl && <audio src={dubUrl} controls className="w-full" />}
+                    {dubUrl && (
+                      <audio src={dubUrl} controls className="w-full" />
+                    )}
                     <button
                       type="button"
-                      onClick={() => patch("dub", (s) => ({ ...s, file: null }), "Dub")}
+                      onClick={() =>
+                        patch("dub", (s) => ({ ...s, file: null }), "Dub")
+                      }
                       className="text-caption font-medium text-danger-600 hover:underline"
                     >
                       Remove and choose another
@@ -1429,7 +1856,9 @@ export default function VideoEditorTool() {
                         <button
                           key={m.id}
                           type="button"
-                          onClick={() => patch("dub", (s) => ({ ...s, mode: m.id }), "Dub")}
+                          onClick={() =>
+                            patch("dub", (s) => ({ ...s, mode: m.id }), "Dub")
+                          }
                           className={`flex-1 rounded px-2 py-1.5 text-caption font-medium transition-colors ${doc.dub.mode === m.id ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
                         >
                           {m.label}
@@ -1445,10 +1874,21 @@ export default function VideoEditorTool() {
                           max={0.6}
                           step={0.05}
                           value={doc.dub.duckLevel}
-                          onChange={(e) => patch("dub", (s) => ({ ...s, duckLevel: Number(e.target.value) }), "Dub")}
+                          onChange={(e) =>
+                            patch(
+                              "dub",
+                              (s) => ({
+                                ...s,
+                                duckLevel: Number(e.target.value),
+                              }),
+                              "Dub",
+                            )
+                          }
                           className="flex-1 accent-(--color-primary-500)"
                         />
-                        <span className="w-10 text-right tabular-nums">{Math.round(doc.dub.duckLevel * 100)}%</span>
+                        <span className="w-10 text-right tabular-nums">
+                          {Math.round(doc.dub.duckLevel * 100)}%
+                        </span>
                       </label>
                     )}
                   </div>
@@ -1461,7 +1901,9 @@ export default function VideoEditorTool() {
                 <PanelHeader
                   label="Add intro/outro clip"
                   enabled={doc.extraClip.enabled}
-                  onToggle={(enabled) => patch("extraClip", (s) => ({ ...s, enabled }), "Clips")}
+                  onToggle={(enabled) =>
+                    patch("extraClip", (s) => ({ ...s, enabled }), "Clips")
+                  }
                 />
                 {!doc.extraClip.file ? (
                   <Dropzone
@@ -1471,23 +1913,47 @@ export default function VideoEditorTool() {
                     onFiles={(files) => {
                       const file = files[0];
                       if (!file) return;
-                      patch("extraClip", (s) => ({ ...s, file, kind: file.type.startsWith("image/") ? "image" : "video" }), "Clips");
+                      patch(
+                        "extraClip",
+                        (s) => ({
+                          ...s,
+                          file,
+                          kind: file.type.startsWith("image/")
+                            ? "image"
+                            : "video",
+                        }),
+                        "Clips",
+                      );
                     }}
                   />
                 ) : (
                   <div className="space-y-3">
-                    <p className="text-body-sm text-(--color-text-muted)">{doc.extraClip.file.name}</p>
+                    <p className="text-body-sm text-(--color-text-muted)">
+                      {doc.extraClip.file.name}
+                    </p>
                     <div className="flex items-center gap-1 rounded-md border border-(--color-border) p-1">
                       <button
                         type="button"
-                        onClick={() => patch("extraClip", (s) => ({ ...s, position: "before" }), "Clips")}
+                        onClick={() =>
+                          patch(
+                            "extraClip",
+                            (s) => ({ ...s, position: "before" }),
+                            "Clips",
+                          )
+                        }
                         className={`rounded px-3 py-1 text-caption font-medium transition-colors ${doc.extraClip.position === "before" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
                       >
                         Play before (intro)
                       </button>
                       <button
                         type="button"
-                        onClick={() => patch("extraClip", (s) => ({ ...s, position: "after" }), "Clips")}
+                        onClick={() =>
+                          patch(
+                            "extraClip",
+                            (s) => ({ ...s, position: "after" }),
+                            "Clips",
+                          )
+                        }
                         className={`rounded px-3 py-1 text-caption font-medium transition-colors ${doc.extraClip.position === "after" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
                       >
                         Play after (outro)
@@ -1503,17 +1969,36 @@ export default function VideoEditorTool() {
                             max={10}
                             step={0.5}
                             value={doc.extraClip.imageDuration}
-                            onChange={(e) => patch("extraClip", (s) => ({ ...s, imageDuration: Number(e.target.value) }), "Clips")}
+                            onChange={(e) =>
+                              patch(
+                                "extraClip",
+                                (s) => ({
+                                  ...s,
+                                  imageDuration: Number(e.target.value),
+                                }),
+                                "Clips",
+                              )
+                            }
                             className="flex-1 accent-(--color-primary-500)"
                           />
-                          <span className="w-12 text-right tabular-nums">{doc.extraClip.imageDuration}s</span>
+                          <span className="w-12 text-right tabular-nums">
+                            {doc.extraClip.imageDuration}s
+                          </span>
                         </label>
                         <label className="flex flex-col gap-1 text-caption text-(--color-text-muted)">
                           Animation
                           <select
                             value={doc.extraClip.animation}
                             onChange={(e) =>
-                              patch("extraClip", (s) => ({ ...s, animation: e.target.value as ImageEntranceAnimation }), "Clips")
+                              patch(
+                                "extraClip",
+                                (s) => ({
+                                  ...s,
+                                  animation: e.target
+                                    .value as ImageEntranceAnimation,
+                                }),
+                                "Clips",
+                              )
                             }
                             className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-body-sm"
                           >
@@ -1542,7 +2027,13 @@ export default function VideoEditorTool() {
                     <button
                       key={t}
                       type="button"
-                      onClick={() => patch("quality", (s) => ({ ...s, target: t }), "Quality")}
+                      onClick={() =>
+                        patch(
+                          "quality",
+                          (s) => ({ ...s, target: t }),
+                          "Quality",
+                        )
+                      }
                       className={`block w-full rounded-lg border px-4 py-2.5 text-left text-body-sm font-medium transition-colors ${
                         doc.quality.target === t
                           ? "border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-300"
@@ -1557,20 +2048,33 @@ export default function VideoEditorTool() {
                   <input
                     type="checkbox"
                     checked={doc.quality.sharpen}
-                    onChange={(e) => patch("quality", (s) => ({ ...s, sharpen: e.target.checked }), "Quality")}
+                    onChange={(e) =>
+                      patch(
+                        "quality",
+                        (s) => ({ ...s, sharpen: e.target.checked }),
+                        "Quality",
+                      )
+                    }
                     className="accent-(--color-primary-500)"
                   />
                   Sharpen (recommended when upscaling)
                 </label>
                 <p className="mt-3 text-caption text-(--color-text-muted)">
-                  Applies at export only — on-screen playback here is already scaled to fit your browser window
-                  regardless of source resolution, so a live preview wouldn't show a meaningful difference.
+                  Applies at export only — on-screen playback here is already
+                  scaled to fit your browser window regardless of source
+                  resolution, so a live preview wouldn't show a meaningful
+                  difference.
                 </p>
                 {doc.quality.target !== "original" &&
-                  !resolveQualityTarget(doc.quality.target, video.videoWidth, video.videoHeight) && (
+                  !resolveQualityTarget(
+                    doc.quality.target,
+                    video.videoWidth,
+                    video.videoHeight,
+                  ) && (
                     <p className="mt-3 text-caption text-(--color-text-muted)">
-                      Your source is already at or above {QUALITY_LABELS[doc.quality.target]} — export will keep the
-                      original resolution.
+                      Your source is already at or above{" "}
+                      {QUALITY_LABELS[doc.quality.target]} — export will keep
+                      the original resolution.
                     </p>
                   )}
               </>
@@ -1582,8 +2086,12 @@ export default function VideoEditorTool() {
         <div className="min-w-0 flex-1 space-y-3 md:h-full md:overflow-y-auto md:overflow-x-hidden md:pr-1">
           <div className="rounded-xl border border-(--color-border) bg-(--color-surface) p-5">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="text-caption font-medium text-(--color-text-muted)">Preview shape</span>
-              <div className={`flex flex-wrap gap-1 ${doc.background.enabled ? "pointer-events-none opacity-40" : ""}`}>
+              <span className="text-caption font-medium text-(--color-text-muted)">
+                Preview shape
+              </span>
+              <div
+                className={`flex flex-wrap gap-1 ${doc.background.enabled ? "pointer-events-none opacity-40" : ""}`}
+              >
                 {PREVIEW_ASPECTS.map((a) => (
                   <button
                     key={a.id}
@@ -1602,7 +2110,9 @@ export default function VideoEditorTool() {
                 ))}
               </div>
               {doc.background.enabled && (
-                <span className="text-caption text-(--color-text-muted)">Set by Resize</span>
+                <span className="text-caption text-(--color-text-muted)">
+                  Set by Resize
+                </span>
               )}
             </div>
             {video.sourceUrl && (
@@ -1611,9 +2121,17 @@ export default function VideoEditorTool() {
                 sourceUrl={video.sourceUrl}
                 naturalWidth={video.videoWidth}
                 naturalHeight={video.videoHeight}
-                aspect={doc.background.enabled ? chromaBg.effectiveAspect : previewAspect}
+                aspect={
+                  doc.background.enabled
+                    ? chromaBg.effectiveAspect
+                    : previewAspect
+                }
                 maxHeight={previewHeight}
-                canvasMode={chromaBg.canvasMode && (!clipTimeline.active || clipTimeline.activeSegmentKind === "main")}
+                canvasMode={
+                  chromaBg.canvasMode &&
+                  (!clipTimeline.active ||
+                    clipTimeline.activeSegmentKind === "main")
+                }
                 onDrawFrame={chromaBg.onDrawFrame}
                 onLoadedMetadata={handleLoadedMetadata}
                 onError={video.onError}
@@ -1625,23 +2143,35 @@ export default function VideoEditorTool() {
                     extraClip={doc.extraClip}
                     extraVideoRef={extraVideoRef}
                     sourceUrl={extraClipUrl}
-                    visible={clipTimeline.active && clipTimeline.activeSegmentKind === "extra"}
-                    onVideoLoadedMetadata={() => setExtraVideoDuration(extraVideoRef.current?.duration || 0)}
+                    visible={
+                      clipTimeline.active &&
+                      clipTimeline.activeSegmentKind === "extra"
+                    }
+                    onVideoLoadedMetadata={() =>
+                      setExtraVideoDuration(
+                        extraVideoRef.current?.duration || 0,
+                      )
+                    }
                   />
                 }
               >
                 {(box) => {
-                  const scale = video.videoWidth > 0 ? box.width / video.videoWidth : 1;
+                  const scale =
+                    video.videoWidth > 0 ? box.width / video.videoWidth : 1;
                   return (
                     <>
-                      {pickingColor && <PickColorOverlay onPick={handlePickColor} />}
+                      {pickingColor && (
+                        <PickColorOverlay onPick={handlePickColor} />
+                      )}
 
                       {!pickingColor && doc.crop.enabled && (
                         <RectOverlay
                           boxWidth={box.width}
                           boxHeight={box.height}
                           rect={doc.crop.rect}
-                          onChange={(rect) => patch("crop", (s) => ({ ...s, rect }), "Crop")}
+                          onChange={(rect) =>
+                            patch("crop", (s) => ({ ...s, rect }), "Crop")
+                          }
                         />
                       )}
                       {!pickingColor && doc.logo.enabled && (
@@ -1663,7 +2193,9 @@ export default function VideoEditorTool() {
                           boxWidth={box.width}
                           boxHeight={box.height}
                           rect={doc.logo.rect}
-                          onChange={(rect) => patch("logo", (s) => ({ ...s, rect }), "Logo")}
+                          onChange={(rect) =>
+                            patch("logo", (s) => ({ ...s, rect }), "Logo")
+                          }
                           color="danger"
                           minFraction={0.03}
                         />
@@ -1680,19 +2212,37 @@ export default function VideoEditorTool() {
                             aspectRatio={overlayAspects[layer.id] ?? 1}
                             draggable={activePanel === "overlays"}
                             onChange={(p) =>
-                              patch("overlays", (o) => o.map((l) => (l.id === layer.id ? { ...l, ...p } : l)), "Overlays")
+                              patch(
+                                "overlays",
+                                (o) =>
+                                  o.map((l) =>
+                                    l.id === layer.id ? { ...l, ...p } : l,
+                                  ),
+                                "Overlays",
+                              )
                             }
                           >
                             {layer.kind === "image" ? (
                               <img
                                 src={layer.previewUrl}
                                 alt=""
-                                style={{ width: "100%", height: "100%", opacity: layer.opacity }}
+                                style={{
+                                  width: "100%",
+                                  height: "100%",
+                                  opacity: layer.opacity,
+                                }}
                                 className="max-w-none"
                                 onLoad={(e) => {
                                   const el = e.currentTarget;
-                                  if (el.naturalWidth > 0 && el.naturalHeight > 0) {
-                                    setOverlayAspects((prev) => ({ ...prev, [layer.id]: el.naturalWidth / el.naturalHeight }));
+                                  if (
+                                    el.naturalWidth > 0 &&
+                                    el.naturalHeight > 0
+                                  ) {
+                                    setOverlayAspects((prev) => ({
+                                      ...prev,
+                                      [layer.id]:
+                                        el.naturalWidth / el.naturalHeight,
+                                    }));
                                   }
                                 }}
                               />
@@ -1700,12 +2250,20 @@ export default function VideoEditorTool() {
                               <video
                                 src={layer.previewUrl}
                                 muted
-                                style={{ width: "100%", height: "100%", opacity: layer.opacity }}
+                                style={{
+                                  width: "100%",
+                                  height: "100%",
+                                  opacity: layer.opacity,
+                                }}
                                 className="max-w-none"
                                 onLoadedMetadata={(e) => {
                                   const el = e.currentTarget;
                                   if (el.videoWidth > 0 && el.videoHeight > 0) {
-                                    setOverlayAspects((prev) => ({ ...prev, [layer.id]: el.videoWidth / el.videoHeight }));
+                                    setOverlayAspects((prev) => ({
+                                      ...prev,
+                                      [layer.id]:
+                                        el.videoWidth / el.videoHeight,
+                                    }));
                                   }
                                 }}
                               />
@@ -1719,7 +2277,9 @@ export default function VideoEditorTool() {
                           y={doc.text.y}
                           box={box}
                           draggable={activePanel === "text"}
-                          onChange={(p) => patch("text", (s) => ({ ...s, ...p }), "Text")}
+                          onChange={(p) =>
+                            patch("text", (s) => ({ ...s, ...p }), "Text")
+                          }
                         >
                           <span
                             className="inline-block max-w-full whitespace-pre-wrap break-words font-semibold"
@@ -1727,32 +2287,50 @@ export default function VideoEditorTool() {
                               fontSize: doc.text.fontSize * scale,
                               color: doc.text.color,
                               lineHeight: 1.1,
-                              padding: doc.text.background ? `${8 * scale}px ${16 * scale}px` : 0,
+                              padding: doc.text.background
+                                ? `${8 * scale}px ${16 * scale}px`
+                                : 0,
                               backgroundColor: doc.text.background
-                                ? `${doc.text.backgroundColor}${Math.round(doc.text.backgroundOpacity * 255)
+                                ? `${doc.text.backgroundColor}${Math.round(
+                                    doc.text.backgroundOpacity * 255,
+                                  )
                                     .toString(16)
                                     .padStart(2, "0")}`
                                 : "transparent",
-                              WebkitTextStroke: doc.text.outline ? `${Math.max(1, 2 * scale)}px ${doc.text.outlineColor}` : undefined,
-                              paintOrder: doc.text.outline ? "stroke fill" : undefined,
-                              textShadow: doc.text.shadow ? `${3 * scale}px ${3 * scale}px 2px ${doc.text.shadowColor}` : undefined,
-                              textTransform: doc.text.uppercase ? "uppercase" : undefined,
-                              fontFamily: TEXT_FONTS.find((f) => f.id === doc.text.fontId)?.cssFontFamily,
+                              WebkitTextStroke: doc.text.outline
+                                ? `${Math.max(1, 2 * scale)}px ${doc.text.outlineColor}`
+                                : undefined,
+                              paintOrder: doc.text.outline
+                                ? "stroke fill"
+                                : undefined,
+                              textShadow: doc.text.shadow
+                                ? `${3 * scale}px ${3 * scale}px 2px ${doc.text.shadowColor}`
+                                : undefined,
+                              textTransform: doc.text.uppercase
+                                ? "uppercase"
+                                : undefined,
+                              fontFamily: TEXT_FONTS.find(
+                                (f) => f.id === doc.text.fontId,
+                              )?.cssFontFamily,
                             }}
                           >
                             {doc.text.content || " "}
                           </span>
                         </PositionedTextBlock>
                       )}
-                      {!pickingColor && activePanel === "text" && doc.text.enabled && (
-                        <FloatingTextToolbar
-                          y={doc.text.y}
-                          fontId={doc.text.fontId}
-                          fontSize={doc.text.fontSize}
-                          color={doc.text.color}
-                          onChange={(p) => patch("text", (s) => ({ ...s, ...p }), "Text")}
-                        />
-                      )}
+                      {!pickingColor &&
+                        activePanel === "text" &&
+                        doc.text.enabled && (
+                          <FloatingTextToolbar
+                            y={doc.text.y}
+                            fontId={doc.text.fontId}
+                            fontSize={doc.text.fontSize}
+                            color={doc.text.color}
+                            onChange={(p) =>
+                              patch("text", (s) => ({ ...s, ...p }), "Text")
+                            }
+                          />
+                        )}
 
                       {!pickingColor && activeCaptionCue && (
                         <PositionedTextBlock
@@ -1765,16 +2343,24 @@ export default function VideoEditorTool() {
                           <span
                             className="inline-block max-w-full whitespace-pre-wrap break-words font-semibold"
                             style={{
-                              fontFamily: TEXT_FONTS.find((f) => f.id === captions.style.fontId)?.cssFontFamily,
+                              fontFamily: TEXT_FONTS.find(
+                                (f) => f.id === captions.style.fontId,
+                              )?.cssFontFamily,
                               fontSize: captions.style.fontSize * scale,
                               color: captions.style.color,
                               lineHeight: 1.15,
-                              padding: captions.style.background ? `${8 * scale}px ${16 * scale}px` : 0,
-                              backgroundColor: captions.style.background ? captions.style.backgroundColor : "transparent",
+                              padding: captions.style.background
+                                ? `${8 * scale}px ${16 * scale}px`
+                                : 0,
+                              backgroundColor: captions.style.background
+                                ? captions.style.backgroundColor
+                                : "transparent",
                               WebkitTextStroke: captions.style.outline
                                 ? `${Math.max(1, 2 * scale)}px ${captions.style.outlineColor}`
                                 : undefined,
-                              paintOrder: captions.style.outline ? "stroke fill" : undefined,
+                              paintOrder: captions.style.outline
+                                ? "stroke fill"
+                                : undefined,
                             }}
                           >
                             {captions.style.karaoke && activeCaptionCue.words
@@ -1783,28 +2369,33 @@ export default function VideoEditorTool() {
                                     key={i}
                                     style={{
                                       color:
-                                        currentTime >= word.start && currentTime < word.end
+                                        currentTime >= word.start &&
+                                        currentTime < word.end
                                           ? captions.style.highlightColor
                                           : undefined,
                                     }}
                                   >
                                     {word.text}
-                                    {i < activeCaptionCue.words!.length - 1 ? " " : ""}
+                                    {i < activeCaptionCue.words!.length - 1
+                                      ? " "
+                                      : ""}
                                   </span>
                                 ))
                               : activeCaptionCue.text}
                           </span>
                         </PositionedTextBlock>
                       )}
-                      {!pickingColor && activePanel === "captions" && activeCaptionCue && (
-                        <FloatingTextToolbar
-                          y={captions.style.y}
-                          fontId={captions.style.fontId}
-                          fontSize={captions.style.fontSize}
-                          color={captions.style.color}
-                          onChange={captions.updateStyle}
-                        />
-                      )}
+                      {!pickingColor &&
+                        activePanel === "captions" &&
+                        activeCaptionCue && (
+                          <FloatingTextToolbar
+                            y={captions.style.y}
+                            fontId={captions.style.fontId}
+                            fontSize={captions.style.fontSize}
+                            color={captions.style.color}
+                            onChange={captions.updateStyle}
+                          />
+                        )}
                       {!pickingColor && cutoutFrame && (
                         <img
                           src={cutoutFrame.url}
@@ -1826,7 +2417,11 @@ export default function VideoEditorTool() {
                 }}
               </FramedVideoStage>
             )}
-            <audio ref={musicPreview.audioRef} src={musicPreview.sourceUrl ?? undefined} className="hidden" />
+            <audio
+              ref={musicPreview.audioRef}
+              src={musicPreview.sourceUrl ?? undefined}
+              className="hidden"
+            />
             {video.sourceUrl && (
               <div
                 role="separator"
@@ -1834,7 +2429,10 @@ export default function VideoEditorTool() {
                 aria-label="Resize preview height"
                 onPointerDown={(e) => {
                   e.preventDefault();
-                  previewResize.current = { pointerY: e.clientY, startHeight: previewHeight };
+                  previewResize.current = {
+                    pointerY: e.clientY,
+                    startHeight: previewHeight,
+                  };
                 }}
                 className="mx-auto -mb-2 mt-1 flex h-3 w-16 cursor-row-resize items-center justify-center rounded-full text-(--color-text-faint) hover:text-(--color-text-muted)"
               >
@@ -1844,12 +2442,32 @@ export default function VideoEditorTool() {
           </div>
 
           <EditorTimeline
-            duration={clipTimeline.active ? clipTimeline.totalDuration : video.duration}
-            start={clipTimeline.active ? clipTimeline.introOffset + start : start}
+            duration={
+              clipTimeline.active ? clipTimeline.totalDuration : video.duration
+            }
+            start={
+              clipTimeline.active ? clipTimeline.introOffset + start : start
+            }
             end={clipTimeline.active ? clipTimeline.introOffset + end : end}
-            currentTime={clipTimeline.active ? clipTimeline.virtualTime : currentTime}
-            onChangeStart={(t) => setStart(Math.max(0, t - (clipTimeline.active ? clipTimeline.introOffset : 0)))}
-            onChangeEnd={(t) => setEnd(Math.max(0, t - (clipTimeline.active ? clipTimeline.introOffset : 0)))}
+            currentTime={
+              clipTimeline.active ? clipTimeline.virtualTime : currentTime
+            }
+            onChangeStart={(t) =>
+              setStart(
+                Math.max(
+                  0,
+                  t - (clipTimeline.active ? clipTimeline.introOffset : 0),
+                ),
+              )
+            }
+            onChangeEnd={(t) =>
+              setEnd(
+                Math.max(
+                  0,
+                  t - (clipTimeline.active ? clipTimeline.introOffset : 0),
+                ),
+              )
+            }
             onSeek={clipTimeline.active ? clipTimeline.seekTo : seekTo}
             isPlaying={clipTimeline.active ? clipTimeline.isPlaying : isPlaying}
             onTogglePlay={() => {
@@ -1872,7 +2490,10 @@ export default function VideoEditorTool() {
             <button
               type="button"
               disabled={
-                exportState.isProcessing || trimmedDuration <= 0 || video.isMetadataLoading || !!video.metadataError
+                exportState.isProcessing ||
+                trimmedDuration <= 0 ||
+                video.isMetadataLoading ||
+                !!video.metadataError
               }
               onClick={handleExport}
               className="inline-flex items-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"

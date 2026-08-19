@@ -1,12 +1,17 @@
 import { useState } from "react";
 import { Music2 } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import AudioWaveform from "./AudioWaveform";
 import { useAudioFile } from "../../../lib/hooks/useAudioFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessAudioExtension, stripExtension, AUDIO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessAudioExtension,
+  stripExtension,
+  AUDIO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 import { atempoChain } from "../../../lib/ffmpeg/audio-filters";
 
 const WORK_RATE = 44100;
@@ -51,12 +56,18 @@ export default function AudioPitchTool() {
 
   if (!audio.hasFile) {
     return (
-      <Dropzone
-        accept="audio/*"
-        label="Drop an audio file here, or click to browse"
-        hint="Shift pitch up or down independent of speed"
-        onFiles={audio.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Music2}
+        title="Change Pitch"
+        description="Shift pitch up or down independent of speed."
+      >
+        <Dropzone
+          accept="audio/*"
+          label="Drop an audio file here, or click to browse"
+          hint="Shift pitch up or down independent of speed"
+          onFiles={audio.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -87,7 +98,9 @@ export default function AudioPitchTool() {
           className="w-full accent-(--color-primary-500)"
         />
         <p className="text-center text-body-sm font-semibold">
-          {semitones === 0 ? "No change" : `${semitones > 0 ? "+" : ""}${semitones} semitones`}
+          {semitones === 0
+            ? "No change"
+            : `${semitones > 0 ? "+" : ""}${semitones} semitones`}
         </p>
       </div>
 

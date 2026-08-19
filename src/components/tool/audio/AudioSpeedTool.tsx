@@ -1,12 +1,17 @@
 import { useState } from "react";
 import { Gauge } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import AudioWaveform from "./AudioWaveform";
 import { useAudioFile } from "../../../lib/hooks/useAudioFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessAudioExtension, stripExtension, AUDIO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessAudioExtension,
+  stripExtension,
+  AUDIO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 import { atempoChain } from "../../../lib/ffmpeg/audio-filters";
 
 const PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -41,12 +46,18 @@ export default function AudioSpeedTool() {
 
   if (!audio.hasFile) {
     return (
-      <Dropzone
-        accept="audio/*"
-        label="Drop an audio file here, or click to browse"
-        hint="Speed up or slow down without changing pitch"
-        onFiles={audio.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Gauge}
+        title="Change Speed"
+        description="Speed up or slow down without changing pitch."
+      >
+        <Dropzone
+          accept="audio/*"
+          label="Drop an audio file here, or click to browse"
+          hint="Speed up or slow down without changing pitch"
+          onFiles={audio.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -92,7 +103,9 @@ export default function AudioSpeedTool() {
           onChange={(e) => setSpeed(Number(e.target.value))}
           className="mt-4 w-full accent-(--color-primary-500)"
         />
-        <p className="text-center text-body-sm font-semibold">{speed.toFixed(2)}&times;</p>
+        <p className="text-center text-body-sm font-semibold">
+          {speed.toFixed(2)}&times;
+        </p>
       </div>
 
       <ExportStatus

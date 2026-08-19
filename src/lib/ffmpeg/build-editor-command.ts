@@ -3,7 +3,7 @@ import {
   guessImageExtension,
   guessAudioExtension,
 } from "./format";
-import { evenRound } from "../geometry";
+import { evenRound, evenFloor } from "../geometry";
 import { toFfmpegTimestamp } from "../time";
 import { escapeDrawtext } from "./drawtext";
 import { freeOverlayExprs } from "./overlay-position";
@@ -113,10 +113,18 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
   // ---- Remove logo (before crop, so the box the user drew against the
   // original preview still points at the right pixels). ----
   if (state.logo.enabled) {
-    const w = evenRound(state.logo.rect.w * currentW);
-    const h = evenRound(state.logo.rect.h * currentH);
-    const x = evenRound(state.logo.rect.x * currentW);
-    const y = evenRound(state.logo.rect.y * currentH);
+    // x/y clamped to leave room for a minimum 2px box plus a small edge
+    // margin, w/h floored against whatever room is left. This build's
+    // delogo rejects a box that even just touches the frame edge ("Logo
+    // area is outside of the frame" fires for x+w == currentW, not only
+    // x+w > currentW), so a region near the frame edge (a natural place for
+    // a watermark) must be kept strictly inside it, or it silently produces
+    // an empty output.
+    const EDGE_MARGIN = 2;
+    const x = Math.min(evenRound(state.logo.rect.x * currentW), currentW - EDGE_MARGIN - 2);
+    const y = Math.min(evenRound(state.logo.rect.y * currentH), currentH - EDGE_MARGIN - 2);
+    const w = evenFloor(Math.min(currentW - EDGE_MARGIN - x, state.logo.rect.w * currentW));
+    const h = evenFloor(Math.min(currentH - EDGE_MARGIN - y, state.logo.rect.h * currentH));
     const out = newLabel("v");
     filters.push(`[${vLabel}]delogo=x=${x}:y=${y}:w=${w}:h=${h}[${out}]`);
     vLabel = out;

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Anchor } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -8,8 +9,14 @@ import ToolPanelSection from "../ToolPanelSection";
 import SimplePreviewStage from "./SimplePreviewStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
-import { stabilizeFilter, type StabilizeStrength } from "../../../lib/ffmpeg/video-filters";
+import {
+  guessVideoExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
+import {
+  stabilizeFilter,
+  type StabilizeStrength,
+} from "../../../lib/ffmpeg/video-filters";
 
 const STRENGTHS: { id: StabilizeStrength; label: string }[] = [
   { id: "light", label: "Light" },
@@ -62,12 +69,18 @@ export default function StabilizeVideoTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a shaky video here, or click to browse"
-        hint="Smooths out handheld camera shake"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Anchor}
+        title="Stabilize Video"
+        description="Smooth out shaky handheld footage."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a shaky video here, or click to browse"
+          hint="Smooths out handheld camera shake"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -105,10 +118,12 @@ export default function StabilizeVideoTool() {
               ))}
             </div>
             <p className="mt-2 text-caption text-(--color-text-muted)">
-              Stronger settings smooth out bigger shakes but crop in and soften the frame a bit more.
+              Stronger settings smooth out bigger shakes but crop in and soften
+              the frame a bit more.
             </p>
             <p className="mt-4 text-body-sm text-(--color-text-muted)">
-              Stabilizing re-encodes the whole clip, so it can take a little longer than other tools.
+              Stabilizing re-encodes the whole clip, so it can take a little
+              longer than other tools.
             </p>
           </ToolPanelSection>
 

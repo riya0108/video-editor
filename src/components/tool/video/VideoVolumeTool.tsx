@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -8,7 +9,11 @@ import ToolPanelSection from "../ToolPanelSection";
 import SimplePreviewStage from "./SimplePreviewStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension, VIDEO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+  VIDEO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 
 export default function VideoVolumeTool() {
   const video = useVideoFile();
@@ -53,12 +58,18 @@ export default function VideoVolumeTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Turn audio up, down, or off entirely"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Volume2}
+        title="Change Video Volume"
+        description="Turn audio up, down, or off entirely."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Turn audio up, down, or off entirely"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 

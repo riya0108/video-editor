@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Gauge } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -8,7 +9,10 @@ import ToolPanelSection from "../ToolPanelSection";
 import SimplePreviewStage from "./SimplePreviewStage";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 import { atempoChain } from "../../../lib/ffmpeg/audio-filters";
 import { formatTime } from "../../../lib/time";
 
@@ -64,12 +68,18 @@ export default function VideoSpeedTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Slow footage down or speed it up"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={Gauge}
+        title="Change Video Speed"
+        description="Slow footage down or speed it up."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Slow footage down or speed it up"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -117,7 +127,9 @@ export default function VideoSpeedTool() {
             />
             <div className="flex items-center justify-between text-caption text-(--color-text-muted)">
               <span>0.25&times;</span>
-              <span className="text-body-sm font-semibold text-(--color-text)">{speed.toFixed(2)}&times;</span>
+              <span className="text-body-sm font-semibold text-(--color-text)">
+                {speed.toFixed(2)}&times;
+              </span>
               <span>4&times;</span>
             </div>
             {video.duration > 0 && (

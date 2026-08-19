@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { FlipHorizontal, FlipVertical } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
@@ -8,7 +9,10 @@ import ToolPanelSection from "../ToolPanelSection";
 import TransformedVideoPreview from "./TransformedVideoPreview";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessVideoExtension, stripExtension } from "../../../lib/ffmpeg/format";
+import {
+  guessVideoExtension,
+  stripExtension,
+} from "../../../lib/ffmpeg/format";
 
 export default function FlipVideoTool() {
   const video = useVideoFile();
@@ -21,7 +25,9 @@ export default function FlipVideoTool() {
     const ext = guessVideoExtension(video.file);
     const inputName = `input.${ext}`;
     const outputName = "output.mp4";
-    const filter = [flipH && "hflip", flipV && "vflip"].filter(Boolean).join(",");
+    const filter = [flipH && "hflip", flipV && "vflip"]
+      .filter(Boolean)
+      .join(",");
 
     await exportState.run(
       {
@@ -59,12 +65,18 @@ export default function FlipVideoTool() {
 
   if (!video.hasFile) {
     return (
-      <Dropzone
-        accept="video/*"
-        label="Drop a video here, or click to browse"
-        hint="Mirror a video horizontally or vertically"
-        onFiles={video.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={FlipHorizontal}
+        title="Flip Video"
+        description="Mirror a video horizontally or vertically."
+      >
+        <Dropzone
+          accept="video/*"
+          label="Drop a video here, or click to browse"
+          hint="Mirror a video horizontally or vertically"
+          onFiles={video.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 

@@ -1,12 +1,17 @@
 import { useState } from "react";
 import { SlidersHorizontal, RotateCcw } from "lucide-react";
 import Dropzone from "../Dropzone";
+import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import AudioWaveform from "./AudioWaveform";
 import { useAudioFile } from "../../../lib/hooks/useAudioFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import { guessAudioExtension, stripExtension, AUDIO_EXT_MIME } from "../../../lib/ffmpeg/format";
+import {
+  guessAudioExtension,
+  stripExtension,
+  AUDIO_EXT_MIME,
+} from "../../../lib/ffmpeg/format";
 
 const BANDS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
@@ -38,7 +43,9 @@ export default function EqualizerTool() {
     const inputName = `input.${ext}`;
     const outputName = `output.${ext}`;
 
-    const filter = BANDS.map((freq, i) => `equalizer=f=${freq}:t=q:w=1:g=${gains[i]}`).join(",");
+    const filter = BANDS.map(
+      (freq, i) => `equalizer=f=${freq}:t=q:w=1:g=${gains[i]}`,
+    ).join(",");
 
     await exportState.run(
       {
@@ -59,12 +66,18 @@ export default function EqualizerTool() {
 
   if (!audio.hasFile) {
     return (
-      <Dropzone
-        accept="audio/*"
-        label="Drop an audio file here, or click to browse"
-        hint="Shape the sound with a 10-band graphic EQ"
-        onFiles={audio.handleFiles}
-      />
+      <ToolUploadScreen
+        icon={SlidersHorizontal}
+        title="Equalizer"
+        description="Shape the sound with a 10-band graphic EQ."
+      >
+        <Dropzone
+          accept="audio/*"
+          label="Drop an audio file here, or click to browse"
+          hint="Shape the sound with a 10-band graphic EQ"
+          onFiles={audio.handleFiles}
+        />
+      </ToolUploadScreen>
     );
   }
 
@@ -106,7 +119,10 @@ export default function EqualizerTool() {
       </div>
 
       <div className="mt-6 overflow-x-auto">
-        <div className="flex items-end justify-between gap-2 sm:gap-4" style={{ minWidth: 420 }}>
+        <div
+          className="flex items-end justify-between gap-2 sm:gap-4"
+          style={{ minWidth: 420 }}
+        >
           {BANDS.map((freq, i) => (
             <div key={freq} className="flex flex-1 flex-col items-center gap-2">
               <span className="text-caption tabular-nums text-(--color-text-muted)">
@@ -125,7 +141,9 @@ export default function EqualizerTool() {
                   style={{ writingMode: "vertical-lr", direction: "rtl" }}
                 />
               </div>
-              <span className="text-caption text-(--color-text-faint)">{bandLabel(freq)}</span>
+              <span className="text-caption text-(--color-text-faint)">
+                {bandLabel(freq)}
+              </span>
             </div>
           ))}
         </div>
