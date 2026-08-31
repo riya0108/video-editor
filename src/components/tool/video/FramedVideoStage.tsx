@@ -33,6 +33,8 @@ export default function FramedVideoStage({
   /** Render a live-processed <canvas> (fed by onDrawFrame) over the stage instead of the plain video — for effects (chroma key, background blur) that need real pixel access. The <video> stays mounted (hidden) as the frame/audio/playback source. */
   canvasMode = false,
   onDrawFrame,
+  /** Swaps the stage's solid black backdrop for a checkerboard pattern — for canvasMode previews whose canvas can be genuinely transparent (e.g. a "transparent background" chroma-key/cutout preview), so unfilled pixels read as transparency instead of black. */
+  checkerboard = false,
   /** Rendered as a stage-sized (not box-sized) absolutely-positioned top layer — for content with its own unrelated natural dimensions, like an intro/outro clip, that needs to cover the full frame rather than align to the main video's letterboxed content box. */
   stageOverlay,
   children,
@@ -54,6 +56,7 @@ export default function FramedVideoStage({
   zoom?: number;
   panOffset?: { x: number; y: number };
   canvasMode?: boolean;
+  checkerboard?: boolean;
   onDrawFrame?: (
     ctx: CanvasRenderingContext2D,
     video: HTMLVideoElement,
@@ -150,10 +153,36 @@ export default function FramedVideoStage({
     };
   }, [canvasMode, videoRef]);
 
+  // The loop above only redraws when a *new video frame* arrives —
+  // `requestVideoFrameCallback` simply never fires again once the video is
+  // paused. Without this, tweaking a live-effect control (chroma color,
+  // background choice, etc.) on a paused source wouldn't touch the canvas
+  // until playback resumed. This effect repaints once, immediately, whenever
+  // the draw callback itself changes (i.e. whenever the caller's settings
+  // change), independent of whether a new frame is available.
+  useEffect(() => {
+    if (!canvasMode || !onDrawFrame) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    const { stage: s, box: b } = latest.current;
+    if (s.width <= 0 || s.height <= 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    const targetW = Math.round(s.width * dpr);
+    const targetH = Math.round(s.height * dpr);
+    if (canvas.width !== targetW) canvas.width = targetW;
+    if (canvas.height !== targetH) canvas.height = targetH;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      onDrawFrame(ctx, video, { stage: s, box: b });
+    }
+  }, [canvasMode, onDrawFrame, videoRef, stage.width, stage.height, box.width, box.height]);
+
   return (
     <div ref={measureRef} className="w-full">
       <div
-        className="relative mx-auto flex items-center justify-center overflow-hidden rounded-lg bg-black"
+        className={`relative mx-auto flex items-center justify-center overflow-hidden rounded-lg ${checkerboard ? "bg-checkerboard" : "bg-black"}`}
         style={{ width: aspect ? stage.width || "100%" : "100%", height: stage.height }}
       >
         <video

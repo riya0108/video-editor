@@ -1,4 +1,4 @@
-const CACHE_NAME = "clipbench-tts-models-v1";
+const CACHE_NAME = "clipbench-ml-models-v1";
 
 function hfResolveUrl(repoId: string, filename: string): string {
   return `https://huggingface.co/${repoId}/resolve/main/${filename}`;
@@ -10,7 +10,14 @@ export async function downloadModelFile(
   filename: string,
   onProgress?: (fraction: number) => void,
 ): Promise<Uint8Array> {
-  const url = hfResolveUrl(repoId, filename);
+  return downloadModelFileFromUrl(hfResolveUrl(repoId, filename), onProgress);
+}
+
+/** Same as {@link downloadModelFile}, but for an arbitrary (e.g. same-origin) URL rather than a Hugging Face repo. */
+export async function downloadModelFileFromUrl(
+  url: string,
+  onProgress?: (fraction: number) => void,
+): Promise<Uint8Array> {
   const cache = await caches.open(CACHE_NAME).catch(() => null);
 
   const cached = await cache?.match(url);
@@ -22,7 +29,7 @@ export async function downloadModelFile(
 
   const response = await fetch(url);
   if (!response.ok || !response.body) {
-    throw new Error(`Failed to download ${filename} (${response.status})`);
+    throw new Error(`Failed to download ${url} (${response.status})`);
   }
 
   const total = Number(response.headers.get("content-length")) || 0;

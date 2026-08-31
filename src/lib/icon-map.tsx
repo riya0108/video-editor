@@ -26,6 +26,7 @@ import {
   Sparkles,
   UserRoundX,
   FileText,
+  Layers,
   type LucideIcon,
 } from "lucide-react";
 
@@ -57,6 +58,7 @@ export const iconMap: Record<string, LucideIcon> = {
   sparkles: Sparkles,
   "user-round-x": UserRoundX,
   "file-text": FileText,
+  layers: Layers,
 };
 
 export function getIcon(key: string): LucideIcon {

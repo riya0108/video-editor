@@ -12,6 +12,7 @@ import { positionExprs } from "./text-position";
 import { VOICE_REMOVER_FILTER, noiseReductionFilter, atempoChain } from "./audio-filters";
 import { resolveQualityTarget, upscaleFilter } from "./upscale-filter";
 import { planCutoutOverlay } from "./person-cutout-filter";
+import { appendDelogoWithClone } from "./logo-removal";
 import { buildCaptionsFilter, remapCuesToTrim } from "../captions/build-captions-filter";
 import { measureKaraokeLayouts } from "../captions/karaoke-layout";
 import { parseHexColor } from "../color";
@@ -78,7 +79,12 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
   };
 
   const addFileInput = (name: string, data: File | Blob, preArgs: string[] = []): number => {
-    inputArgs.push(...preArgs, "-i", name);
+    // Decoder thread count, not just the encoder's: this build's core-mt
+    // wasm can only reliably spin up its *initial* pthread pool — any later
+    // on-demand worker request (e.g. from an auto-multithreaded h264 decode)
+    // hangs forever in this sandbox with no error. Pinning decode to 1
+    // thread per input keeps total pthread demand inside the initial pool.
+    inputArgs.push("-threads", "1", ...preArgs, "-i", name);
     inputs.push({ name, data });
     const idx = inputCount;
     inputCount += 1;
@@ -125,9 +131,7 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     const y = Math.min(evenRound(state.logo.rect.y * currentH), currentH - EDGE_MARGIN - 2);
     const w = evenFloor(Math.min(currentW - EDGE_MARGIN - x, state.logo.rect.w * currentW));
     const h = evenFloor(Math.min(currentH - EDGE_MARGIN - y, state.logo.rect.h * currentH));
-    const out = newLabel("v");
-    filters.push(`[${vLabel}]delogo=x=${x}:y=${y}:w=${w}:h=${h}[${out}]`);
-    vLabel = out;
+    vLabel = appendDelogoWithClone(filters, vLabel, x, y, w, h, [], currentW, currentH, "", () => newLabel("v"));
   }
 
   // ---- Crop ----

@@ -10,11 +10,14 @@ import {
   LoaderCircle,
   Maximize2,
   Plus,
+  Redo2,
+  RotateCcw,
   ScanSearch,
   Shield,
   Square,
   Subtitles,
   Trash2,
+  Undo2,
   X,
   ZoomIn,
   ZoomOut,
@@ -209,9 +212,56 @@ export default function RemoveLogoTool() {
   const [detectMessage, setDetectMessage] = useState<string | null>(null);
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
+  const [brushHistory, setBrushHistory] = useState<
+    Record<string, { past: FractionPoint[][]; future: FractionPoint[][] }>
+  >({});
 
   const selectedIndex = regions.findIndex((r) => r.id === selectedId);
   const selected = selectedIndex >= 0 ? regions[selectedIndex] : undefined;
+  const selectedBrushHistory = selected ? brushHistory[selected.id] : undefined;
+
+  // Snapshots the region's current brush path onto its undo stack — called
+  // right before a new stroke/erase/clear mutates it, so "Undo" always steps
+  // back to what the canvas looked like before that action.
+  const beginBrushStroke = (id: string) => {
+    const region = regions.find((r) => r.id === id);
+    if (!region) return;
+    setBrushHistory((h) => {
+      const entry = h[id] ?? { past: [], future: [] };
+      return { ...h, [id]: { past: [...entry.past, region.points], future: [] } };
+    });
+  };
+
+  const undoBrush = (id: string) => {
+    const entry = brushHistory[id];
+    if (!entry || entry.past.length === 0) return;
+    const prevPoints = entry.past[entry.past.length - 1];
+    const region = regions.find((r) => r.id === id);
+    const currentPoints = region ? region.points : [];
+    setRegions((rs) => rs.map((r) => (r.id === id ? { ...r, points: prevPoints } : r)));
+    setBrushHistory((h) => ({
+      ...h,
+      [id]: { past: entry.past.slice(0, -1), future: [...entry.future, currentPoints] },
+    }));
+  };
+
+  const redoBrush = (id: string) => {
+    const entry = brushHistory[id];
+    if (!entry || entry.future.length === 0) return;
+    const nextPoints = entry.future[entry.future.length - 1];
+    const region = regions.find((r) => r.id === id);
+    const currentPoints = region ? region.points : [];
+    setRegions((rs) => rs.map((r) => (r.id === id ? { ...r, points: nextPoints } : r)));
+    setBrushHistory((h) => ({
+      ...h,
+      [id]: { past: [...entry.past, currentPoints], future: entry.future.slice(0, -1) },
+    }));
+  };
+
+  const resetBrush = (id: string) => {
+    beginBrushStroke(id);
+    updateRegion(id, { points: [] });
+  };
 
   const updateRegion = (id: string, patch: Partial<Region>) => {
     setRegions((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -578,6 +628,7 @@ export default function RemoveLogoTool() {
     setDetectMessage(null);
     setBatchFiles([]);
     setBatchRunning(false);
+    setBrushHistory({});
   };
 
   if (!video.hasFile) {
@@ -585,7 +636,7 @@ export default function RemoveLogoTool() {
       <ToolUploadScreen
         icon={Eraser}
         title="Remove Logo from Video"
-        description="Blur out a watermark or logo in a region you choose."
+        description="Erase a watermark or logo in a region you choose, reconstructed from the surrounding video."
       >
         <Dropzone
           accept="video/*"
@@ -772,41 +823,71 @@ export default function RemoveLogoTool() {
                     </button>
                   )}
                 </div>
-                {selected.shape === "brush" && selected.points.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => updateRegion(selected.id, { points: [] })}
-                    className="text-caption font-medium text-(--color-text-muted) hover:text-danger-600"
-                  >
-                    Clear
-                  </button>
-                )}
               </div>
               {selected.shape === "brush" && (
                 <>
                   <p className="mt-1 text-caption text-(--color-text-muted)">
                     {brushMode === "erase"
                       ? "Drag on the preview to remove part of the painted stroke."
-                      : "Drag on the preview to paint over the watermark. Keep strokes short for the cleanest result."}
+                      : "Good for a static logo or timestamp — drag on the preview to paint over it. Keep strokes short for the cleanest result."}
                   </p>
-                  <label className="mt-3 flex items-center gap-3 text-caption text-(--color-text-muted)">
-                    Brush size
-                    <input
-                      type="range"
-                      min={2}
-                      max={15}
-                      value={Math.round(selected.brushRadius * 100)}
-                      onChange={(e) =>
-                        updateRegion(selected.id, {
-                          brushRadius: Number(e.target.value) / 100,
-                        })
-                      }
-                      className="w-40 accent-(--color-primary-500)"
-                    />
-                    <span className="w-10 tabular-nums">
-                      {Math.round(selected.brushRadius * 100)}%
-                    </span>
-                  </label>
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-3 text-caption text-(--color-text-muted)">
+                      Size
+                      <input
+                        type="range"
+                        min={2}
+                        max={15}
+                        value={Math.round(selected.brushRadius * 100)}
+                        onChange={(e) =>
+                          updateRegion(selected.id, {
+                            brushRadius: Number(e.target.value) / 100,
+                          })
+                        }
+                        className="w-32 accent-(--color-primary-500)"
+                      />
+                      <input
+                        type="number"
+                        min={2}
+                        max={15}
+                        value={Math.round(selected.brushRadius * 100)}
+                        onChange={(e) => {
+                          const v = Math.max(2, Math.min(15, Number(e.target.value) || 2));
+                          updateRegion(selected.id, { brushRadius: v / 100 });
+                        }}
+                        className="w-12 rounded-md border border-(--color-border) bg-transparent px-1.5 py-0.5 text-center text-caption tabular-nums text-(--color-text)"
+                      />
+                    </label>
+                    <div className="ml-auto flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={!selectedBrushHistory?.past.length}
+                        onClick={() => undoBrush(selected.id)}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-(--color-text-muted) transition-colors hover:bg-(--color-bg-subtle) hover:text-(--color-text) disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                      >
+                        <Undo2 size={12} />
+                        Undo
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!selectedBrushHistory?.future.length}
+                        onClick={() => redoBrush(selected.id)}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-(--color-text-muted) transition-colors hover:bg-(--color-bg-subtle) hover:text-(--color-text) disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                      >
+                        <Redo2 size={12} />
+                        Redo
+                      </button>
+                      <button
+                        type="button"
+                        disabled={selected.points.length === 0}
+                        onClick={() => resetBrush(selected.id)}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-(--color-text-muted) transition-colors hover:bg-(--color-bg-subtle) hover:text-danger-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                      >
+                        <RotateCcw size={12} />
+                        Reset
+                      </button>
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -1212,6 +1293,7 @@ export default function RemoveLogoTool() {
                           points={r.points}
                           brushRadius={r.brushRadius}
                           onChange={(points) => updateRegion(r.id, { points })}
+                          onStrokeStart={() => beginBrushStroke(r.id)}
                           color="danger"
                           mode={brushMode}
                         />

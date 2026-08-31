@@ -112,6 +112,106 @@ interface Patch {
   w: string;
   h: string;
   timeRange: LogoRegion["timeRange"];
+  /** Set only for a static (non-keyframed) rect patch — lets the second pass clone real
+   * texture in from a neighboring box instead of leaving delogo's flat interpolation. */
+  numeric?: { x: number; y: number; w: number; h: number };
+}
+
+function evenRoundLocal(n: number): number {
+  return Math.round(n / 2) * 2;
+}
+
+/**
+ * Finds a same-size box of *real* video just outside the patch (above, below,
+ * left, or right of it) to clone texture from. Tried in that order, skipping
+ * any candidate that falls off the frame or overlaps another patch (so one
+ * logo's fill doesn't get built out of another logo's box).
+ */
+function findDonorRect(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  others: { x: number; y: number; w: number; h: number }[],
+  videoWidth: number,
+  videoHeight: number,
+): { x: number; y: number } | null {
+  const candidates = [
+    { x, y: y - h },
+    { x, y: y + h },
+    { x: x - w, y },
+    { x: x + w, y },
+  ];
+  for (const c of candidates) {
+    if (c.x < 0 || c.y < 0 || c.x + w > videoWidth || c.y + h > videoHeight) continue;
+    const overlaps = others.some(
+      (o) => c.x + w > o.x && o.x + o.w > c.x && c.y + h > o.y && o.y + o.h > c.y,
+    );
+    if (!overlaps) return { x: evenRoundLocal(c.x), y: evenRoundLocal(c.y) };
+  }
+  return null;
+}
+
+/** Donor texture is blended over delogo's smoother fill rather than pasted flat, so a
+ * mismatched donor (different shadow/gradient) still fades toward delogo's edge-matched
+ * base instead of reading as a hard-pasted rectangle. */
+const DONOR_OPACITY = 0.62;
+
+/**
+ * Appends the filters for one delogo'd box to `parts`, then — if a clean donor box is
+ * found nearby — clones its real texture in over the delogo fill (see findDonorRect and
+ * the buildLogoRemovalFilter doc comment for why). Shared by the multi-region tool and
+ * the single-box logo step in the main editor so both get the same quality. `makeLabel`
+ * must return a fresh, collision-free label on every call.
+ */
+export function appendDelogoWithClone(
+  parts: string[],
+  inputLabel: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  others: { x: number; y: number; w: number; h: number }[],
+  videoWidth: number,
+  videoHeight: number,
+  enable: string,
+  makeLabel: () => string,
+): string {
+  const delogoOut = makeLabel();
+  parts.push(`[${inputLabel}]delogo=x=${x}:y=${y}:w=${w}:h=${h}${enable}[${delogoOut}]`);
+
+  const rx = Math.round(x);
+  const ry = Math.round(y);
+  const rw = Math.min(evenRoundLocal(w), videoWidth - rx);
+  const rh = Math.min(evenRoundLocal(h), videoHeight - ry);
+  const donor = findDonorRect(rx, ry, rw, rh, others, videoWidth, videoHeight);
+  if (!donor) return delogoOut;
+
+  // Each labeled pad can only be consumed once, so the frame needs a 3-way split: one
+  // copy stays whole (the final overlay's base), one gets cropped to the delogo'd
+  // patch, one gets cropped to the donor box.
+  const base = makeLabel();
+  const cropSrc = makeLabel();
+  const donorSrc = makeLabel();
+  parts.push(`[${delogoOut}]split=3[${base}][${cropSrc}][${donorSrc}]`);
+
+  const delogoCrop = makeLabel();
+  parts.push(`[${cropSrc}]crop=${rw}:${rh}:${rx}:${ry}[${delogoCrop}]`);
+  // `blend` isn't compiled into this project's minimal ffmpeg-core.wasm build, so the
+  // donor's opacity is applied via its alpha channel instead: fade it down with
+  // colorchannelmixer, then let `overlay` (which is compiled in and used everywhere
+  // else in this codebase) do the actual compositing.
+  const donorCrop = makeLabel();
+  parts.push(
+    `[${donorSrc}]crop=${rw}:${rh}:${donor.x}:${donor.y},format=rgba,colorchannelmixer=aa=${DONOR_OPACITY}[${donorCrop}]`,
+  );
+
+  const blended = makeLabel();
+  parts.push(`[${delogoCrop}][${donorCrop}]overlay[${blended}]`);
+
+  const composited = makeLabel();
+  parts.push(`[${base}][${blended}]overlay=x=${rx}:y=${ry}${enable}[${composited}]`);
+  return composited;
 }
 
 /**
@@ -131,6 +231,14 @@ interface Patch {
  * block-matching search benchmarked ~25x slower per pixel than `delogo` even
  * on native ffmpeg — in this single-threaded wasm build it never got past
  * frame 0 on a real video, so exports looked stuck at 0%.)
+ *
+ * delogo alone reconstructs a box by interpolating *between* its edges, which
+ * reads as a soft blur/smudge on any textured background (grass, brick,
+ * gradient sky, carpet). For a static (non-keyframed) rect patch, a second
+ * pass clones a same-size sample of real neighboring pixels (see
+ * findDonorRect) and blends it over the delogo fill — real texture and grain
+ * instead of a flat interpolated patch, while delogo's edge-matched result
+ * still anchors the boundary underneath if no clean donor box is available.
  */
 export function buildLogoRemovalFilter(
   regions: LogoRegion[],
@@ -183,20 +291,51 @@ export function buildLogoRemovalFilter(
     const y = Math.min(Math.max(0, baseY - pad), videoHeight - EDGE_MARGIN - 2);
     const w = Math.min(videoWidth - EDGE_MARGIN - x, baseW + 2 * pad);
     const h = Math.min(videoHeight - EDGE_MARGIN - y, baseH + 2 * pad);
-    patches.push({ x: String(x), y: String(y), w: String(w), h: String(h), timeRange: region.timeRange });
+    patches.push({
+      x: String(x),
+      y: String(y),
+      w: String(w),
+      h: String(h),
+      timeRange: region.timeRange,
+      numeric: { x, y, w, h },
+    });
   }
+
+  const staticBoxes = patches.filter((p) => p.numeric).map((p) => p.numeric!);
 
   let current = "0:v";
   const parts: string[] = [];
-  patches.forEach((patch, i) => {
+  let tmpId = 0;
+  const nextTmp = () => `ldt${tmpId++}`;
+
+  patches.forEach((patch) => {
     const enable = patch.timeRange
       ? `:enable='${escapeFilterArg(`between(t,${patch.timeRange.start},${patch.timeRange.end})`)}'`
       : "";
-    const out = i === patches.length - 1 ? "logoout" : `ld${i}`;
-    parts.push(
-      `[${current}]delogo=x='${escapeFilterArg(patch.x)}':y='${escapeFilterArg(patch.y)}':w='${escapeFilterArg(patch.w)}':h='${escapeFilterArg(patch.h)}'${enable}[${out}]`,
+
+    if (!patch.numeric) {
+      const delogoOut = nextTmp();
+      parts.push(
+        `[${current}]delogo=x='${escapeFilterArg(patch.x)}':y='${escapeFilterArg(patch.y)}':w='${escapeFilterArg(patch.w)}':h='${escapeFilterArg(patch.h)}'${enable}[${delogoOut}]`,
+      );
+      current = delogoOut;
+      return;
+    }
+
+    const { x, y, w, h } = patch.numeric;
+    current = appendDelogoWithClone(
+      parts,
+      current,
+      x,
+      y,
+      w,
+      h,
+      staticBoxes.filter((b) => b !== patch.numeric),
+      videoWidth,
+      videoHeight,
+      enable,
+      nextTmp,
     );
-    current = out;
   });
 
   return { filterComplex: parts.join(";"), outputLabel: current };

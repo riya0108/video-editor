@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { FractionPoint } from "../../../lib/ffmpeg/logo-removal";
 
 const MIN_POINT_DIST = 0.006;
@@ -10,6 +10,7 @@ export default function BrushOverlay({
   points,
   brushRadius,
   onChange,
+  onStrokeStart,
   color = "danger",
   mode = "paint",
 }: {
@@ -19,6 +20,8 @@ export default function BrushOverlay({
   /** Fraction of min(videoWidth, videoHeight) — used here to size the on-screen stroke to match. */
   brushRadius: number;
   onChange: (points: FractionPoint[]) => void;
+  /** Fired once per drag, before the first point is applied — lets the parent snapshot state for undo. */
+  onStrokeStart?: () => void;
   color?: "primary" | "danger";
   /** "erase" drags remove any existing points within brushRadius of the cursor instead of adding new ones. */
   mode?: "paint" | "erase";
@@ -27,6 +30,7 @@ export default function BrushOverlay({
   const [drawing, setDrawing] = useState(false);
   const drawnPoints = useRef<FractionPoint[]>([]);
   const erasingPoints = useRef<FractionPoint[]>([]);
+  const blurId = useId();
 
   const toFraction = (e: { clientX: number; clientY: number }): FractionPoint | null => {
     const el = containerRef.current;
@@ -45,6 +49,7 @@ export default function BrushOverlay({
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const p = toFraction(e);
     if (!p) return;
+    onStrokeStart?.();
     if (mode === "erase") {
       erasingPoints.current = eraseNear(points, p);
       onChange(erasingPoints.current);
@@ -78,8 +83,12 @@ export default function BrushOverlay({
 
   const strokeColor = color === "danger" ? "#ef4444" : "#3b82f6";
   const strokeWidthPx = brushRadius * 2 * Math.min(boxWidth, boxHeight);
-  const pathD = points.length > 1 ? `M ${points.map((p) => `${p.x * boxWidth},${p.y * boxHeight}`).join(" L ")}` : "";
-  const dotR = strokeWidthPx / 2;
+  const dabR = strokeWidthPx / 2;
+  // A soft gaussian blur turns discrete stamped dabs into one continuous,
+  // feathered blob (matching a real soft-brush eraser) instead of the hard,
+  // uniform-width outlined stroke this used to render.
+  const blurStdDev = Math.max(1, dabR * 0.22);
+  const filterId = `brush-soft-${blurId}`;
 
   return (
     <div
@@ -96,20 +105,37 @@ export default function BrushOverlay({
       onPointerCancel={handlePointerUp}
     >
       <svg width={boxWidth} height={boxHeight} className="pointer-events-none absolute inset-0">
-        {points.length === 1 && (
-          <circle cx={points[0].x * boxWidth} cy={points[0].y * boxHeight} r={dotR} fill={`${strokeColor}55`} stroke={strokeColor} strokeWidth={2} />
+        <defs>
+          <filter id={filterId} x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation={blurStdDev} />
+          </filter>
+        </defs>
+        {points.length > 0 && (
+          <g filter={`url(#${filterId})`}>
+            {points.map((p, i) => (
+              <circle
+                key={i}
+                cx={p.x * boxWidth}
+                cy={p.y * boxHeight}
+                r={dabR * 0.82}
+                fill={strokeColor}
+                opacity={0.6}
+              />
+            ))}
+          </g>
         )}
-        {pathD && (
-          <path
-            d={pathD}
+        {points.length > 0 && (
+          <circle
+            cx={points[points.length - 1].x * boxWidth}
+            cy={points[points.length - 1].y * boxHeight}
+            r={dabR}
             fill="none"
-            stroke={`${strokeColor}66`}
-            strokeWidth={strokeWidthPx}
-            strokeLinecap="round"
-            strokeLinejoin="round"
+            stroke={strokeColor}
+            strokeWidth={1.5}
+            strokeDasharray="3 3"
+            opacity={0.85}
           />
         )}
-        {pathD && <path d={pathD} fill="none" stroke={strokeColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
         {points.length === 0 && mode === "paint" && (
           <text x={boxWidth / 2} y={boxHeight / 2} textAnchor="middle" fill="white" fontSize={13} opacity={0.85}>
             Drag to paint over the watermark

@@ -1,7 +1,7 @@
 import { Tensor } from "@huggingface/transformers";
 import * as ort from "onnxruntime-web";
-import { createInferenceSession, detectRuntimeDevice, type RuntimeDevice } from "./onnx-runtime";
-import { downloadModelFile, downloadModelText } from "./model-cache";
+import { createInferenceSession, detectRuntimeDevice, type RuntimeDevice } from "../ml/onnx-runtime";
+import { downloadModelFile, downloadModelText } from "../ml/model-cache";
 import { calculateRMS, normalizeToInt16 } from "./audio-tensor";
 
 const REPO_ID = "nsarang/F5-TTS-ONNX";

@@ -7,14 +7,21 @@ import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
 import SimplePreviewStage from "./SimplePreviewStage";
-import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
-import {
-  guessVideoExtension,
-  guessImageExtension,
-  stripExtension,
-} from "../../../lib/ffmpeg/format";
+import { useUpscaleExport } from "../../../lib/hooks/useUpscaleExport";
+import { stripExtension } from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
-import { upscaleFilter } from "../../../lib/ffmpeg/upscale-filter";
+import type { VideoUpscaleQuality } from "../../../lib/upscale/upscale-media";
+
+// Rough frame-count floor past which the fully client-side, frame-by-frame AI
+// pipeline (every frame held in browser memory as it's extracted/upscaled/
+// re-encoded — see upscaleVideoFile) risks running the tab out of memory or
+// taking an impractically long time.
+const LONG_VIDEO_FRAME_WARNING = 300;
+
+// Mirrors upscale-media.ts's FAST_MODE_MAX_FPS — used here only to estimate
+// frame count for the long-video warning, not to drive the actual pipeline.
+const FAST_MODE_MAX_FPS = 15;
+const ASSUMED_SOURCE_FPS = 30;
 
 type Mode = "factor" | "resolution";
 const FACTORS = [1.5, 2, 3, 4];
@@ -30,14 +37,15 @@ export default function UpscaleMediaTool() {
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(0);
+  const [durationSec, setDurationSec] = useState(0);
   const [metadataError, setMetadataError] = useState<string | null>(null);
 
   const [mode, setMode] = useState<Mode>("factor");
   const [factor, setFactor] = useState(2);
   const [resolutionId, setResolutionId] = useState("1080p");
-  const [sharpen, setSharpen] = useState(true);
+  const [videoQuality, setVideoQuality] = useState<VideoUpscaleQuality>("fast");
 
-  const exportState = useFfmpegExport();
+  const exportState = useUpscaleExport();
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleFiles = (files: File[]) => {
@@ -49,6 +57,7 @@ export default function UpscaleMediaTool() {
     setSourceUrl(URL.createObjectURL(picked));
     setWidth(0);
     setHeight(0);
+    setDurationSec(0);
     setMetadataError(null);
   };
 
@@ -62,6 +71,7 @@ export default function UpscaleMediaTool() {
     if (!el) return;
     setWidth(el.videoWidth);
     setHeight(el.videoHeight);
+    setDurationSec(el.duration || 0);
   };
 
   const handleVideoError = () => {
@@ -82,55 +92,17 @@ export default function UpscaleMediaTool() {
   };
 
   const size = targetSize();
+  const effectiveFps = kind === "video" && videoQuality === "fast" ? Math.min(ASSUMED_SOURCE_FPS, FAST_MODE_MAX_FPS) : ASSUMED_SOURCE_FPS;
+  const estimatedFrames = kind === "video" ? Math.round(durationSec * effectiveFps) : 0;
+  const isLongVideo = estimatedFrames > LONG_VIDEO_FRAME_WARNING;
 
   const handleExport = async () => {
     if (!file || !size) return;
-    const vf = upscaleFilter(size.w, size.h, sharpen);
-
     if (kind === "image") {
-      const ext = guessImageExtension(file);
-      const inputName = `input.${ext}`;
-      const outputName = "output.png";
-      await exportState.run(
-        {
-          inputs: [{ name: inputName, data: file }],
-          args: ["-i", inputName, "-vf", vf, outputName],
-          outputName,
-          outputMimeType: "image/png",
-        },
-        `upscaled-${stripExtension(file.name)}.png`,
-      );
+      await exportState.runImage(file, size.w, size.h, `upscaled-${stripExtension(file.name)}.png`);
       return;
     }
-
-    const ext = guessVideoExtension(file);
-    const inputName = `input.${ext}`;
-    const outputName = "output.mp4";
-    await exportState.run(
-      {
-        inputs: [{ name: inputName, data: file }],
-        args: [
-          "-i",
-          inputName,
-          "-vf",
-          vf,
-          "-c:v",
-          "libx264",
-          "-threads",
-          "1",
-          "-preset",
-          "ultrafast",
-          "-crf",
-          "20",
-          "-c:a",
-          "copy",
-          outputName,
-        ],
-        outputName,
-        outputMimeType: "video/mp4",
-      },
-      `upscaled-${stripExtension(file.name)}.mp4`,
-    );
+    await exportState.runVideo(file, size.w, size.h, videoQuality, `upscaled-${stripExtension(file.name)}.mp4`);
   };
 
   const reset = () => {
@@ -148,12 +120,12 @@ export default function UpscaleMediaTool() {
       <ToolUploadScreen
         icon={Sparkles}
         title="Upscale Video or Image"
-        description="Increase resolution with sharpened, lanczos-resampled scaling."
+        description="Increase resolution with real AI super-resolution — sharper detail, not just a bigger file."
       >
         <Dropzone
           accept="image/*,video/*"
           label="Drop an image or video here, or click to browse"
-          hint="Upscale its resolution with sharpened, lanczos-resampled scaling"
+          hint="Upscale its resolution with an on-device AI super-resolution model"
           onFiles={handleFiles}
         />
       </ToolUploadScreen>
@@ -224,16 +196,6 @@ export default function UpscaleMediaTool() {
               )}
             </div>
 
-            <label className="mt-4 flex items-center gap-2 text-caption text-(--color-text-muted)">
-              <input
-                type="checkbox"
-                checked={sharpen}
-                onChange={(e) => setSharpen(e.target.checked)}
-                className="accent-(--color-primary-500)"
-              />
-              Sharpen (recommended)
-            </label>
-
             <div className="mt-4 rounded-lg border border-(--color-border) bg-(--color-bg-subtle) p-3 text-caption text-(--color-text-muted)">
               {width > 0 && height > 0 ? (
                 size ? (
@@ -251,11 +213,44 @@ export default function UpscaleMediaTool() {
               )}
             </div>
             <p className="mt-3 text-caption text-(--color-text-muted)">
-              This is fast, filter-based upscaling (sharpened lanczos
-              resampling) — not an AI model generating new detail, so very large
-              jumps (e.g. 4x on a small source) will look softer than a
-              dedicated super-resolution tool.
+              This runs a real super-resolution model on-device (a one-time
+              ~5MB model download, cached after first use) — it reconstructs
+              plausible detail rather than just resizing and sharpening, so
+              results are genuinely clearer, not just bigger. The model only
+              does as much work as your chosen scale needs, so a 1.5x or 2x
+              target finishes well before a 4x one.
             </p>
+            {kind === "video" && (
+              <>
+                <p className="mt-2 text-caption text-(--color-text-muted)">
+                  Video is upscaled frame by frame, so it's slower than a simple
+                  resize{isLongVideo ? " — this clip is long enough that it may take a while and use a lot of memory; a shorter clip will go faster" : ""}.
+                  There's no GPU shortcut for this in-browser, so speed comes
+                  from processing fewer frames per second.
+                </p>
+                <div className="mt-3 flex items-center gap-1 rounded-md border border-(--color-border) p-1">
+                  <button
+                    type="button"
+                    onClick={() => setVideoQuality("fast")}
+                    className={`flex-1 rounded px-3 py-1.5 text-caption font-medium transition-colors ${videoQuality === "fast" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
+                  >
+                    Fast (~{FAST_MODE_MAX_FPS}fps)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVideoQuality("full")}
+                    className={`flex-1 rounded px-3 py-1.5 text-caption font-medium transition-colors ${videoQuality === "full" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
+                  >
+                    Every frame
+                  </button>
+                </div>
+                <p className="mt-2 text-caption text-(--color-text-muted)">
+                  {videoQuality === "fast"
+                    ? `Processes at up to ${FAST_MODE_MAX_FPS}fps and outputs at that rate — roughly halves the wait on typical 24-30fps footage, at the cost of less smooth motion. Good for talking-head or mostly-static clips.`
+                    : "Processes and outputs every source frame — smoothest motion, but takes the longest."}
+                </p>
+              </>
+            )}
           </ToolPanelSection>
 
           <ExportStatus
@@ -263,7 +258,10 @@ export default function UpscaleMediaTool() {
             engineFraction={exportState.engineFraction}
             runFraction={exportState.runFraction}
             error={exportState.error ?? metadataError}
-            runLabel="Upscaling…"
+            runLabel={exportState.runLabel}
+            engineLabel="Downloading AI model…"
+            etaLabel={exportState.etaLabel}
+            tip="This runs entirely on your device, so it's fine to switch tabs — keep working on other things, or put on your favorite song, and check back once it's done."
           />
 
           <button

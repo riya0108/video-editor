@@ -33,6 +33,12 @@ export default function VideoSpeedTool() {
       {
         inputs: [{ name: inputName, data: video.file }],
         args: [
+          // Decoder thread count, not just the encoder's below: this build's
+          // core-mt wasm can only reliably spin up its initial pthread pool —
+          // any later on-demand worker request (e.g. from an
+          // auto-multithreaded h264 decode) hangs forever with no error.
+          "-threads",
+          "1",
           "-i",
           inputName,
           "-filter_complex",
