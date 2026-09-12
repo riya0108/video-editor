@@ -34,6 +34,7 @@ import ResultPanel from "../ResultPanel";
 import FramedVideoStage from "./FramedVideoStage";
 import RectOverlay, { type FractionRect } from "./RectOverlay";
 import CaptionsEditor from "./CaptionsEditor";
+import CaptionStylesPanel from "./CaptionStylesPanel";
 import EditorTimeline, { type TimelineLane } from "./editor/EditorTimeline";
 import EditorRailButton from "./editor/EditorRailButton";
 import PanelHeader from "./editor/PanelHeader";
@@ -44,6 +45,7 @@ import FloatingTextToolbar, {
   MAX_TEXT_SIZE,
 } from "./editor/FloatingTextToolbar";
 import PositionedTextBlock from "./editor/PositionedTextBlock";
+import CaptionOverlay from "./editor/CaptionOverlay";
 import DraggableResizableOverlay from "./editor/DraggableResizableOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
@@ -1667,6 +1669,7 @@ export default function VideoEditorTool() {
                     personCutout={personCutout}
                     rangeStart={start}
                     rangeEnd={end}
+                    showStylesTab={false}
                   />
                 </div>
               </>
@@ -2154,6 +2157,32 @@ export default function VideoEditorTool() {
                     }
                   />
                 }
+                floatingOverlay={() =>
+                  !pickingColor && (
+                    <>
+                      {activePanel === "text" && doc.text.enabled && (
+                        <FloatingTextToolbar
+                          y={doc.text.y}
+                          fontId={doc.text.fontId}
+                          fontSize={doc.text.fontSize}
+                          color={doc.text.color}
+                          onChange={(p) =>
+                            patch("text", (s) => ({ ...s, ...p }), "Text")
+                          }
+                        />
+                      )}
+                      {activePanel === "captions" && activeCaptionCue && (
+                        <FloatingTextToolbar
+                          y={captions.style.y}
+                          fontId={captions.style.fontId}
+                          fontSize={captions.style.fontSize}
+                          color={captions.style.color}
+                          onChange={captions.updateStyle}
+                        />
+                      )}
+                    </>
+                  )
+                }
               >
                 {(box) => {
                   const scale =
@@ -2318,20 +2347,6 @@ export default function VideoEditorTool() {
                           </span>
                         </PositionedTextBlock>
                       )}
-                      {!pickingColor &&
-                        activePanel === "text" &&
-                        doc.text.enabled && (
-                          <FloatingTextToolbar
-                            y={doc.text.y}
-                            fontId={doc.text.fontId}
-                            fontSize={doc.text.fontSize}
-                            color={doc.text.color}
-                            onChange={(p) =>
-                              patch("text", (s) => ({ ...s, ...p }), "Text")
-                            }
-                          />
-                        )}
-
                       {!pickingColor && activeCaptionCue && (
                         <PositionedTextBlock
                           x={captions.style.x}
@@ -2340,62 +2355,14 @@ export default function VideoEditorTool() {
                           draggable={activePanel === "captions"}
                           onChange={captions.updateStyle}
                         >
-                          <span
-                            className="inline-block max-w-full whitespace-pre-wrap break-words font-semibold"
-                            style={{
-                              fontFamily: TEXT_FONTS.find(
-                                (f) => f.id === captions.style.fontId,
-                              )?.cssFontFamily,
-                              fontSize: captions.style.fontSize * scale,
-                              color: captions.style.color,
-                              lineHeight: 1.15,
-                              padding: captions.style.background
-                                ? `${8 * scale}px ${16 * scale}px`
-                                : 0,
-                              backgroundColor: captions.style.background
-                                ? captions.style.backgroundColor
-                                : "transparent",
-                              WebkitTextStroke: captions.style.outline
-                                ? `${Math.max(1, 2 * scale)}px ${captions.style.outlineColor}`
-                                : undefined,
-                              paintOrder: captions.style.outline
-                                ? "stroke fill"
-                                : undefined,
-                            }}
-                          >
-                            {captions.style.karaoke && activeCaptionCue.words
-                              ? activeCaptionCue.words.map((word, i) => (
-                                  <span
-                                    key={i}
-                                    style={{
-                                      color:
-                                        currentTime >= word.start &&
-                                        currentTime < word.end
-                                          ? captions.style.highlightColor
-                                          : undefined,
-                                    }}
-                                  >
-                                    {word.text}
-                                    {i < activeCaptionCue.words!.length - 1
-                                      ? " "
-                                      : ""}
-                                  </span>
-                                ))
-                              : activeCaptionCue.text}
-                          </span>
+                          <CaptionOverlay
+                            style={captions.style}
+                            cue={activeCaptionCue}
+                            currentTime={currentTime}
+                            scale={scale}
+                          />
                         </PositionedTextBlock>
                       )}
-                      {!pickingColor &&
-                        activePanel === "captions" &&
-                        activeCaptionCue && (
-                          <FloatingTextToolbar
-                            y={captions.style.y}
-                            fontId={captions.style.fontId}
-                            fontSize={captions.style.fontSize}
-                            color={captions.style.color}
-                            onChange={captions.updateStyle}
-                          />
-                        )}
                       {!pickingColor && cutoutFrame && (
                         <img
                           src={cutoutFrame.url}
@@ -2507,6 +2474,19 @@ export default function VideoEditorTool() {
             </button>
           </div>
         </div>
+
+        {/* ---- Caption templates: dedicated right-hand column, shown only while the Subtitles panel is active ---- */}
+        {activePanel === "captions" && (
+          <div className="w-full shrink-0 rounded-xl border border-(--color-border) bg-(--color-surface) p-4 shadow-sm md:h-full md:w-[420px] md:overflow-y-auto">
+            <CaptionStylesPanel
+              video={video}
+              captions={captions}
+              personCutout={personCutout}
+              rangeStart={start}
+              rangeEnd={end}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

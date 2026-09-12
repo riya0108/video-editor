@@ -31,7 +31,7 @@ export default function FloatingTextToolbar({
 
   return (
     <div
-      className={`pointer-events-auto absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-(--color-border) bg-(--color-surface) px-2 py-1.5 shadow-md ${dockClass}`}
+      className={`pointer-events-auto absolute left-1/2 z-20 flex max-w-[92vw] -translate-x-1/2 items-center gap-1.5 overflow-x-auto rounded-full border border-(--color-border) bg-(--color-surface) px-2 py-1.5 shadow-md ${dockClass}`}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="flex items-center gap-1 border-r border-(--color-border) pr-1.5">

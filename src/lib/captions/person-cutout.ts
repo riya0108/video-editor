@@ -1,4 +1,6 @@
 import type { RawImage } from "@huggingface/transformers";
+import { applyMaskForeground } from "../media/bg-removal-canvas";
+import { loadSelfieSegmenter, segmentPersonMask } from "../media/selfie-segmenter";
 
 /** Portrait/human matting model — outputs a single alpha mask isolating the person from the background. */
 export const PERSON_SEGMENTATION_MODEL = "briaai/RMBG-1.4";
@@ -69,11 +71,13 @@ export function waitForSeek(video: HTMLVideoElement): Promise<void> {
 
 /**
  * Samples the trimmed range of `video` at a reduced fps, and for each sample
- * runs an in-browser person-segmentation model to cut the person out onto a
- * transparent background. Used both for the live "behind a person" caption
- * preview (nearest-sample lookup) and, at export time, as a chain of overlay
- * images ffmpeg composites on top of the drawn caption text so it reads as
- * sitting behind the person.
+ * runs an in-browser person-segmentation model (MediaPipe's selfie
+ * segmenter — see ../media/selfie-segmenter.ts; separate from `loadSegmenter`
+ * above, which stays on RMBG-1.4 for this file's other, non-person-specific
+ * callers) to cut the person out onto a transparent background. Used both for
+ * the live "behind a person" caption preview (nearest-sample lookup) and, at
+ * export time, as a chain of overlay images ffmpeg composites on top of the
+ * drawn caption text so it reads as sitting behind the person.
  */
 export async function generatePersonCutouts(
   video: HTMLVideoElement,
@@ -82,10 +86,9 @@ export async function generatePersonCutouts(
   const duration = Math.max(0, end - start);
   if (duration <= 0 || video.videoWidth === 0) return [];
 
-  const [segmenter, { RawImage }] = await Promise.all([
-    loadSegmenter(onProgress),
-    import("@huggingface/transformers"),
-  ]);
+  onProgress?.({ phase: "downloading", fraction: 0 });
+  const segmenter = await loadSelfieSegmenter();
+  onProgress?.({ phase: "downloading", fraction: 1 });
 
   const naturalW = video.videoWidth;
   const naturalH = video.videoHeight;
@@ -104,6 +107,7 @@ export async function generatePersonCutouts(
   canvas.height = outH;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return [];
+  const work = document.createElement("canvas");
 
   const originalTime = video.currentTime;
   const wasPaused = video.paused;
@@ -117,21 +121,15 @@ export async function generatePersonCutouts(
       await waitForSeek(video);
       ctx.drawImage(video, 0, 0, outW, outH);
 
-      const output = await segmenter(canvas);
-      let mask = output[0]?.mask;
+      const mask = segmentPersonMask(segmenter, canvas, i);
       if (!mask) {
         onProgress?.({ phase: "processing", fraction: (i + 1) / times.length });
         continue;
       }
-      if (mask.width !== outW || mask.height !== outH) {
-        mask = await mask.resize(outW, outH);
-      }
-      mask.grayscale();
 
-      const cutout = RawImage.fromCanvas(canvas).clone().rgba();
-      cutout.putAlpha(mask);
-      const blob = (await cutout.toBlob("image/png")) as Blob;
-      frames.push({ time: t, blob, url: URL.createObjectURL(blob) });
+      const cutout = applyMaskForeground(canvas, outW, outH, mask, work);
+      const blob = await new Promise<Blob | null>((resolve) => cutout.toBlob(resolve, "image/png"));
+      if (blob) frames.push({ time: t, blob, url: URL.createObjectURL(blob) });
 
       onProgress?.({ phase: "processing", fraction: (i + 1) / times.length });
     }

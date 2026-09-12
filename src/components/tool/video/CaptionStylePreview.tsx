@@ -1,9 +1,20 @@
-import { getTextFont } from "../../../lib/ffmpeg/fonts";
 import type { CaptionStylePreset } from "../../../lib/captions/caption-styles";
+import type { CaptionCue } from "../../../lib/captions/types";
+import CaptionOverlay from "./editor/CaptionOverlay";
 
-const SAMPLE_WORDS = ["Just", "like", "this"];
+const SAMPLE_CUE: CaptionCue = {
+  id: "sample",
+  start: 0,
+  end: 3,
+  text: "Just like this",
+  words: [
+    { text: "Just", start: 0, end: 1 },
+    { text: "like", start: 1, end: 2 },
+    { text: "this", start: 2, end: 3 },
+  ],
+};
 
-/** A small mock preview card for a caption style — a stand-in "video" (gradient + a soft person silhouette) with sample text rendered in the real style, so users can see the look before applying it. */
+/** A small mock preview card for a caption style — a stand-in "video" (gradient + a soft person silhouette) with sample text rendered in the real style (via the same CaptionOverlay used in the live editors), so users can see the look before applying it. */
 export default function CaptionStylePreview({
   preset,
   active,
@@ -14,8 +25,6 @@ export default function CaptionStylePreview({
   onClick: () => void;
 }) {
   const { style } = preset;
-  const font = getTextFont(style.fontId);
-  const words = style.uppercase ? SAMPLE_WORDS.map((w) => w.toUpperCase()) : SAMPLE_WORDS;
 
   return (
     <button
@@ -39,28 +48,12 @@ export default function CaptionStylePreview({
             aria-hidden="true"
           />
         )}
-        <span
-          className="absolute max-w-[92%] -translate-x-1/2 -translate-y-1/2 whitespace-normal break-words text-center leading-tight font-semibold"
-          style={{
-            left: `${style.x}%`,
-            top: `${style.y}%`,
-            fontFamily: font.cssFontFamily,
-            color: style.color,
-            fontSize: 13,
-            padding: style.background ? "3px 6px" : 0,
-            backgroundColor: style.background ? style.backgroundColor : "transparent",
-            WebkitTextStroke: style.outline ? `1.25px ${style.outlineColor}` : undefined,
-            paintOrder: style.outline ? "stroke fill" : undefined,
-            opacity: style.fade ? 0.5 : 1,
-          }}
+        <div
+          className="absolute max-w-[92%] -translate-x-1/2 -translate-y-1/2 text-center"
+          style={{ left: `${style.x}%`, top: `${style.y}%` }}
         >
-          {words.map((w, i) => (
-            <span key={i} style={{ color: style.karaoke && i === 1 ? style.highlightColor : undefined }}>
-              {w}
-              {i < words.length - 1 ? " " : ""}
-            </span>
-          ))}
-        </span>
+          <CaptionOverlay style={style} cue={SAMPLE_CUE} currentTime={1.1} scale={0.36} />
+        </div>
       </div>
       <span className="truncate border-t border-(--color-border) bg-(--color-surface) px-2 py-1.5 text-caption font-medium">
         {preset.label}

@@ -117,6 +117,64 @@ export function keyChromaForeground(
   return work;
 }
 
+/**
+ * Punches a person-confidence mask (from selfie-segmenter.ts, usually a
+ * different resolution than the source frame) through as real alpha — the
+ * AI-cutout analog of `keyChromaForeground`. Bilinear-samples the mask so
+ * edges stay soft/anti-aliased instead of blocky, matching how the model's
+ * own confidence values already taper off at silhouette boundaries.
+ */
+export function applyMaskForeground(
+  source: CanvasImageSource,
+  sourceW: number,
+  sourceH: number,
+  mask: { data: Float32Array; width: number; height: number },
+  work: HTMLCanvasElement,
+): HTMLCanvasElement {
+  const w = Math.max(1, Math.round(sourceW));
+  const h = Math.max(1, Math.round(sourceH));
+  if (work.width !== w) work.width = w;
+  if (work.height !== h) work.height = h;
+
+  const ctx = work.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return work;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(source, 0, 0, w, h);
+
+  const { data: maskData, width: mw, height: mh } = mask;
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  const sx = mw / w;
+  const sy = mh / h;
+
+  for (let y = 0; y < h; y++) {
+    const my = Math.min(mh - 1, y * sy);
+    const my0 = Math.floor(my);
+    const my1 = Math.min(mh - 1, my0 + 1);
+    const fy = my - my0;
+    for (let x = 0; x < w; x++) {
+      const mx = Math.min(mw - 1, x * sx);
+      const mx0 = Math.floor(mx);
+      const mx1 = Math.min(mw - 1, mx0 + 1);
+      const fx = mx - mx0;
+
+      const v00 = maskData[my0 * mw + mx0];
+      const v10 = maskData[my0 * mw + mx1];
+      const v01 = maskData[my1 * mw + mx0];
+      const v11 = maskData[my1 * mw + mx1];
+      const top = v00 + (v10 - v00) * fx;
+      const bottom = v01 + (v11 - v01) * fx;
+      const v = top + (bottom - top) * fy;
+
+      const i = (y * w + x) * 4 + 3;
+      data[i] = Math.round(data[i] * Math.min(1, Math.max(0, v)));
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return work;
+}
+
 /** Paints just the replacement background layer — a no-op for "transparent" (leaves whatever's already on `ctx`, typically nothing) and for "blur" (which needs the original frame, see `drawBlurredBackdrop`). */
 export function drawBgReplacement(
   ctx: CanvasRenderingContext2D,

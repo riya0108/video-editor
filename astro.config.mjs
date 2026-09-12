@@ -38,6 +38,17 @@ export default defineConfig({
       // kokoro-js bundles Emscripten (espeak-ng wasm) glue code that
       // misbehaves under esbuild's dependency pre-bundling.
       exclude: ["kokoro-js"],
+      // @huggingface/transformers is only ever reached through a dynamic
+      // `await import()` at runtime (captions, translation, person-cutout,
+      // voice cloning, bg removal) and is never imported at the top of any
+      // module Vite's cold-start scanner crawls. That lets the scanner miss
+      // it entirely, so the *first* runtime request has to trigger an
+      // on-the-fly re-optimize — and on this package (huge, WASM-heavy)
+      // that on-demand discovery reliably wedges into a permanent
+      // "504 Outdated Optimize Dep" instead of completing, breaking every
+      // AI feature until `node_modules/.vite` is wiped by hand. Listing it
+      // here forces it into the eager cold-start bundle instead.
+      include: ["@huggingface/transformers"],
     },
   },
 });

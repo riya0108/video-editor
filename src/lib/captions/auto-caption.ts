@@ -25,11 +25,13 @@ interface RawChunk {
   timestamp: [number, number | null];
 }
 
-// Caption-line guidance (broadcast norms land around 32–42 chars/line for
-// two lines, and a few seconds of read time) applied when Whisper hands back
-// a long chunk that needs splitting into shorter, readable cues.
-const MAX_CUE_CHARS = 84;
-const MAX_CUE_SECONDS = 6;
+// Short-form caption pacing: a handful of words on screen at a time, cutting
+// over quickly, rather than long broadcast-style lines that sit for seconds —
+// matches the fast-changing creator caption styles (Hormozi/MrBeast-style)
+// this app's presets are built around.
+const MAX_CUE_CHARS = 24;
+const MAX_CUE_WORDS = 4;
+const MAX_CUE_SECONDS = 2.2;
 
 let cachedTranscriber: { tier: CaptionModelTier; promise: Promise<unknown> } | null = null;
 
@@ -60,10 +62,10 @@ async function loadTranscriber(tier: CaptionModelTier, onProgress?: GenerateCapt
 }
 
 /**
- * Groups word-level chunks into readable cues (broadcast norms land around
- * 32-42 chars/line for two lines, and a few seconds of read time), keeping
- * each word's own timestamp on the cue so the caption editor can offer
- * word-by-word karaoke highlighting.
+ * Groups word-level chunks into short, fast-changing cues (a few words at a
+ * time, cutting over quickly rather than sitting on screen for seconds),
+ * keeping each word's own timestamp on the cue so the caption editor can
+ * offer word-by-word karaoke highlighting.
  */
 function wordsToCues(words: CaptionWord[]): CaptionCue[] {
   const cues: CaptionCue[] = [];
@@ -92,8 +94,9 @@ function wordsToCues(words: CaptionWord[]): CaptionCue[] {
     const endsSentence = /[.!?]$/.test(text);
 
     const wouldOverflowChars = charCount + text.length + 1 > MAX_CUE_CHARS;
+    const wouldOverflowWords = current.length >= MAX_CUE_WORDS;
     const wouldOverflowSeconds = current.length > 0 && word.end - current[0].start > MAX_CUE_SECONDS;
-    if (current.length > 0 && (wouldOverflowChars || wouldOverflowSeconds)) flush();
+    if (current.length > 0 && (wouldOverflowChars || wouldOverflowWords || wouldOverflowSeconds)) flush();
 
     current.push({ text, start: word.start, end: Math.max(word.start, word.end) });
     charCount += text.length + 1;
@@ -177,8 +180,14 @@ export async function transcribeWords(
   for (const chunk of output.chunks ?? []) {
     const text = chunk.text.trim();
     if (!text) continue;
-    const start = chunk.timestamp[0] ?? (words.at(-1)?.end ?? 0);
-    const end = Math.max(start, chunk.timestamp[1] ?? Math.min(audioDuration, start + 0.5));
+    const rawStart = chunk.timestamp[0] ?? (words.at(-1)?.end ?? 0);
+    // Whisper sometimes hallucinates a trailing chunk past the actual audio
+    // (common on short clips) — drop it rather than showing a caption for
+    // speech that was never there.
+    if (rawStart >= audioDuration) continue;
+    const start = Math.min(rawStart, audioDuration);
+    const rawEnd = chunk.timestamp[1] ?? Math.min(audioDuration, start + 0.5);
+    const end = Math.min(Math.max(start, rawEnd), audioDuration);
     words.push(...interpolateWordTimestamps(text, start, end));
   }
 

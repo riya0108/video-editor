@@ -37,6 +37,16 @@ export default function FramedVideoStage({
   checkerboard = false,
   /** Rendered as a stage-sized (not box-sized) absolutely-positioned top layer — for content with its own unrelated natural dimensions, like an intro/outro clip, that needs to cover the full frame rather than align to the main video's letterboxed content box. */
   stageOverlay,
+  /**
+   * Like `children`, but rendered OUTSIDE the stage's clipping boundary
+   * instead of inside it — for chrome that floats near the frame (e.g. a
+   * quick-style toolbar) rather than content that must be clipped to exactly
+   * what the video shows. A toolbar wider than a narrow portrait-aspect
+   * frame would otherwise get silently cut off by the frame's own edges.
+   * Positioned to cover the same rect as the stage, so left/right/top/bottom
+   * CSS inside it lines up the same way `children` would.
+   */
+  floatingOverlay,
   children,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -64,6 +74,7 @@ export default function FramedVideoStage({
   ) => void;
   children?: (box: { width: number; height: number }, stage: { width: number; height: number }) => ReactNode;
   stageOverlay?: ReactNode;
+  floatingOverlay?: (box: { width: number; height: number }, stage: { width: number; height: number }) => ReactNode;
 }) {
   const measureRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -180,7 +191,7 @@ export default function FramedVideoStage({
   }, [canvasMode, onDrawFrame, videoRef, stage.width, stage.height, box.width, box.height]);
 
   return (
-    <div ref={measureRef} className="w-full">
+    <div ref={measureRef} className="relative w-full">
       <div
         className={`relative mx-auto flex items-center justify-center overflow-hidden rounded-lg ${checkerboard ? "bg-checkerboard" : "bg-black"}`}
         style={{ width: aspect ? stage.width || "100%" : "100%", height: stage.height }}
@@ -229,6 +240,14 @@ export default function FramedVideoStage({
           </div>
         )}
       </div>
+      {floatingOverlay && stage.width > 0 && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2"
+          style={{ width: stage.width, height: stage.height }}
+        >
+          {floatingOverlay(box, stage)}
+        </div>
+      )}
     </div>
   );
 }

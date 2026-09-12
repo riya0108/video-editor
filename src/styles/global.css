@@ -121,6 +121,291 @@
       opacity: 0.35;
     }
   }
+
+  /* ---- Homepage: hero reel + tool showcase card motion ---- */
+  --animate-reel-float: reel-float 6s ease-in-out infinite;
+  @keyframes reel-float {
+    0%,
+    100% {
+      transform: translateY(0) rotate(-1.5deg);
+    }
+    50% {
+      transform: translateY(-14px) rotate(1.5deg);
+    }
+  }
+
+  --animate-reel-bg-pan: reel-bg-pan 12s ease-in-out infinite;
+  @keyframes reel-bg-pan {
+    0%,
+    100% {
+      background-position: 0% 20%, 100% 80%, 0% 0%;
+    }
+    50% {
+      background-position: 30% 45%, 70% 55%, 0% 0%;
+    }
+  }
+
+  --animate-playhead-sweep: playhead-sweep 3.2s ease-in-out infinite;
+  @keyframes playhead-sweep {
+    0%,
+    100% {
+      left: 6%;
+    }
+    50% {
+      left: 92%;
+    }
+  }
+
+  --animate-wipe-reveal: wipe-reveal 3.4s ease-in-out infinite;
+  @keyframes wipe-reveal {
+    0%,
+    100% {
+      clip-path: inset(0 100% 0 0);
+    }
+    50%,
+    65% {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+
+  --animate-bar-bounce: bar-bounce 1.1s ease-in-out infinite;
+  @keyframes bar-bounce {
+    0%,
+    100% {
+      transform: scaleY(0.3);
+    }
+    50% {
+      transform: scaleY(1);
+    }
+  }
+
+  --animate-clarity-sweep: clarity-sweep 3s ease-in-out infinite;
+  @keyframes clarity-sweep {
+    0%,
+    100% {
+      left: 4%;
+    }
+    50% {
+      left: 78%;
+    }
+  }
+
+  --animate-card-float: card-float 4s ease-in-out infinite;
+  @keyframes card-float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-3px);
+    }
+  }
+
+  /* ---- Caption entrance motion (CaptionOverlay) ---- */
+  @keyframes caption-pop {
+    0% {
+      transform: scale(0.55);
+      opacity: 0;
+    }
+    65% {
+      transform: scale(1.12);
+      opacity: 1;
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes caption-bounce {
+    0% {
+      transform: translateY(-60%);
+      opacity: 0;
+    }
+    55% {
+      transform: translateY(8%);
+      opacity: 1;
+    }
+    80% {
+      transform: translateY(-4%);
+    }
+    100% {
+      transform: translateY(0);
+    }
+  }
+  @keyframes caption-slide-up {
+    0% {
+      transform: translateY(65%);
+      opacity: 0;
+    }
+    100% {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  @keyframes caption-glitch {
+    0%,
+    100% {
+      transform: translate(0, 0);
+    }
+    20% {
+      transform: translate(-2px, 1px);
+    }
+    40% {
+      transform: translate(2px, -1px);
+    }
+    60% {
+      transform: translate(-1px, 0);
+    }
+    80% {
+      transform: translate(1px, 1px);
+    }
+  }
+  @keyframes caption-elastic {
+    0% {
+      transform: scale(0.3);
+      opacity: 0;
+    }
+    45% {
+      transform: scale(1.28);
+      opacity: 1;
+    }
+    65% {
+      transform: scale(0.9);
+    }
+    82% {
+      transform: scale(1.08);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes caption-drop-in {
+    0% {
+      transform: translateY(-140%) rotate(-8deg);
+      opacity: 0;
+    }
+    60% {
+      transform: translateY(10%) rotate(2deg);
+      opacity: 1;
+    }
+    80% {
+      transform: translateY(-4%) rotate(-1deg);
+    }
+    100% {
+      transform: translateY(0) rotate(0deg);
+    }
+  }
+  @keyframes caption-wave {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-20%);
+    }
+  }
+  @keyframes caption-blur-in {
+    0% {
+      filter: blur(10px);
+      transform: scale(1.3);
+      opacity: 0;
+    }
+    100% {
+      filter: blur(0);
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  @keyframes caption-flip {
+    0% {
+      transform: perspective(400px) rotateX(90deg);
+      opacity: 0;
+    }
+    60% {
+      transform: perspective(400px) rotateX(-14deg);
+      opacity: 1;
+    }
+    100% {
+      transform: perspective(400px) rotateX(0deg);
+    }
+  }
+  @keyframes caption-shake {
+    0%,
+    100% {
+      transform: rotate(0deg);
+    }
+    20% {
+      transform: rotate(-4deg);
+    }
+    40% {
+      transform: rotate(3deg);
+    }
+    60% {
+      transform: rotate(-2.5deg);
+    }
+    80% {
+      transform: rotate(2deg);
+    }
+  }
+  @keyframes caption-typewriter {
+    0% {
+      clip-path: inset(0 100% 0 0);
+    }
+    100% {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+}
+
+.caption-anim-pop {
+  display: inline-block;
+  animation: caption-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.caption-anim-bounce {
+  display: inline-block;
+  animation: caption-bounce 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.caption-anim-slide-up {
+  display: inline-block;
+  animation: caption-slide-up 0.32s ease-out both;
+}
+.caption-anim-glitch {
+  display: inline-block;
+  animation: caption-glitch 0.5s steps(2, jump-none) infinite;
+}
+.caption-anim-elastic {
+  display: inline-block;
+  animation: caption-elastic 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.caption-anim-drop-in {
+  display: inline-block;
+  animation: caption-drop-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.caption-anim-wave {
+  display: inline-block;
+  animation: caption-wave 1.1s ease-in-out infinite;
+}
+.caption-anim-blur-in {
+  display: inline-block;
+  animation: caption-blur-in 0.4s ease-out both;
+}
+.caption-anim-flip {
+  display: inline-block;
+  animation: caption-flip 0.5s ease-out both;
+  transform-style: preserve-3d;
+}
+.caption-anim-shake {
+  display: inline-block;
+  animation: caption-shake 0.45s ease-in-out infinite;
+}
+.caption-anim-typewriter {
+  display: inline-block;
+  animation: caption-typewriter 0.35s steps(7, end) both;
+}
+
+/* Decorative looping version of the pop keyframe, for the homepage tool-showcase card (not part of the real caption editor). */
+.showcase-caption-pop {
+  display: inline-block;
+  animation: caption-pop 1.6s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
 }
 
 /* ---- Semantic surface tokens: light by default, dark via .dark ---- */

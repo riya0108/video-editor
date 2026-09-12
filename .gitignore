@@ -25,3 +25,5 @@ pnpm-debug.log*
 
 # local Claude Code settings (per-user, not shared project config)
 .claude/settings.local.json
+.tmp-test-sample.mp4
+.scratch/

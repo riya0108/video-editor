@@ -241,11 +241,29 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     const fontBlob = await fetch(font.url).then((r) => r.blob());
     inputs.push({ name: font.ffmpegName, data: fontBlob });
 
+    let emphasisFontFfmpegName: string | undefined;
+    let emphasisFontCssFamily: string | undefined;
+    if (state.captions.style.emphasizeKeyword) {
+      const emphasisFont = getTextFont(state.captions.style.emphasisFontId);
+      emphasisFontFfmpegName = emphasisFont.ffmpegName;
+      emphasisFontCssFamily = emphasisFont.cssFontFamily;
+      if (emphasisFont.ffmpegName !== font.ffmpegName) {
+        const emphasisFontBlob = await fetch(emphasisFont.url).then((r) => r.blob());
+        inputs.push({ name: emphasisFont.ffmpegName, data: emphasisFontBlob });
+      }
+    }
+
     const remapped = remapCuesToTrim(state.captions.cues, state.trimStart, state.trimEnd);
     const karaokeLayouts = state.captions.style.karaoke
-      ? await measureKaraokeLayouts(remapped, state.captions.style, font.cssFontFamily, currentW)
+      ? await measureKaraokeLayouts(remapped, state.captions.style, font.cssFontFamily, currentW, emphasisFontCssFamily)
       : undefined;
-    const capFilter = buildCaptionsFilter(remapped, state.captions.style, font.ffmpegName, karaokeLayouts);
+    const capFilter = buildCaptionsFilter(
+      remapped,
+      state.captions.style,
+      font.ffmpegName,
+      karaokeLayouts,
+      emphasisFontFfmpegName,
+    );
     if (capFilter) {
       const out = newLabel("v");
       filters.push(`[${vLabel}]${capFilter}[${out}]`);
