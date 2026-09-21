@@ -1,9 +1,9 @@
-import { useState } from "react";
 import FramedVideoStage from "./FramedVideoStage";
 import CaptionOverlay from "./editor/CaptionOverlay";
 import FloatingTextToolbar from "./editor/FloatingTextToolbar";
 import PositionedTextBlock from "./editor/PositionedTextBlock";
 import { nearestCutoutFrame } from "../../../lib/captions/person-cutout";
+import { useVideoClock } from "../../../lib/hooks/useVideoClock";
 import type { useCaptions } from "../../../lib/hooks/useCaptions";
 import type { usePersonCutout } from "../../../lib/hooks/usePersonCutout";
 import type { useVideoFile } from "../../../lib/hooks/useVideoFile";
@@ -18,7 +18,7 @@ export default function CaptionsPreview({
   captions: ReturnType<typeof useCaptions>;
   personCutout?: ReturnType<typeof usePersonCutout>;
 }) {
-  const [previewTime, setPreviewTime] = useState(0);
+  const previewTime = useVideoClock(video.videoRef);
   const { style, cues } = captions;
   const activeCue = cues.find((c) => previewTime >= c.start && previewTime < c.end);
 
@@ -35,7 +35,6 @@ export default function CaptionsPreview({
       naturalHeight={video.videoHeight}
       onLoadedMetadata={video.onLoadedMetadata}
       onError={video.onError}
-      onTimeUpdate={() => setPreviewTime(video.videoRef.current?.currentTime ?? 0)}
       controls
       overlayInteractive={false}
     >
@@ -45,16 +44,28 @@ export default function CaptionsPreview({
           <>
             {activeCue && (
               <PositionedTextBlock x={style.x} y={style.y} box={box} draggable onChange={captions.updateStyle}>
-                <CaptionOverlay style={style} cue={activeCue} currentTime={previewTime} scale={scale} />
+                <CaptionOverlay
+                  style={style}
+                  cue={activeCue}
+                  currentTime={previewTime}
+                  scale={scale}
+                  maxWidthPx={Math.max(0, box.width * 0.92 - 32)}
+                />
               </PositionedTextBlock>
             )}
             {activeCue && (
               <FloatingTextToolbar
                 y={style.y}
                 fontId={style.fontId}
-                fontSize={style.fontSize}
+                fontSize={activeCue.fontSize ?? style.fontSize}
                 color={style.color}
-                onChange={captions.updateStyle}
+                onChange={({ fontSize, ...stylePatch }) => {
+                  // Size applies to just this one caption (the one currently
+                  // under the scrubber) rather than every caption; font/color
+                  // stay style-wide. See CaptionCue.fontSize.
+                  if (fontSize !== undefined) captions.updateCue(activeCue.id, { fontSize });
+                  if (Object.keys(stylePatch).length > 0) captions.updateStyle(stylePatch);
+                }}
               />
             )}
             {cutoutFrame && (

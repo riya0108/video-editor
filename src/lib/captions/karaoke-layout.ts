@@ -1,4 +1,5 @@
 import { INLINE_EMPHASIS_SCALE, pickEmphasisIndex } from "./emphasis";
+import type { ContentBox } from "../ffmpeg/text-position";
 import type { CaptionCue, CaptionStyle } from "./types";
 
 export interface WordLayout {
@@ -27,19 +28,19 @@ export async function measureKaraokeLayouts(
   cues: CaptionCue[],
   style: CaptionStyle,
   cssFontFamily: string,
-  videoWidth: number,
+  /** The video's own content rect within the frame (see `ContentBox`) — word x-offsets center within this rect, matching where `positionExprs`/the live preview anchor the line. */
+  box: ContentBox,
   emphasisCssFontFamily?: string,
 ): Promise<Map<string, WordLayout[]>> {
   const layouts = new Map<string, WordLayout[]>();
   if (typeof document === "undefined") return layouts;
 
-  const fontSpec = `600 ${style.fontSize}px ${cssFontFamily}`;
   const usesInlineEmphasis = style.emphasizeKeyword && style.emphasisLayout !== "overlay";
-  const emphasisFontSize = Math.round(style.fontSize * INLINE_EMPHASIS_SCALE);
-  const emphasisFontSpec = `600 ${emphasisFontSize}px ${emphasisCssFontFamily ?? cssFontFamily}`;
   try {
-    await document.fonts.load(fontSpec);
-    if (usesInlineEmphasis) await document.fonts.load(emphasisFontSpec);
+    await document.fonts.load(`600 ${style.fontSize}px ${cssFontFamily}`);
+    if (usesInlineEmphasis) {
+      await document.fonts.load(`600 ${Math.round(style.fontSize * INLINE_EMPHASIS_SCALE)}px ${emphasisCssFontFamily ?? cssFontFamily}`);
+    }
   } catch {
     // Fall back to whatever font is already available; measurements will
     // just be less accurate rather than failing the whole export.
@@ -51,6 +52,13 @@ export async function measureKaraokeLayouts(
 
   for (const cue of cues) {
     if (!cue.words || cue.words.length === 0) continue;
+    // A cue with its own fontSize override (see CaptionCue.fontSize) needs
+    // its words measured at that size, not the shared style's — otherwise
+    // the pre-computed x offsets this function exists to provide would drift
+    // from what actually gets drawn at export time.
+    const cueFontSize = cue.fontSize ?? style.fontSize;
+    const cueFontSpec = `600 ${cueFontSize}px ${cssFontFamily}`;
+    const cueEmphasisFontSpec = `600 ${Math.round(cueFontSize * INLINE_EMPHASIS_SCALE)}px ${emphasisCssFontFamily ?? cssFontFamily}`;
     const emphasisIdx = usesInlineEmphasis ? pickEmphasisIndex(cue.words.map((w) => w.text)) : -1;
     const words = cue.words.map((w, i) =>
       i === emphasisIdx
@@ -61,15 +69,15 @@ export async function measureKaraokeLayouts(
           ? w.text.toLocaleUpperCase()
           : w.text,
     );
-    ctx.font = fontSpec;
+    ctx.font = cueFontSpec;
     const spaceWidth = ctx.measureText(" ").width;
     const widths = words.map((w, i) => {
-      ctx.font = i === emphasisIdx ? emphasisFontSpec : fontSpec;
+      ctx.font = i === emphasisIdx ? cueEmphasisFontSpec : cueFontSpec;
       return ctx.measureText(w).width;
     });
     const totalWidth = widths.reduce((a, b) => a + b, 0) + spaceWidth * Math.max(0, words.length - 1);
 
-    let cursor = videoWidth * (style.x / 100) - totalWidth / 2;
+    let cursor = box.x + box.w * (style.x / 100) - totalWidth / 2;
     const layout: WordLayout[] = [];
     for (let i = 0; i < words.length; i++) {
       layout.push({ text: words[i], x: cursor, width: widths[i] });

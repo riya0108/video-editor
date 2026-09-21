@@ -53,9 +53,20 @@ export interface EditorNoiseState {
   strength: number;
 }
 
+export interface EditorLogoRegion {
+  id: string;
+  rect: FractionRect;
+}
+
 export interface EditorLogoState {
   enabled: boolean;
-  rect: FractionRect;
+  regions: EditorLogoRegion[];
+}
+
+let logoRegionCounter = 0;
+export function nextLogoRegionId(): string {
+  logoRegionCounter += 1;
+  return `logo-region-${logoRegionCounter}`;
 }
 
 export interface EditorCropState {

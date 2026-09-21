@@ -220,6 +220,10 @@ export default function EditorTimeline({
     e.preventDefault();
     e.stopPropagation();
     setSelected({ laneId: lane.id, segId: seg.id });
+    // Selecting a segment also moves the playhead to it, so panels that key
+    // off `currentTime` (e.g. the captions editor's per-cue floating
+    // toolbar) treat "select from the timeline" as selecting that segment.
+    onSeek(seg.start);
     if (!lane.onSegmentChange) return;
     setSegDrag({
       laneId: lane.id,

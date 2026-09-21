@@ -5,6 +5,7 @@ import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import TrimSlider from "../TrimSlider";
+import ResizeForPlatformSection from "./ResizeForPlatformSection";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { guessVideoExtension } from "../../../lib/ffmpeg/format";
 import { readVideoMetadata } from "../../../lib/video-metadata";
@@ -12,6 +13,12 @@ import { probeHasAudio } from "../../../lib/ffmpeg/engine";
 import { evenRound } from "../../../lib/geometry";
 import { formatTime, toFfmpegTimestamp } from "../../../lib/time";
 import { createSilentWav } from "../../../lib/wav";
+import {
+  applyResizeCanvas,
+  resolveBackgroundSize,
+  DEFAULT_RESIZE_SETTINGS,
+  type ResizeCanvasSettings,
+} from "../../../lib/ffmpeg/resize-canvas-filter";
 
 interface Clip {
   id: string;
@@ -32,6 +39,7 @@ let clipIdCounter = 0;
 export default function MergeVideosTool() {
   const exportState = useFfmpegExport();
   const [clips, setClips] = useState<Clip[]>([]);
+  const [resize, setResize] = useState<ResizeCanvasSettings>(DEFAULT_RESIZE_SETTINGS);
   const [currentTimes, setCurrentTimes] = useState<Record<string, number>>({});
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const clipsRef = useRef<Clip[]>([]);
@@ -115,8 +123,8 @@ export default function MergeVideosTool() {
   const handleExport = async () => {
     if (clips.length < 2) return;
     const target = clips[0];
-    const w = evenRound(target.width || 1280);
-    const h = evenRound(target.height || 720);
+    const w = resize.enabled ? resolveBackgroundSize(resize).w : evenRound(target.width || 1280);
+    const h = resize.enabled ? resolveBackgroundSize(resize).h : evenRound(target.height || 720);
 
     const ranges = clips.map((clip) => {
       const start = Math.max(
@@ -143,6 +151,16 @@ export default function MergeVideosTool() {
       const name = `clip${i}.${guessVideoExtension(clip.file)}`;
       inputs.push({ name, data: clip.file });
       inputArgs.push(
+        // Decoder thread count, not just the encoder's: this build's core-mt
+        // wasm can only reliably spin up its *initial* pthread pool — any
+        // later on-demand worker request (e.g. from an auto-multithreaded
+        // h264 decode) hangs forever with no error. Pinning decode to 1
+        // thread per input keeps total pthread demand inside the initial
+        // pool (mirrors the same fix already applied to every other tool's
+        // command builder — this one had simply never needed it before the
+        // heavier filter chains "Resize for a platform" adds).
+        "-threads",
+        "1",
         "-ss",
         toFfmpegTimestamp(ranges[i].start),
         "-t",
@@ -166,10 +184,28 @@ export default function MergeVideosTool() {
 
     const chains: string[] = [];
     const labels: string[] = [];
+    let resizeLabelCount = 0;
+    const resizeNewLabel = () => `r${++resizeLabelCount}`;
+    const resizeAddLavfiInput = (source: string, preArgs: string[] = []): number => {
+      inputArgs.push(...preArgs, "-f", "lavfi", "-i", source);
+      return nextInputIndex++;
+    };
     clips.forEach((_clip, i) => {
-      chains.push(
-        `[${videoInputIndex[i]}:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${i}]`,
-      );
+      if (resize.enabled) {
+        const resized = applyResizeCanvas({
+          vLabel: `${videoInputIndex[i]}:v`,
+          filters: chains,
+          addLavfiInput: resizeAddLavfiInput,
+          newLabel: resizeNewLabel,
+          settings: resize,
+          durationSeconds: ranges[i].duration,
+        });
+        chains.push(`[${resized.vLabel}]setsar=1,fps=30[v${i}]`);
+      } else {
+        chains.push(
+          `[${videoInputIndex[i]}:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${i}]`,
+        );
+      }
       chains.push(
         `[${audioInputIndex[i]}:a]aformat=sample_rates=44100:channel_layouts=stereo[a${i}]`,
       );
@@ -185,6 +221,16 @@ export default function MergeVideosTool() {
       "[v]",
       "-map",
       "[a]",
+      // This build's multithreaded filter execution has a severe contention
+      // bug with per-pixel filters (colorkey, avgblur — the latter only
+      // reachable here via the "Resize for a platform" blur fill) that
+      // otherwise hangs indefinitely instead of ever completing. Mirrors the
+      // same fix already applied everywhere else in this app that touches
+      // those filters.
+      "-filter_threads",
+      "1",
+      "-filter_complex_threads",
+      "1",
       "-c:v",
       "libx264",
       "-threads",
@@ -370,6 +416,10 @@ export default function MergeVideosTool() {
           hint="Drop more files, or click to browse"
           onFiles={addFiles}
         />
+      </div>
+
+      <div className="mt-4">
+        <ResizeForPlatformSection value={resize} onChange={setResize} />
       </div>
 
       <ExportStatus

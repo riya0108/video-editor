@@ -24,18 +24,48 @@ export type Segmenter = (
 
 let cachedSegmenter: Promise<Segmenter> | null = null;
 
+/**
+ * RMBG-1.4's own config.json declares `"model_type": "SegformerForSemanticSegmentation"`
+ * — a stray PyTorch class name left over from its custom `auto_map`-based
+ * loading path in the *Python* transformers library, not a real registered
+ * model_type keyword. transformers.js's pipeline() only dispatches by
+ * model_type, so it can't map that string to any model class and throws
+ * "Unsupported model type ... None of the candidate model classes support
+ * this type" before ever touching the ONNX graph — this is an upstream
+ * config quirk (see https://github.com/huggingface/transformers.js/issues/1107),
+ * not something wrong with the weights, and other RMBG-1.4 ONNX mirrors
+ * share the same config verbatim. The model's actual computation doesn't
+ * read this field at all — it's purely a JS-side class-selection detail —
+ * so fetching the real config and relabeling just that one field to
+ * "isnet" (registered as a generic single-input/single-output segmentation
+ * model, the same family RMBG-1.4 belongs to) lets it load through that
+ * generic path instead, with everything else about the config untouched.
+ */
+async function loadRmbgConfig(modelId: string): Promise<Record<string, unknown>> {
+  const res = await fetch(`https://huggingface.co/${modelId}/resolve/main/config.json`);
+  const config = await res.json();
+  return { ...config, model_type: "isnet" };
+}
+
 /** Shared with other tools (e.g. passerby-track.ts) so the ~44MB RMBG-1.4 model is only ever downloaded once. */
 export async function loadSegmenter(onProgress?: (p: CutoutProgress) => void): Promise<Segmenter> {
   if (cachedSegmenter) return cachedSegmenter;
-  const { pipeline } = await import("@huggingface/transformers");
-  const promise = pipeline("image-segmentation", PERSON_SEGMENTATION_MODEL, {
-    dtype: "fp32",
-    progress_callback: (info: { status: string; progress?: number }) => {
-      if (info.status === "progress_total" && typeof info.progress === "number") {
-        onProgress?.({ phase: "downloading", fraction: info.progress / 100 });
-      }
-    },
-  }) as unknown as Promise<Segmenter>;
+  const promise = (async () => {
+    const [{ pipeline }, config] = await Promise.all([
+      import("@huggingface/transformers"),
+      loadRmbgConfig(PERSON_SEGMENTATION_MODEL),
+    ]);
+    return pipeline("image-segmentation", PERSON_SEGMENTATION_MODEL, {
+      dtype: "fp32",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see loadRmbgConfig's doc comment for why this override is needed
+      config: config as any,
+      progress_callback: (info: { status: string; progress?: number }) => {
+        if (info.status === "progress_total" && typeof info.progress === "number") {
+          onProgress?.({ phase: "downloading", fraction: info.progress / 100 });
+        }
+      },
+    }) as unknown as Promise<Segmenter>;
+  })();
   promise.catch(() => {
     if (cachedSegmenter === promise) cachedSegmenter = null;
   });
@@ -59,6 +89,41 @@ export function pickCutoutSampleFps(durationSeconds: number): number {
   return Math.min(MAX_SAMPLE_FPS, Math.max(MIN_SAMPLE_FPS, fps));
 }
 
+/**
+ * Hard ceiling on how many cutout frames ever become separate ffmpeg inputs
+ * at export time, independent of `pickCutoutSampleFps`'s duration-based
+ * heuristic above (which alone can't guarantee a small count — e.g. a long
+ * clip pushed to the fps floor still multiplies out to well over 100
+ * frames). This matters because export gives each sampled frame its own
+ * `-loop 1` ffmpeg input, and this build's core-mt wasm ffmpeg only has a
+ * small, fixed pthread pool (hardwareConcurrency+4, patched in
+ * scripts/copy-ffmpeg-core.mjs) — each simultaneously-open looped input
+ * holds one of those threads for the *entire run* (they never hit EOF to
+ * free it), so once open inputs outnumber the pool, the remaining ones wait
+ * forever for a thread that's never coming back: a silent, permanent hang,
+ * not an error. Confirmed empirically: 8 cutout inputs on an 8-core (pool
+ * size 12) machine exported fine; 24 hung indefinitely at 0% with no
+ * console error. Reserving a few threads for the main video input, encoder,
+ * and filtergraph bookkeeping keeps this safely under the pool on any
+ * device, including low-core ones ffmpeg-core sizes down to a pool of ~8.
+ */
+function maxSafeCutoutInputs(): number {
+  const cores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 4;
+  return Math.max(4, Math.min(cores - 2, 12));
+}
+
+/** Evenly thins `times` down to `cap` entries (keeping the first and last) when it's already longer — cheaper and simpler than re-deriving a slower fps after the fact. */
+function capSampleTimes(times: number[], cap: number): number[] {
+  if (times.length <= cap) return times;
+  if (cap <= 1) return [times[0]];
+  const result: number[] = [];
+  for (let i = 0; i < cap; i++) {
+    const idx = Math.round((i * (times.length - 1)) / (cap - 1));
+    result.push(times[idx]);
+  }
+  return result;
+}
+
 export function waitForSeek(video: HTMLVideoElement): Promise<void> {
   return new Promise((resolve) => {
     const handler = () => {
@@ -70,25 +135,30 @@ export function waitForSeek(video: HTMLVideoElement): Promise<void> {
 }
 
 /**
- * Samples the trimmed range of `video` at a reduced fps, and for each sample
- * runs an in-browser person-segmentation model (MediaPipe's selfie
- * segmenter — see ../media/selfie-segmenter.ts; separate from `loadSegmenter`
- * above, which stays on RMBG-1.4 for this file's other, non-person-specific
- * callers) to cut the person out onto a transparent background. Used both for
- * the live "behind a person" caption preview (nearest-sample lookup) and, at
- * export time, as a chain of overlay images ffmpeg composites on top of the
- * drawn caption text so it reads as sitting behind the person.
+ * Shared scaffolding for both cutout strategies below: works out a safe,
+ * capped set of sample times, seeks `video` to each one, draws it into a
+ * shared canvas at the (possibly downscaled) working resolution, and hands
+ * that canvas to `produceBlob` to actually run the segmentation model and
+ * return the cut-out PNG. Keeping this here means the sampling/seeking/
+ * cap/progress logic — and its safety margin against ffmpeg's pthread pool
+ * (see `maxSafeCutoutInputs`) — only has to be right in one place.
  */
-export async function generatePersonCutouts(
+async function sampleTrimmedFrames(
   video: HTMLVideoElement,
-  { start, end, onProgress }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void },
+  {
+    start,
+    end,
+    onProgress,
+    produceBlob,
+  }: {
+    start: number;
+    end: number;
+    onProgress?: (p: CutoutProgress) => void;
+    produceBlob: (canvas: HTMLCanvasElement, index: number) => Promise<Blob | null>;
+  },
 ): Promise<CutoutFrame[]> {
   const duration = Math.max(0, end - start);
   if (duration <= 0 || video.videoWidth === 0) return [];
-
-  onProgress?.({ phase: "downloading", fraction: 0 });
-  const segmenter = await loadSelfieSegmenter();
-  onProgress?.({ phase: "downloading", fraction: 1 });
 
   const naturalW = video.videoWidth;
   const naturalH = video.videoHeight;
@@ -98,16 +168,16 @@ export async function generatePersonCutouts(
 
   const fps = pickCutoutSampleFps(duration);
   const step = 1 / fps;
-  const times: number[] = [];
+  let times: number[] = [];
   for (let t = start; t < end; t += step) times.push(t);
   if (times.length === 0) times.push(start);
+  times = capSampleTimes(times, maxSafeCutoutInputs());
 
   const canvas = document.createElement("canvas");
   canvas.width = outW;
   canvas.height = outH;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return [];
-  const work = document.createElement("canvas");
 
   const originalTime = video.currentTime;
   const wasPaused = video.paused;
@@ -121,14 +191,7 @@ export async function generatePersonCutouts(
       await waitForSeek(video);
       ctx.drawImage(video, 0, 0, outW, outH);
 
-      const mask = segmentPersonMask(segmenter, canvas, i);
-      if (!mask) {
-        onProgress?.({ phase: "processing", fraction: (i + 1) / times.length });
-        continue;
-      }
-
-      const cutout = applyMaskForeground(canvas, outW, outH, mask, work);
-      const blob = await new Promise<Blob | null>((resolve) => cutout.toBlob(resolve, "image/png"));
+      const blob = await produceBlob(canvas, i);
       if (blob) frames.push({ time: t, blob, url: URL.createObjectURL(blob) });
 
       onProgress?.({ phase: "processing", fraction: (i + 1) / times.length });
@@ -139,6 +202,72 @@ export async function generatePersonCutouts(
   }
 
   return frames;
+}
+
+/**
+ * Samples the trimmed range of `video` at a reduced fps, and for each sample
+ * runs an in-browser person-segmentation model (MediaPipe's selfie
+ * segmenter — see ../media/selfie-segmenter.ts; separate from `loadSegmenter`
+ * above, which stays on RMBG-1.4 for this file's other, non-person-specific
+ * callers) to cut the person out onto a transparent background. Used for the
+ * live "behind a person" caption preview (nearest-sample lookup) and its
+ * export overlay — deliberately kept on the small, fast, person-only model
+ * since that feature is specifically about a person occluding text, and
+ * needs to stay responsive as a live preview.
+ */
+export async function generatePersonCutouts(
+  video: HTMLVideoElement,
+  { start, end, onProgress }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void },
+): Promise<CutoutFrame[]> {
+  onProgress?.({ phase: "downloading", fraction: 0 });
+  const segmenter = await loadSelfieSegmenter();
+  onProgress?.({ phase: "downloading", fraction: 1 });
+
+  const work = document.createElement("canvas");
+  return sampleTrimmedFrames(video, {
+    start,
+    end,
+    onProgress,
+    produceBlob: async (canvas, i) => {
+      const mask = segmentPersonMask(segmenter, canvas, i);
+      if (!mask) return null;
+      const cutout = applyMaskForeground(canvas, canvas.width, canvas.height, mask, work);
+      return new Promise<Blob | null>((resolve) => cutout.toBlob(resolve, "image/png"));
+    },
+  });
+}
+
+/**
+ * Same shape as `generatePersonCutouts`, but backed by RMBG-1.4 (`loadSegmenter`)
+ * — the same general-purpose dichotomous segmentation model the still-image
+ * "no green screen" mode already uses — instead of the person-only selfie
+ * model. Used by the Remove Background tool's video AI mode so it can find
+ * *any* subject (a hand, a product, a phone/laptop, a person) rather than
+ * just people, matching what the image path already does.
+ */
+export async function generateSubjectCutouts(
+  video: HTMLVideoElement,
+  { start, end, onProgress }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void },
+): Promise<CutoutFrame[]> {
+  const [segmenter, { RawImage }] = await Promise.all([loadSegmenter(onProgress), import("@huggingface/transformers")]);
+
+  return sampleTrimmedFrames(video, {
+    start,
+    end,
+    onProgress,
+    produceBlob: async (canvas) => {
+      const output = await segmenter(canvas);
+      let mask = output[0]?.mask;
+      if (!mask) return null;
+      if (mask.width !== canvas.width || mask.height !== canvas.height) {
+        mask = await mask.resize(canvas.width, canvas.height);
+      }
+      mask.grayscale();
+      const cutoutRaw = RawImage.fromCanvas(canvas).clone().rgba();
+      cutoutRaw.putAlpha(mask);
+      return (await cutoutRaw.toBlob("image/png")) as Blob;
+    },
+  });
 }
 
 export function revokeCutoutFrames(frames: CutoutFrame[]) {

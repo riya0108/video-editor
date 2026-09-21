@@ -7,6 +7,7 @@ import ResultPanel from "../ResultPanel";
 import TrimSlider from "../TrimSlider";
 import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
+import ResizeForPlatformSection from "./ResizeForPlatformSection";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import {
@@ -15,6 +16,7 @@ import {
   VIDEO_EXT_MIME,
 } from "../../../lib/ffmpeg/format";
 import { formatTime, toFfmpegTimestamp } from "../../../lib/time";
+import { applyResizeCanvas, DEFAULT_RESIZE_SETTINGS, type ResizeCanvasSettings } from "../../../lib/ffmpeg/resize-canvas-filter";
 
 export default function TrimVideoTool() {
   const video = useVideoFile();
@@ -24,6 +26,7 @@ export default function TrimVideoTool() {
   const [end, setEnd] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [resize, setResize] = useState<ResizeCanvasSettings>(DEFAULT_RESIZE_SETTINGS);
 
   const handleLoadedMetadata = () => {
     video.onLoadedMetadata();
@@ -65,8 +68,68 @@ export default function TrimVideoTool() {
     if (!video.file) return;
     const ext = guessVideoExtension(video.file);
     const inputName = `input.${ext}`;
-    const outputName = `output.${ext}`;
 
+    // Resizing means burning in a new (padded) canvas, so it can't ride the
+    // fast lossless `-c copy` path below — that only works when the pixels
+    // themselves don't change. Falls back to a real re-encode only when the
+    // feature is actually on.
+    if (resize.enabled) {
+      const inputArgs = ["-threads", "1", "-ss", toFfmpegTimestamp(start), "-i", inputName, "-to", toFfmpegTimestamp(end - start)];
+      const filters: string[] = [];
+      let inputCount = 1;
+      let labelCount = 0;
+      const newLabel = (prefix: "v") => `${prefix}${++labelCount}`;
+      const addLavfiInput = (source: string, preArgs: string[] = []): number => {
+        inputArgs.push(...preArgs, "-f", "lavfi", "-i", source);
+        return inputCount++;
+      };
+
+      const resized = applyResizeCanvas({
+        vLabel: "0:v",
+        filters,
+        addLavfiInput,
+        newLabel,
+        settings: resize,
+        durationSeconds: end - start,
+      });
+
+      const outputName = "output.mp4";
+      await exportState.run(
+        {
+          inputs: [{ name: inputName, data: video.file }],
+          args: [
+            ...inputArgs,
+            "-filter_complex",
+            filters.join(";"),
+            "-map",
+            `[${resized.vLabel}]`,
+            "-map",
+            "0:a?",
+            "-filter_threads",
+            "1",
+            "-filter_complex_threads",
+            "1",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            "-threads",
+            "1",
+            "-c:a",
+            "aac",
+            outputName,
+          ],
+          outputName,
+          outputMimeType: "video/mp4",
+        },
+        `trimmed-${stripExtension(video.file.name)}.mp4`,
+      );
+      return;
+    }
+
+    const outputName = `output.${ext}`;
     await exportState.run(
       {
         inputs: [{ name: inputName, data: video.file }],
@@ -144,6 +207,8 @@ export default function TrimVideoTool() {
               <span>{formatTime(end, true)}</span>
             </div>
           </ToolPanelSection>
+
+          <ResizeForPlatformSection value={resize} onChange={setResize} />
 
           <ExportStatus
             enginePhase={exportState.enginePhase}

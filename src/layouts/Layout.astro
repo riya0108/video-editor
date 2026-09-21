@@ -48,8 +48,9 @@ const {
     </script>
   </head>
   <body class={`flex min-h-dvh flex-col bg-(--color-bg) text-(--color-text) ${fullScreen ? "md:h-dvh md:overflow-hidden" : ""}`}>
+    <div class="site-backdrop" aria-hidden="true"></div>
     <Header />
-    <main class={fullScreen ? "min-h-0 flex-1 md:overflow-hidden" : "flex-1"}>
+    <main class={`relative ${fullScreen ? "min-h-0 flex-1 md:overflow-hidden" : "flex-1"}`}>
       <slot />
     </main>
     {!fullScreen && <Footer />}

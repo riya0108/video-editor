@@ -26,6 +26,8 @@ import {
   History as HistoryIcon,
   Mic,
   Square,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import Dropzone from "../Dropzone";
 import ToolUploadScreen from "../ToolUploadScreen";
@@ -48,6 +50,7 @@ import PositionedTextBlock from "./editor/PositionedTextBlock";
 import CaptionOverlay from "./editor/CaptionOverlay";
 import DraggableResizableOverlay from "./editor/DraggableResizableOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
+import { useVideoClock } from "../../../lib/hooks/useVideoClock";
 import { useFfmpegExport } from "../../../lib/hooks/useFfmpegExport";
 import { useCaptions } from "../../../lib/hooks/useCaptions";
 import { usePersonCutout } from "../../../lib/hooks/usePersonCutout";
@@ -80,7 +83,7 @@ import {
   isAtPositionPreset,
   type TextPositionPreset,
 } from "../../../lib/ffmpeg/text-position-presets";
-import { resolveBackgroundSize } from "../../../lib/ffmpeg/editor-state";
+import { resolveBackgroundSize, nextLogoRegionId } from "../../../lib/ffmpeg/editor-state";
 import { SOCIAL_PRESET_GROUPS } from "../../../lib/social-presets";
 import {
   IMAGE_ENTRANCE_ANIMATIONS,
@@ -91,6 +94,7 @@ import type {
   EditorChromaKeyState,
   EditorCropState,
   EditorLogoState,
+  EditorLogoRegion,
   EditorBackgroundState,
   EditorMusicState,
   EditorDubState,
@@ -209,7 +213,7 @@ function makeInitialDocument(): EditorDocument {
     },
     voiceRemover: false,
     noise: { enabled: false, strength: 12 },
-    logo: { enabled: false, rect: DEFAULT_LOGO_RECT },
+    logo: { enabled: false, regions: [{ id: nextLogoRegionId(), rect: DEFAULT_LOGO_RECT }] },
     background: {
       enabled: false,
       presetId: "instagram-reel",
@@ -283,6 +287,41 @@ export default function VideoEditorTool() {
       label ?? String(key),
     );
   }
+
+  const addLogoRegion = () => {
+    const n = doc.logo.regions.length;
+    const offset = (n % 5) * 0.04;
+    const rect: FractionRect = {
+      x: Math.max(0, Math.min(0.98 - DEFAULT_LOGO_RECT.w, DEFAULT_LOGO_RECT.x - offset)),
+      y: Math.max(0, Math.min(0.98 - DEFAULT_LOGO_RECT.h, DEFAULT_LOGO_RECT.y + offset)),
+      w: DEFAULT_LOGO_RECT.w,
+      h: DEFAULT_LOGO_RECT.h,
+    };
+    const region: EditorLogoRegion = { id: nextLogoRegionId(), rect };
+    patch("logo", (s) => ({ ...s, regions: [...s.regions, region] }), "Logo");
+    setSelectedLogoRegionId(region.id);
+  };
+
+  const removeLogoRegion = (id: string) => {
+    patch(
+      "logo",
+      (s) => ({ ...s, regions: s.regions.filter((r) => r.id !== id) }),
+      "Logo",
+    );
+    setSelectedLogoRegionId((cur) => (cur === id ? null : cur));
+  };
+
+  const updateLogoRegionRect = (id: string, rect: FractionRect) => {
+    patch(
+      "logo",
+      (s) => ({
+        ...s,
+        regions: s.regions.map((r) => (r.id === id ? { ...r, rect } : r)),
+      }),
+      "Logo",
+    );
+  };
+
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // Which rail panel is open — null keeps the preview at full width.
@@ -303,12 +342,24 @@ export default function VideoEditorTool() {
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  // Animation-frame-granular playback position, used only for caption
+  // rendering (word-level karaoke highlighting and per-word fades) — the
+  // `currentTime` state above is driven by the native `timeupdate` event,
+  // which browsers throttle to a few callbacks a second, far too coarse to
+  // track word-level windows that are often only 150-400ms long.
+  const smoothTime = useVideoClock(video.videoRef);
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewAspectId, setPreviewAspectId] = useState("original");
   const previewAspect =
     PREVIEW_ASPECTS.find((a) => a.id === previewAspectId)?.ratio ?? null;
 
   const [pickingColor, setPickingColor] = useState(false);
+  // Which logo/watermark region is showing its draggable/resizable box in
+  // the preview — the rest render as plain click-to-select outlines, same
+  // pattern the standalone Remove Logo tool uses for its region list.
+  const [selectedLogoRegionId, setSelectedLogoRegionId] = useState<
+    string | null
+  >(null);
   const chromaBg = useChromaBgPreview({
     chromaKey: doc.chromaKey,
     background: doc.background,
@@ -585,11 +636,11 @@ export default function VideoEditorTool() {
   }
 
   const activeCaptionCue = doc.captionsEnabled
-    ? captions.cues.find((c) => currentTime >= c.start && currentTime < c.end)
+    ? captions.cues.find((c) => smoothTime >= c.start && smoothTime < c.end)
     : undefined;
   const cutoutFrame =
     doc.captionsEnabled && captions.style.occludeByPerson
-      ? nearestCutoutFrame(personCutout.frames, currentTime)
+      ? nearestCutoutFrame(personCutout.frames, smoothTime)
       : null;
 
   // Feature lanes are authored in main-clip-relative time; when an intro/outro
@@ -1149,8 +1200,51 @@ export default function VideoEditorTool() {
                   }
                 />
                 <p className="text-caption text-(--color-text-muted)">
-                  Drag the red box over the logo or watermark in the preview.
+                  Drag a box over each logo or watermark in the preview. Add
+                  more boxes for more than one.
                 </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {doc.logo.regions.map((region, i) => {
+                    const isSelected =
+                      (selectedLogoRegionId ?? doc.logo.regions[0]?.id) ===
+                      region.id;
+                    return (
+                      <div
+                        key={region.id}
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-caption font-medium transition-colors ${
+                          isSelected
+                            ? "border-danger-500 bg-danger-500/10 text-danger-600"
+                            : "border-(--color-border) text-(--color-text-muted) hover:border-(--color-border-strong)"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setSelectedLogoRegionId(region.id)}
+                        >
+                          Box {i + 1}
+                        </button>
+                        {doc.logo.regions.length > 1 && (
+                          <button
+                            type="button"
+                            aria-label={`Remove box ${i + 1}`}
+                            onClick={() => removeLogoRegion(region.id)}
+                            className="text-(--color-text-muted) hover:text-danger-600"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={addLogoRegion}
+                    className="inline-flex items-center gap-1 rounded-full border border-dashed border-(--color-border) px-3 py-1 text-caption font-medium text-(--color-text-muted) transition-colors hover:border-(--color-border-strong) hover:text-(--color-text)"
+                  >
+                    <Plus size={12} />
+                    Add box
+                  </button>
+                </div>
               </>
             )}
 
@@ -2175,9 +2269,20 @@ export default function VideoEditorTool() {
                         <FloatingTextToolbar
                           y={captions.style.y}
                           fontId={captions.style.fontId}
-                          fontSize={captions.style.fontSize}
+                          fontSize={activeCaptionCue.fontSize ?? captions.style.fontSize}
                           color={captions.style.color}
-                          onChange={captions.updateStyle}
+                          onChange={({ fontSize, ...stylePatch }) => {
+                            // Size applies to just this one selected caption
+                            // (see CaptionCue.fontSize) rather than every
+                            // caption, so one line can be made bigger/smaller
+                            // than the rest; font/color stay style-wide.
+                            if (fontSize !== undefined) {
+                              captions.updateCue(activeCaptionCue.id, { fontSize });
+                            }
+                            if (Object.keys(stylePatch).length > 0) {
+                              captions.updateStyle(stylePatch);
+                            }
+                          }}
                         />
                       )}
                     </>
@@ -2203,32 +2308,56 @@ export default function VideoEditorTool() {
                           }
                         />
                       )}
-                      {!pickingColor && doc.logo.enabled && (
-                        <div
-                          aria-hidden="true"
-                          className="pointer-events-none absolute rounded-sm"
-                          style={{
-                            left: doc.logo.rect.x * box.width,
-                            top: doc.logo.rect.y * box.height,
-                            width: doc.logo.rect.w * box.width,
-                            height: doc.logo.rect.h * box.height,
-                            backdropFilter: "blur(16px)",
-                            WebkitBackdropFilter: "blur(16px)",
-                          }}
-                        />
-                      )}
-                      {!pickingColor && doc.logo.enabled && (
-                        <RectOverlay
-                          boxWidth={box.width}
-                          boxHeight={box.height}
-                          rect={doc.logo.rect}
-                          onChange={(rect) =>
-                            patch("logo", (s) => ({ ...s, rect }), "Logo")
-                          }
-                          color="danger"
-                          minFraction={0.03}
-                        />
-                      )}
+                      {!pickingColor &&
+                        doc.logo.enabled &&
+                        doc.logo.regions.map((region) => {
+                          const isSelected =
+                            (selectedLogoRegionId ??
+                              doc.logo.regions[0]?.id) === region.id;
+                          return (
+                            <div key={region.id}>
+                              <div
+                                aria-hidden="true"
+                                className="pointer-events-none absolute rounded-sm"
+                                style={{
+                                  left: region.rect.x * box.width,
+                                  top: region.rect.y * box.height,
+                                  width: region.rect.w * box.width,
+                                  height: region.rect.h * box.height,
+                                  backdropFilter: "blur(16px)",
+                                  WebkitBackdropFilter: "blur(16px)",
+                                }}
+                              />
+                              {isSelected ? (
+                                <RectOverlay
+                                  boxWidth={box.width}
+                                  boxHeight={box.height}
+                                  rect={region.rect}
+                                  onChange={(rect) =>
+                                    updateLogoRegionRect(region.id, rect)
+                                  }
+                                  color="danger"
+                                  minFraction={0.03}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  aria-label="Select this logo box"
+                                  onClick={() =>
+                                    setSelectedLogoRegionId(region.id)
+                                  }
+                                  className="absolute rounded-sm border-2 border-dashed border-danger-500 opacity-70 hover:opacity-100"
+                                  style={{
+                                    left: region.rect.x * box.width,
+                                    top: region.rect.y * box.height,
+                                    width: region.rect.w * box.width,
+                                    height: region.rect.h * box.height,
+                                  }}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
 
                       {!pickingColor &&
                         doc.overlays.map((layer) => (
@@ -2358,8 +2487,9 @@ export default function VideoEditorTool() {
                           <CaptionOverlay
                             style={captions.style}
                             cue={activeCaptionCue}
-                            currentTime={currentTime}
+                            currentTime={smoothTime}
                             scale={scale}
+                            maxWidthPx={Math.max(0, box.width * 0.92 - 32)}
                           />
                         </PositionedTextBlock>
                       )}
@@ -2417,7 +2547,7 @@ export default function VideoEditorTool() {
             }
             end={clipTimeline.active ? clipTimeline.introOffset + end : end}
             currentTime={
-              clipTimeline.active ? clipTimeline.virtualTime : currentTime
+              clipTimeline.active ? clipTimeline.virtualTime : smoothTime
             }
             onChangeStart={(t) =>
               setStart(

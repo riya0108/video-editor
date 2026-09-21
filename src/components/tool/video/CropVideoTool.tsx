@@ -6,6 +6,7 @@ import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
 import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
+import ResizeForPlatformSection from "./ResizeForPlatformSection";
 import FramedVideoStage from "./FramedVideoStage";
 import RectOverlay, { type FractionRect } from "./RectOverlay";
 import { useVideoFile } from "../../../lib/hooks/useVideoFile";
@@ -15,6 +16,7 @@ import {
   stripExtension,
 } from "../../../lib/ffmpeg/format";
 import { evenRound } from "../../../lib/geometry";
+import { applyResizeCanvas, DEFAULT_RESIZE_SETTINGS, type ResizeCanvasSettings } from "../../../lib/ffmpeg/resize-canvas-filter";
 
 const DEFAULT_RECT: FractionRect = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
 
@@ -22,6 +24,7 @@ export default function CropVideoTool() {
   const video = useVideoFile();
   const exportState = useFfmpegExport();
   const [rect, setRect] = useState<FractionRect>(DEFAULT_RECT);
+  const [resize, setResize] = useState<ResizeCanvasSettings>(DEFAULT_RESIZE_SETTINGS);
 
   const handleExport = async () => {
     if (!video.file || video.videoWidth === 0 || video.isMetadataLoading)
@@ -35,14 +38,44 @@ export default function CropVideoTool() {
     const x = evenRound(rect.x * video.videoWidth);
     const y = evenRound(rect.y * video.videoHeight);
 
+    const inputArgs = ["-threads", "1", "-i", inputName];
+    const filters: string[] = [`[0:v]crop=${w}:${h}:${x}:${y}[v1]`];
+    let labelCount = 1;
+    let inputCount = 1;
+    const newLabel = (prefix: "v") => `${prefix}${++labelCount}`;
+    const addLavfiInput = (source: string, preArgs: string[] = []): number => {
+      inputArgs.push(...preArgs, "-f", "lavfi", "-i", source);
+      return inputCount++;
+    };
+
+    let vLabel = "v1";
+    if (resize.enabled) {
+      const resized = applyResizeCanvas({
+        vLabel,
+        filters,
+        addLavfiInput,
+        newLabel,
+        settings: resize,
+        durationSeconds: video.duration,
+      });
+      vLabel = resized.vLabel;
+    }
+
     await exportState.run(
       {
         inputs: [{ name: inputName, data: video.file }],
         args: [
-          "-i",
-          inputName,
-          "-vf",
-          `crop=${w}:${h}:${x}:${y}`,
+          ...inputArgs,
+          "-filter_complex",
+          filters.join(";"),
+          "-map",
+          `[${vLabel}]`,
+          "-map",
+          "0:a?",
+          "-filter_threads",
+          "1",
+          "-filter_complex_threads",
+          "1",
           "-c:v",
           "libx264",
           "-threads",
@@ -52,7 +85,7 @@ export default function CropVideoTool() {
           "-crf",
           "23",
           "-c:a",
-          "copy",
+          resize.enabled ? "aac" : "copy",
           outputName,
         ],
         outputName,
@@ -114,6 +147,8 @@ export default function CropVideoTool() {
               </p>
             )}
           </ToolPanelSection>
+
+          <ResizeForPlatformSection value={resize} onChange={setResize} />
 
           <ExportStatus
             enginePhase={exportState.enginePhase}

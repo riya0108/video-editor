@@ -91,7 +91,7 @@ export default function RemoveBackgroundTool() {
   const chromaWorkRef = useRef<HTMLCanvasElement | null>(null);
   if (!chromaWorkRef.current && typeof document !== "undefined") chromaWorkRef.current = document.createElement("canvas");
 
-  const cutout = usePersonCutout();
+  const cutout = usePersonCutout("subject");
   const exportState = useBgRemovalExport();
   const videoPreview = useBgRemovalPreview({ mode, chroma, replace, cutoutFrames: cutout.frames });
 
@@ -162,9 +162,10 @@ export default function RemoveBackgroundTool() {
     setFile(picked);
     setKind(isVideo ? "video" : "image");
     setSourceUrl(URL.createObjectURL(picked));
-    // Video export can't produce real transparency (no alpha-capable encoder
-    // in this app's ffmpeg build) — default it to a background that always
-    // works instead of a mode the export step would have to silently swap.
+    // Video defaults to "blur" — "transparent" is still available for video,
+    // but (like cutout.pro's own transparent export) it's a qtrle .mov with
+    // real alpha that most browsers can't preview inline, so it's an opt-in
+    // rather than the default.
     setReplace((r) => ({ ...r, mode: isVideo ? "blur" : "transparent" }));
   };
 
@@ -198,8 +199,20 @@ export default function RemoveBackgroundTool() {
     setPicking(false);
   };
 
+  // "transparent" export for video is only offered in green-screen mode.
+  // The AI-cutout path needs its overlay chain to actually carry alpha
+  // (format=auto, see person-cutout-filter.ts), and combined with a
+  // lossless qtrle encode that reliably hangs indefinitely in this app's
+  // ffmpeg-wasm build on real (non-trivial) clips — confirmed by testing, a
+  // genuine environment limitation rather than something more tuning fixes.
+  // Green-screen mode's transparent export doesn't touch that chain at all
+  // and is fast and reliable.
   const availableReplaceModes: BgReplaceMode[] =
-    kind === "image" ? ["transparent", "color", "gradient", "blur", "image"] : ["color", "gradient", "blur", "image", "video"];
+    kind === "image"
+      ? ["transparent", "color", "gradient", "blur", "image"]
+      : mode === "chroma"
+        ? ["transparent", "color", "gradient", "blur", "image", "video"]
+        : ["color", "gradient", "blur", "image", "video"];
 
   const trimmedDuration = Math.max(0, trimEnd - trimStart);
   const canDetectSubject = kind === "video" && width > 0 && trimmedDuration > 0;
@@ -236,7 +249,7 @@ export default function RemoveBackgroundTool() {
     }
 
     const replaceExport: BgReplaceExportSettings = {
-      mode: replace.mode === "transparent" ? "blur" : replace.mode,
+      mode: replace.mode,
       color: replace.color,
       gradientFrom: replace.gradientFrom,
       gradientTo: replace.gradientTo,
@@ -244,17 +257,20 @@ export default function RemoveBackgroundTool() {
       imageFile: replace.imageFile,
       videoFile: replace.videoFile,
     };
+    // "transparent" video exports real alpha as a qtrle .mov — every other
+    // mode composites onto something opaque and stays mp4.
+    const videoExt = replace.mode === "transparent" ? "mov" : "mp4";
 
     if (mode === "chroma") {
       await exportState.runVideoChroma(
         { file, width, height, trimStart, trimEnd, replace: replaceExport, chroma },
-        `${filenameBase}.mp4`,
+        `${filenameBase}.${videoExt}`,
       );
     } else {
       if (cutout.frames.length === 0) return;
       await exportState.runVideoAi(
         { file, width, height, trimStart, trimEnd, replace: replaceExport, cutoutFrames: cutout.frames },
-        `${filenameBase}.mp4`,
+        `${filenameBase}.${videoExt}`,
       );
     }
   };
@@ -288,6 +304,11 @@ export default function RemoveBackgroundTool() {
         blob={exportState.result.blob}
         filename={exportState.result.filename}
         kind={kind}
+        previewNote={
+          kind === "video" && replace.mode === "transparent"
+            ? "This is a .mov with a real alpha channel — most browsers can't preview transparent video inline, so this player won't show it. Open it in Premiere Pro, DaVinci Resolve, Final Cut Pro, or iMovie to see the transparency. Need something that plays everywhere instead? Use a solid color background and key it out in your editor."
+            : undefined
+        }
         onReset={reset}
       />
     );
@@ -308,7 +329,13 @@ export default function RemoveBackgroundTool() {
               </button>
               <button
                 type="button"
-                onClick={() => setMode("ai")}
+                onClick={() => {
+                  setMode("ai");
+                  // "transparent" video export isn't offered in AI mode (see
+                  // availableReplaceModes) — fall back so a stale selection
+                  // from green-screen mode can't sneak through to export.
+                  if (kind === "video" && replace.mode === "transparent") setReplace((r) => ({ ...r, mode: "blur" }));
+                }}
                 className={`flex-1 rounded px-3 py-1.5 text-caption font-medium transition-colors ${mode === "ai" ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
               >
                 No green screen (AI)
@@ -406,6 +433,9 @@ export default function RemoveBackgroundTool() {
                     <p className="text-caption text-(--color-text-muted)">
                       Video is sampled at a reduced frame rate for detection, so it works best on mostly-static or talking-head
                       clips. For fast motion, green-screen mode still gives the cleanest per-frame edges.
+                    </p>
+                    <p className="text-caption text-(--color-text-muted)">
+                      Transparent (real alpha) export isn't available in AI mode — switch to "I have a green screen" for that.
                     </p>
                   </>
                 ) : (
@@ -518,7 +548,11 @@ export default function RemoveBackgroundTool() {
                 </label>
               )}
               {replace.mode === "transparent" && (
-                <p className="text-caption text-(--color-text-muted)">Exports a PNG with real transparency — drop it straight into another design or edit.</p>
+                <p className="text-caption text-(--color-text-muted)">
+                  {kind === "image"
+                    ? "Exports a PNG with real transparency — drop it straight into another design or edit."
+                    : "Exports a .mov with a real alpha channel — drop it into Premiere Pro, DaVinci Resolve, Final Cut Pro, or iMovie. Most browsers and simpler players can't preview transparent video, so use \"Blur\" or a color/image backdrop if you need something that plays everywhere."}
+                </p>
               )}
             </div>
           </ToolPanelSection>

@@ -13,6 +13,8 @@ export interface CaptionCue {
   text: string;
   /** Per-word timestamps, only present when auto-generated with word-level timing. Powers karaoke highlighting. */
   words?: CaptionWord[];
+  /** Overrides `CaptionStyle.fontSize` for just this cue — set when a single caption is resized from the floating toolbar while it's the selected/active one, instead of resizing every caption in the video. */
+  fontSize?: number;
 }
 
 export type CaptionPosition = "top" | "center" | "bottom";

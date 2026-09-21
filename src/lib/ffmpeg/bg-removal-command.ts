@@ -7,7 +7,7 @@ import type { BgReplaceMode, BgGradientDirection, ChromaSettings } from "../medi
 
 /** Mirrors BgReplaceSettings but with export-time File references instead of live DOM elements. */
 export interface BgReplaceExportSettings {
-  mode: Exclude<BgReplaceMode, "transparent">;
+  mode: BgReplaceMode;
   color: string;
   gradientFrom: string;
   gradientTo: string;
@@ -32,7 +32,27 @@ export interface BgRemovalCommandResult {
   outputMimeType: string;
 }
 
-/** Video export can't produce real alpha (no vpx/webm encoder in this app's ffmpeg-wasm build), so every mode composites onto something opaque — unlike the image pipeline, which can output a genuinely transparent PNG. */
+function isTransparentMode(mode: BgReplaceMode): boolean {
+  return mode === "transparent";
+}
+
+/**
+ * ffmpeg's `despill` filter only understands "green" or "blue" as a spill
+ * color — map the user's arbitrary chroma hex onto whichever of those two
+ * it's closer to (by hue), or null to skip despill entirely for screens far
+ * from either (white/black/custom backdrops, where there's no color spill to
+ * suppress). Removes the green/blue fringing that bleeds onto hair and
+ * semi-transparent edges even after a clean colorkey pull.
+ */
+function despillTypeFor(colorHex: string): "green" | "blue" | null {
+  const c = parseHexColor(colorHex);
+  const max = Math.max(c.r, c.g, c.b);
+  if (max < 40) return null; // too dark to have a meaningful dominant hue
+  if (c.g >= c.r && c.g >= c.b && c.g - Math.max(c.r, c.b) > 20) return "green";
+  if (c.b >= c.r && c.b >= c.g && c.b - Math.max(c.r, c.g) > 20) return "blue";
+  return null;
+}
+
 function buildCommandShell(input: BgRemovalCommandInput) {
   const inputs: { name: string; data: File | Blob | string }[] = [];
   const inputArgs: string[] = [];
@@ -44,7 +64,13 @@ function buildCommandShell(input: BgRemovalCommandInput) {
     return `${prefix}${labelCount}`;
   };
   const addFileInput = (name: string, data: File | Blob, preArgs: string[] = []): number => {
-    inputArgs.push(...preArgs, "-i", name);
+    // Decoder thread count, not just the encoder's: this build's core-mt wasm
+    // can only reliably spin up its *initial* pthread pool — any later
+    // on-demand worker request (e.g. from an auto-multithreaded h264 decode)
+    // hangs forever in this sandbox with no error. Pinning decode to 1 thread
+    // per input keeps total pthread demand inside the initial pool (mirrors
+    // the same fix in build-editor-command.ts).
+    inputArgs.push("-threads", "1", ...preArgs, "-i", name);
     inputs.push({ name, data });
     const idx = inputCount;
     inputCount += 1;
@@ -71,6 +97,17 @@ function buildCommandShell(input: BgRemovalCommandInput) {
 
   /** Builds the chosen replacement as its own full-size (W×H) video layer, returning its label. `blurSourceLabel` is a *raw, not-yet-consumed* stream reference — required for "blur" mode, which blurs that source in place of a separate asset. */
   const buildBackgroundLayer = (blurSourceLabel: string): string => {
+    if (input.replace.mode === "transparent") {
+      // A fully transparent WxH canvas, same duration bound as the looped
+      // image/video branches below. The `format=yuva420p` has to be baked
+      // into the *same* lavfi source string — a `color` input's alpha gets
+      // silently flattened to opaque the moment it crosses into a separate
+      // `-filter_complex` step (verified empirically: chaining format here
+      // instead of as a later `[idx:v]format=...` filter is what actually
+      // keeps the alpha channel alive into the rest of the graph).
+      const idx = addLavfiInput(`color=c=0x00000000:s=${W}x${H}:d=${durArg},format=yuva420p`);
+      return `${idx}:v`;
+    }
     if (input.replace.mode === "color") {
       const idx = addLavfiInput(`color=c=${input.replace.color.replace("#", "0x")}:s=${W}x${H}:d=${durArg}`);
       return `${idx}:v`;
@@ -92,33 +129,44 @@ function buildCommandShell(input: BgRemovalCommandInput) {
     }
     if (input.replace.mode === "image" && input.replace.imageFile) {
       const ext = guessImageExtension(input.replace.imageFile);
-      const idx = addFileInput(`bg.${ext}`, input.replace.imageFile, ["-loop", "1"]);
+      // Looped image inputs have no inherent duration — without an explicit
+      // bound here the filtergraph output never reaches EOF and ffmpeg.exec()
+      // hangs forever (progress stuck at 0%).
+      const idx = addFileInput(`bg.${ext}`, input.replace.imageFile, ["-loop", "1", "-t", durArg]);
       const out = newLabel("v");
       filters.push(`[${idx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[${out}]`);
       return out;
     }
     if (input.replace.mode === "video" && input.replace.videoFile) {
       const ext = guessVideoExtension(input.replace.videoFile);
-      const idx = addFileInput(`bg.${ext}`, input.replace.videoFile, ["-stream_loop", "-1"]);
+      // Same unbounded-duration issue as the image branch above — a
+      // `-stream_loop -1` input loops forever without an explicit `-t`.
+      const idx = addFileInput(`bg.${ext}`, input.replace.videoFile, ["-stream_loop", "-1", "-t", durArg]);
       const out = newLabel("v");
       filters.push(`[${idx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[${out}]`);
       return out;
     }
-    // "blur" — split the raw source so both the blur pass and whatever
-    // consumes `blurSourceLabel` afterwards each get their own copy, since a
-    // filtergraph pad can only feed one consumer directly.
-    const split1 = newLabel("v");
-    const split2 = newLabel("v");
-    filters.push(`[${blurSourceLabel}]split=2[${split1}][${split2}]`);
+    // "blur" — only the AI-cutout path reaches this branch (the chroma path
+    // special-cases "blur" itself above, since colorkey also needs its own
+    // copy of the raw stream). No other consumer needs `blurSourceLabel`
+    // here, so blur it directly instead of splitting off a copy nothing
+    // reads — an unconsumed split output is a hard ffmpeg filtergraph error
+    // ("Filter split has an unconnected output"), not a silent no-op.
     const out = newLabel("v");
-    filters.push(`[${split1}]avgblur=sizeX=40:sizeY=40[${out}]`);
+    filters.push(`[${blurSourceLabel}]avgblur=sizeX=40:sizeY=40[${out}]`);
     return out;
   };
 
   return { inputs, inputArgs, filters, newLabel, addFileInput, addLavfiInput, buildBackgroundLayer, mainIndex, W, H, durArg, trimmedDuration };
 }
 
-function finalizeArgs(inputArgs: string[], filters: string[], mainIndex: number, finalV: string): string[] {
+function finalizeArgs(
+  inputArgs: string[],
+  filters: string[],
+  mainIndex: number,
+  finalV: string,
+  alpha: boolean,
+): { args: string[]; outputName: string; outputMimeType: string } {
   const args = [...inputArgs];
   if (filters.length > 0) args.push("-filter_complex", filters.join(";"));
   args.push("-map", `[${finalV}]`);
@@ -127,21 +175,46 @@ function finalizeArgs(inputArgs: string[], filters: string[], mainIndex: number,
   // filter execution has a severe contention bug with colorkey (and related
   // per-pixel filters) that otherwise never completes.
   args.push("-filter_threads", "1", "-filter_complex_threads", "1");
+  if (alpha) {
+    // ProRes 4444 in a .mov container — this build's only alpha encoder that
+    // both carries real alpha end to end *and* actually plays back
+    // natively. Tried in order: libvpx-vp9 hangs/crashes on any input in
+    // this wasm build; libvpx (VP8) encodes and plays back fine but never
+    // actually writes the alpha bitstream (decodes back fully opaque
+    // despite the container correctly claiming alpha_mode=1); qtrle
+    // (QuickTime Animation) does carry real alpha correctly, but two fatal
+    // problems surfaced on a real (non-synthetic) clip: its RLE compression
+    // produced a 515MB file for a 10-second 1080p screen recording, and —
+    // worse — modern macOS's own AVFoundation stack couldn't decode it at
+    // all (QuickLook hung indefinitely; confirmed directly). ProRes is
+    // Apple's own professional codec, natively supported by
+    // Premiere/DaVinci/Final Cut/iMovie *and* macOS itself (QuickLook
+    // decoded a ProRes 4444 test file in under 2 seconds), and its DCT-based
+    // compression is far more reasonable for real footage than qtrle's raw
+    // RLE. No browser can preview a .mov inline either way (`canPlayType`
+    // is empty for video/quicktime) — that's expected, matching how
+    // reference tools like cutout.pro handle this same alpha-video gap.
+    args.push("-pix_fmt", "yuva444p10le", "-c:v", "prores_ks", "-profile:v", "4444", "-threads", "1", "-c:a", "aac");
+    args.push("output.mov");
+    return { args, outputName: "output.mov", outputMimeType: "video/quicktime" };
+  }
   args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "1", "-c:a", "aac");
   args.push("output.mp4");
-  return args;
+  return { args, outputName: "output.mp4", outputMimeType: "video/mp4" };
 }
 
-/** Green-screen mode: ffmpeg's `colorkey` cuts the subject out, then it's composited over the chosen background. */
+/** Green-screen mode: ffmpeg's `colorkey` cuts the subject out, then it's composited over the chosen background (or, in "transparent" mode, exported as-is with real alpha). */
 export function buildChromaRemovalCommand(input: BgRemovalCommandInput & { chroma: ChromaSettings }): BgRemovalCommandResult {
   const { inputs, inputArgs, filters, newLabel, buildBackgroundLayer, mainIndex } = buildCommandShell(input);
   const rawV = `${mainIndex}:v`;
+  const alpha = isTransparentMode(input.replace.mode);
 
   // "blur" needs the raw main stream split before colorkey consumes it (an
   // unconsumed raw pad can only feed one filter chain); every other mode
-  // builds its background from a separate input, so `rawV` stays free.
+  // (including "transparent", which skips building a background layer
+  // entirely) leaves `rawV` as the sole consumer of the main stream.
   let keySource = rawV;
-  let bgLabel: string;
+  let bgLabel: string | null = null;
   if (input.replace.mode === "blur") {
     const split1 = newLabel("v");
     const split2 = newLabel("v");
@@ -150,23 +223,42 @@ export function buildChromaRemovalCommand(input: BgRemovalCommandInput & { chrom
     filters.push(`[${split1}]avgblur=sizeX=40:sizeY=40[${blurOut}]`);
     bgLabel = blurOut;
     keySource = split2;
-  } else {
+  } else if (!alpha) {
     bgLabel = buildBackgroundLayer(rawV);
   }
 
+  // Pull the key first, *then* despill — despill on a saturated, pure key
+  // color (the common case) desaturates it toward black, which moves it far
+  // enough from the key color in colorkey's own distance metric that
+  // colorkey would then fail to recognize it as background at all (verified
+  // empirically: despill-before-colorkey left the background fully opaque
+  // and black instead of keyed out). Despilling the *keyed* result instead
+  // only touches residual green/blue fringing on the now-separated
+  // subject's edges, which is what it's actually for.
   const color = input.chroma.colorHex.replace("#", "0x");
+  const keyedRaw = newLabel("v");
+  filters.push(`[${keySource}]colorkey=${color}:${input.chroma.similarity}:${input.chroma.blend}[${keyedRaw}]`);
+
+  const despillType = despillTypeFor(input.chroma.colorHex);
+  let keyedColor = keyedRaw;
+  if (despillType) {
+    const despilled = newLabel("v");
+    filters.push(`[${keyedRaw}]despill=type=${despillType}[${despilled}]`);
+    keyedColor = despilled;
+  }
+
   const keyed = newLabel("v");
-  filters.push(`[${keySource}]colorkey=${color}:${input.chroma.similarity}:${input.chroma.blend},format=yuva420p[${keyed}]`);
+  filters.push(`[${keyedColor}]format=yuva420p[${keyed}]`);
 
-  const composited = newLabel("v");
-  filters.push(`[${bgLabel}][${keyed}]overlay=shortest=1[${composited}]`);
+  const finalLabel = alpha
+    ? keyed
+    : (() => {
+        const composited = newLabel("v");
+        filters.push(`[${bgLabel}][${keyed}]overlay=shortest=1[${composited}]`);
+        return composited;
+      })();
 
-  return {
-    inputs,
-    args: finalizeArgs(inputArgs, filters, mainIndex, composited),
-    outputName: "output.mp4",
-    outputMimeType: "video/mp4",
-  };
+  return { inputs, ...finalizeArgs(inputArgs, filters, mainIndex, finalLabel, alpha) };
 }
 
 /**
@@ -178,9 +270,13 @@ export function buildChromaRemovalCommand(input: BgRemovalCommandInput & { chrom
  */
 export function buildAiCutoutRemovalCommand(input: BgRemovalCommandInput & { cutoutFrames: CutoutFrame[] }): BgRemovalCommandResult {
   const { inputs, inputArgs, filters, newLabel, addFileInput, buildBackgroundLayer, mainIndex, W, H, trimmedDuration } = buildCommandShell(input);
-  const rawV = `${mainIndex}:v`;
+  const alpha = isTransparentMode(input.replace.mode);
 
-  const bgLabel = buildBackgroundLayer(rawV);
+  // "transparent" already builds its background layer as a real WxH alpha
+  // canvas (see buildCommandShell) — the overlay chain below is identical
+  // either way, it just ends up compositing onto transparency instead of an
+  // opaque layer.
+  const bgLabel = buildBackgroundLayer(`${mainIndex}:v`);
 
   const plan = planCutoutOverlay({
     frames: input.cutoutFrames,
@@ -189,6 +285,7 @@ export function buildAiCutoutRemovalCommand(input: BgRemovalCommandInput & { cut
     windowEnd: trimmedDuration,
     targetWidth: W,
     targetHeight: H,
+    preserveAlpha: alpha,
   });
   if (!plan) throw new Error("NO_SUBJECT");
 
@@ -200,10 +297,15 @@ export function buildAiCutoutRemovalCommand(input: BgRemovalCommandInput & { cut
   const { filters: overlayFilters, outLabel } = plan.buildFilters(firstCutoutIdx, bgLabel, newLabel);
   filters.push(...overlayFilters);
 
-  return {
-    inputs,
-    args: finalizeArgs(inputArgs, filters, mainIndex, outLabel),
-    outputName: "output.mp4",
-    outputMimeType: "video/mp4",
-  };
+  // Guarantee an alpha-capable pixel format reaches the encoder — overlay's
+  // own format negotiation is usually enough, but this makes it explicit
+  // rather than relying on it picking yuva420p on its own.
+  let finalLabel = outLabel;
+  if (alpha) {
+    const forced = newLabel("v");
+    filters.push(`[${outLabel}]format=yuva420p[${forced}]`);
+    finalLabel = forced;
+  }
+
+  return { inputs, ...finalizeArgs(inputArgs, filters, mainIndex, finalLabel, alpha) };
 }

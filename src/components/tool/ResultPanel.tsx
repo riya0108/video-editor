@@ -1,20 +1,30 @@
 import { useState } from "react";
-import { Download, Link2, RotateCcw, Share2, Check } from "lucide-react";
+import { Download, Link2, RotateCcw, Share2, Check, Info } from "lucide-react";
 
 export default function ResultPanel({
   url,
   blob,
   filename,
   kind,
+  previewNote,
   onReset,
 }: {
   url: string;
   blob: Blob;
   filename: string;
   kind: "video" | "audio" | "image";
+  /**
+   * When set, skips the inline `<video>`/`<audio>` player entirely and shows
+   * this note instead — for formats known upfront not to preview in a
+   * browser (e.g. a qtrle/alpha .mov), so the result looks intentional
+   * instead of broken. `videoPreviewFailed` below is the reactive fallback
+   * for formats that turn out not to preview but weren't flagged in advance.
+   */
+  previewNote?: string;
   onReset: () => void;
 }) {
   const [notice, setNotice] = useState<string | null>(null);
+  const [videoPreviewFailed, setVideoPreviewFailed] = useState(false);
 
   const flash = (message: string) => {
     setNotice(message);
@@ -49,6 +59,8 @@ export default function ResultPanel({
     }
   };
 
+  const showPreviewNote = kind === "video" && (!!previewNote || videoPreviewFailed);
+
   return (
     <div className="animate-fade-in rounded-xl border border-(--color-border) bg-(--color-surface) p-5 shadow-sm">
       <div className="flex items-center gap-2 text-success-600">
@@ -58,7 +70,17 @@ export default function ResultPanel({
 
       <div className="mt-4 overflow-hidden rounded-lg bg-black">
         {kind === "video" ? (
-          <video src={url} controls className="max-h-96 w-full" />
+          showPreviewNote ? (
+            // Some export formats (e.g. a qtrle/alpha .mov) aren't a codec
+            // any browser can decode inline — the file itself is still
+            // valid, so this is an upfront explanation, not an error state.
+            <div className="flex items-start gap-2.5 p-6 text-body-sm text-white/80">
+              <Info size={16} className="mt-0.5 shrink-0 text-white/50" />
+              <p>{previewNote ?? "This browser can't preview this format inline, but the file exported fine — download it to use it."}</p>
+            </div>
+          ) : (
+            <video src={url} controls className="max-h-96 w-full" onError={() => setVideoPreviewFailed(true)} />
+          )
         ) : kind === "image" ? (
           <img src={url} alt="" className="mx-auto max-h-96 w-auto" />
         ) : (

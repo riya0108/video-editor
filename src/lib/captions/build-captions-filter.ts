@@ -1,21 +1,32 @@
 import { escapeDrawtext } from "../ffmpeg/drawtext";
-import { positionExprs } from "../ffmpeg/text-position";
+import { positionExprs, type ContentBox } from "../ffmpeg/text-position";
 import { contrastTextColor } from "./contrast-color";
 import { INLINE_EMPHASIS_SCALE, pickEmphasisIndex } from "./emphasis";
+import { fitFontSizeToWidth } from "./fit-text";
 import type { WordLayout } from "./karaoke-layout";
 import type { CaptionCue, CaptionStyle } from "./types";
+
+/** How much of the frame width drawtext is allowed to fill before text starts getting shrunk to fit — matches the same margin `positionExprs` clamps the anchor point to. */
+const FIT_EDGE_MARGIN = 16;
 
 function toFfmpegColor(hex: string): string {
   return hex.replace("#", "0x");
 }
 
-/** A short in/out alpha ramp confined to the cue's own [start, end) window, for `style.fade`. */
+/** A short in/out alpha ramp confined to the [start, end) window, for `style.fade`. Shared by cue-level fades (whole line) and word-level fades (a single karaoke word's own speaking window) — callers pick which pair of timestamps to bound it to. */
 function fadeAlphaExpr(start: number, end: number): string {
   const fadeDur = Math.min(0.35, Math.max(0.05, (end - start) / 2));
   const t0 = start.toFixed(2);
   const t1 = end.toFixed(2);
   const d = fadeDur.toFixed(2);
   return `if(lt(t\\,${t0}+${d})\\,(t-${t0})/${d}\\,if(gt(t\\,${t1}-${d})\\,(${t1}-t)/${d}\\,1))`;
+}
+
+/** A word's own fade-in ramp (mirrors `fadeInOpacity` in CaptionOverlay.tsx's live preview), multiplied by the cue's overall fade-out ramp — so with `style.fade` on, each karaoke word eases in individually as it's revealed, while the whole line still eases out together once at the cue's end rather than every word also trying to fade out on its own. */
+function wordRevealAlphaExpr(wordStart: number, cueStart: number, cueEnd: number): string {
+  const s = wordStart.toFixed(2);
+  const fadeIn = `min(1\\,max(0\\,(t-${s})/0.12))`;
+  return `(${fadeIn})*(${fadeAlphaExpr(cueStart, cueEnd)})`;
 }
 
 /** Entrance animations that read as a "grows in" motion — pop/elastic/bounce all share this same quick scale-in shape in the browser preview, so they share this one drawtext approximation too. */
@@ -102,17 +113,28 @@ export function buildCaptionsFilter(
   fontFfmpegName: string,
   karaokeLayouts?: Map<string, WordLayout[]>,
   emphasisFontFfmpegName?: string,
+  /** Frame width in px (the video's own content rect, not the full padded canvas — see `ContentBox`) and the CSS font families to measure against, so oversized text (a cue's whole line, or the Blockbuster style's giant emphasis word) can be shrunk to fit instead of running off the frame edge. Omit to skip fitting. */
+  fit?: { videoWidth: number; fontCssFamily: string; emphasisFontCssFamily?: string },
+  /** The video's own content rect within the frame — resolves `style.x`/`style.y` against it instead of the full frame, so text lands where "resize for a platform" padding shows it in the live preview. Omit when no such canvas padding is in play. */
+  contentBox?: ContentBox,
 ): string {
   const colorHex = toFfmpegColor(gradientFallbackColor(style.gradient, style.color));
   const highlightHex = toFfmpegColor(style.highlightColor);
   const wordBoxTextHex = toFfmpegColor(contrastTextColor(style.highlightColor));
-  const { x, y } = positionExprs(style.x, style.y);
+  const { x, y } = positionExprs(style.x, style.y, contentBox);
   const boxAlpha = style.backdropBlur ? "0.35" : "0.65";
+  const maxTextWidth = fit ? fit.videoWidth - 2 * FIT_EDGE_MARGIN : undefined;
+  const fitToFrame = (fitText: string, size: number, fontCssFamily: string, weight: number): number =>
+    maxTextWidth !== undefined
+      ? fitFontSizeToWidth(fitText, size, maxTextWidth, (s) => `${weight} ${s}px ${fontCssFamily}`)
+      : size;
 
   return cues
     .map((cue) => {
       const text = style.uppercase ? cue.text.toLocaleUpperCase() : cue.text;
-      const baseFontSize = animatedFontSizeExpr(style, style.fontSize, cue.start);
+      const cueFontSize = cue.fontSize ?? style.fontSize;
+      const fittedFontSize = fit ? fitToFrame(text, cueFontSize, fit.fontCssFamily, 600) : cueFontSize;
+      const baseFontSize = animatedFontSizeExpr(style, fittedFontSize, cue.start);
       const baseY = animatedYExpr(style, y, cue.start);
 
       const layout = style.karaoke ? karaokeLayouts?.get(cue.id) : undefined;
@@ -132,12 +154,14 @@ export function buildCaptionsFilter(
         : [];
       const overlayEmphasisIdx = isOverlay ? pickEmphasisIndex(overlayWords) : -1;
 
-      const commonTextOptions = [
+      const staticTextOptions = [
         style.background ? `box=1:boxcolor=${toFfmpegColor(style.backgroundColor)}@${boxAlpha}:boxborderw=16` : null,
         style.outline ? `borderw=${style.strokeWidth}:bordercolor=${toFfmpegColor(style.outlineColor)}` : null,
         style.shadow ? `shadowx=3:shadowy=3:shadowcolor=black@0.55` : null,
-        style.fade ? `alpha='${fadeAlphaExpr(cue.start, cue.end)}'` : null,
       ].filter((v): v is string => v !== null);
+      const commonTextOptions = style.fade
+        ? [...staticTextOptions, `alpha='${fadeAlphaExpr(cue.start, cue.end)}'`]
+        : staticTextOptions;
 
       // With word-level timing, the base line reveals progressively — each
       // word pops in at its own start time and holds through the cue's end —
@@ -150,11 +174,20 @@ export function buildCaptionsFilter(
             const restText = overlayWords.filter((_, i) => i !== overlayEmphasisIdx).join(" ");
             const restDisplay = style.uppercase ? restText.toLocaleUpperCase() : restText;
             const enable = `enable='between(t\\,${cue.start.toFixed(2)}\\,${cue.end.toFixed(2)})'`;
+            // The big word normally renders at 3.3x the base size — huge
+            // enough that even a medium-length word can run off the frame —
+            // so it's shrunk (never grown) to fit before being drawn.
+            const bigWordFontSize = fit
+              ? fitToFrame(bigWord, Math.round(cueFontSize * 3.3), fit.emphasisFontCssFamily ?? fit.fontCssFamily, 800)
+              : Math.round(cueFontSize * 3.3);
+            const restFontSize = fit
+              ? fitToFrame(restDisplay, Math.round(cueFontSize * 1.05), fit.fontCssFamily, 700)
+              : Math.round(cueFontSize * 1.05);
             return [
               [
                 `drawtext=fontfile=${emphasisFontFfmpegName}`,
                 `text='${escapeDrawtext(bigWord)}'`,
-                `fontsize=${Math.round(style.fontSize * 3.3)}`,
+                `fontsize=${bigWordFontSize}`,
                 `fontcolor=${highlightHex}`,
                 `x=${x}`,
                 `y=${y}`,
@@ -163,7 +196,7 @@ export function buildCaptionsFilter(
               [
                 `drawtext=fontfile=${fontFfmpegName}`,
                 `text='${escapeDrawtext(restDisplay)}'`,
-                `fontsize=${Math.round(style.fontSize * 1.05)}`,
+                `fontsize=${restFontSize}`,
                 `fontcolor=${colorHex}`,
                 `x=${x}`,
                 `y=${y}`,
@@ -177,8 +210,8 @@ export function buildCaptionsFilter(
               .map((word, i) => {
                 const isEmphasis = i === emphasisIdx && emphasisFontFfmpegName;
                 const wordFontSize = isEmphasis
-                  ? Math.round(style.fontSize * INLINE_EMPHASIS_SCALE)
-                  : animatedFontSizeExpr(style, style.fontSize, word.start);
+                  ? Math.round(cueFontSize * INLINE_EMPHASIS_SCALE)
+                  : animatedFontSizeExpr(style, cueFontSize, word.start);
                 const wordY = animatedYExpr(style, y, word.start);
                 const wordText = isEmphasis
                   ? style.emphasisUppercase
@@ -187,6 +220,13 @@ export function buildCaptionsFilter(
                   : style.uppercase
                     ? word.text.toLocaleUpperCase()
                     : word.text;
+                // Each word fades in individually as it's revealed rather than
+                // inheriting the cue's own (far earlier) fade-in window — see
+                // `wordRevealAlphaExpr`. The fade-out stays cue-wide, since
+                // revealed words all disappear together at the cue's end.
+                const wordTextOptions = style.fade
+                  ? [...staticTextOptions, `alpha='${wordRevealAlphaExpr(word.start, cue.start, cue.end)}'`]
+                  : staticTextOptions;
                 return [
                   `drawtext=fontfile=${isEmphasis ? emphasisFontFfmpegName : fontFfmpegName}`,
                   `text='${escapeDrawtext(wordText)}'`,
@@ -196,8 +236,8 @@ export function buildCaptionsFilter(
                   `y=${wordY}`,
                   `enable='between(t\\,${Math.max(word.start, cue.start).toFixed(2)}\\,${cue.end.toFixed(2)})'`,
                   ...(isEmphasis && style.glow
-                    ? [`borderw=8:bordercolor=${toFfmpegColor(style.glowColor)}@0.5`, ...commonTextOptions.filter((o) => !o.startsWith("borderw"))]
-                    : commonTextOptions),
+                    ? [`borderw=8:bordercolor=${toFfmpegColor(style.glowColor)}@0.5`, ...wordTextOptions.filter((o) => !o.startsWith("borderw"))]
+                    : wordTextOptions),
                 ].join(":");
               })
               .join(",")
@@ -257,7 +297,7 @@ export function buildCaptionsFilter(
       if (!words || !layout || style.emphasizeKeyword) return [...backdropPasses, base].join(",");
 
       const wordFilters = words.map((word, i) => {
-        const wordFontSize = animatedFontSizeExpr(style, style.fontSize, word.start);
+        const wordFontSize = animatedFontSizeExpr(style, cueFontSize, word.start);
         const wordY = animatedYExpr(style, y, word.start);
         const wordOptions = [
           `drawtext=fontfile=${fontFfmpegName}`,
@@ -275,7 +315,12 @@ export function buildCaptionsFilter(
           wordOptions.push(`borderw=${style.strokeWidth}:bordercolor=${toFfmpegColor(style.outlineColor)}`);
         }
         if (style.fade) {
-          wordOptions.push(`alpha='${fadeAlphaExpr(cue.start, cue.end)}'`);
+          // Anchored to the word's own [start, end) window (not the cue's) so
+          // the highlight actually fades in/out as this word is spoken —
+          // using the cue's timestamps here left the ramp fully settled at
+          // alpha=1 for the entire duration of most words, since a word's
+          // brief highlight window rarely falls near the cue's own edges.
+          wordOptions.push(`alpha='${fadeAlphaExpr(word.start, word.end)}'`);
         }
         return wordOptions.join(":");
       });

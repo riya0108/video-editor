@@ -134,6 +134,16 @@
     }
   }
 
+  --animate-phone-zoom-in: phone-zoom-in 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+  @keyframes phone-zoom-in {
+    from {
+      transform: scale(1.45);
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+
   --animate-reel-bg-pan: reel-bg-pan 12s ease-in-out infinite;
   @keyframes reel-bg-pan {
     0%,
@@ -473,6 +483,103 @@
     outline-offset: 2px;
     border-radius: 2px;
   }
+}
+
+/* ---- Hero title: animated gradient fill + a colored glow behind the glyphs ---- */
+.hero-title-glow {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-primary-400),
+    var(--color-accent-400),
+    var(--color-primary-500)
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow:
+    0 0 16px oklch(70% 0.16 292 / 45%),
+    0 0 34px oklch(68% 0.11 195 / 35%);
+  animation: hero-title-glow-shift 6s ease-in-out infinite;
+}
+
+.dark .hero-title-glow {
+  text-shadow:
+    0 0 20px oklch(70% 0.16 292 / 75%),
+    0 0 46px oklch(68% 0.11 195 / 55%),
+    0 0 84px oklch(60% 0.19 292 / 45%);
+}
+
+@keyframes hero-title-glow-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-title-glow {
+    animation: none;
+  }
+}
+
+/* ---- Sitewide grid backdrop with a glow rising from the bottom ---- */
+.site-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Stays at 0 (not negative) — html/body both paint an opaque background
+     of their own, which sits *below* z-index:0 positioned content but
+     *above* anything negative, so a negative z-index here would hide the
+     whole backdrop behind that opaque page background. Instead, real page
+     content (see the `relative` class added to <main>/<footer> in
+     Layout.astro/Footer.astro) is pulled into the same "positioned,
+     z-index:auto/0" paint stage as this element, so it paints after (above)
+     this backdrop by DOM order — see the CSS stacking-context paint order
+     (CSS2.1 Appendix E): non-positioned in-flow content paints *before*
+     positioned z-index:0/auto content, regardless of DOM order, which is
+     what let this grid render above plain text/video elements before. */
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.site-backdrop::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background-image:
+    linear-gradient(to right, var(--color-border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-border) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 30%, transparent 85%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 30%, transparent 85%);
+  opacity: 0.7;
+}
+.dark .site-backdrop::before {
+  background-image:
+    linear-gradient(to right, var(--color-border-strong) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-border-strong) 1px, transparent 1px);
+  opacity: 0.9;
+}
+.site-backdrop::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -30%;
+  width: 90%;
+  height: 55%;
+  max-width: 64rem;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse 60% 100% at 50% 100%, var(--color-primary-300) 0%, var(--color-accent-300) 45%, transparent 75%);
+  opacity: 0.5;
+  filter: blur(60px);
+}
+.dark .site-backdrop::after {
+  background: radial-gradient(ellipse 60% 100% at 50% 100%, var(--color-primary-500) 0%, var(--color-accent-500) 45%, transparent 75%);
+  opacity: 0.55;
+  mix-blend-mode: screen;
 }
 
 /* Transparency indicator for cutout/chroma-key previews and thumbnails — a

@@ -64,6 +64,23 @@ export function useCaptions() {
           next.start = Math.min(Math.max(next.start, rangeStart), Math.max(rangeStart, rangeEnd - minLen));
           next.end = Math.min(Math.max(next.end, next.start + minLen), Math.max(rangeEnd, next.start + minLen));
         }
+        // Karaoke word-level rendering (CaptionOverlay, and the export-side
+        // buildCaptionsFilter/measureKaraokeLayouts) reads word text from
+        // `c.words`, not `c.text` — so editing a cue's text with word timing
+        // already attached would otherwise leave the old words on screen. If
+        // the word count didn't change, re-point each word's `text` at the
+        // matching new word so its original per-word timing (and karaoke
+        // highlight) survives a typo fix. Otherwise there's no honest way to
+        // re-time invented/removed words, so word data is dropped and the
+        // cue falls back to static whole-line text — same graceful
+        // degradation `translate` already relies on for the same reason.
+        if (patch.text !== undefined && c.words && c.words.length > 0) {
+          const newWords = patch.text.trim().split(/\s+/).filter(Boolean);
+          next.words =
+            newWords.length === c.words.length
+              ? c.words.map((w, i) => ({ ...w, text: newWords[i] }))
+              : undefined;
+        }
         return next;
       }),
     );

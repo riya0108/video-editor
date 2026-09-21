@@ -141,14 +141,21 @@ export default function AddTextTool() {
           captions.cues,
           captions.style,
           font.cssFontFamily,
-          video.videoWidth,
+          { x: 0, y: 0, w: video.videoWidth, h: video.videoHeight },
         )
       : undefined;
+    try {
+      await document.fonts.load(`600 ${captions.style.fontSize}px ${font.cssFontFamily}`);
+    } catch {
+      // Fall back to whatever's already loaded; fit measurements will just be less accurate.
+    }
     const vf = buildCaptionsFilter(
       captions.cues,
       captions.style,
       font.ffmpegName,
       karaokeLayouts,
+      undefined,
+      { videoWidth: video.videoWidth, fontCssFamily: font.cssFontFamily },
     );
 
     const cutoutPlan =

@@ -2,16 +2,42 @@ import type { CSSProperties } from "react";
 import { getTextFont } from "../../../../lib/ffmpeg/fonts";
 import { contrastTextColor } from "../../../../lib/captions/contrast-color";
 import { INLINE_EMPHASIS_SCALE, pickEmphasisIndex } from "../../../../lib/captions/emphasis";
+import { fitFontSizeToWidth } from "../../../../lib/captions/fit-text";
 import type { CaptionCue, CaptionStyle } from "../../../../lib/captions/types";
 
 const FADE_DURATION = 0.35;
+/** Shorter fade window for word-level ramps — word windows are often only 150-400ms, so the 0.35s cue-level duration would swallow the whole word. */
+const WORD_FADE_DURATION = 0.12;
 
-/** Mirrors the export-time alpha ramp (build-captions-filter.ts's fadeAlphaExpr) closely enough for a live preview. */
-function fadeOpacity(time: number, start: number, end: number): number {
-  const dur = Math.min(FADE_DURATION, Math.max(0.05, (end - start) / 2));
+/** Mirrors the export-time alpha ramp (build-captions-filter.ts's fadeAlphaExpr) closely enough for a live preview. `maxDur` caps the in/out ramp length — pass `WORD_FADE_DURATION` for a word's own (much shorter) window instead of the cue-level default. */
+function fadeOpacity(time: number, start: number, end: number, maxDur: number = FADE_DURATION): number {
+  const dur = Math.min(maxDur, Math.max(0.03, (end - start) / 2));
   if (time < start + dur) return Math.max(0, (time - start) / dur);
   if (time > end - dur) return Math.max(0, (end - time) / dur);
   return 1;
+}
+
+/** Fade-in-only ramp for a word's first appearance. It doesn't fade back out on its own — a revealed word stays on screen until the whole cue does, which the cue-level `fadeOpacity` above already handles on the wrapper. */
+function fadeInOpacity(time: number, start: number, dur: number = WORD_FADE_DURATION): number {
+  if (time < start) return 0;
+  return Math.min(1, (time - start) / dur);
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const clean = hex.replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
+  const num = parseInt(full, 16) || 0;
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+
+/** Linearly interpolates two hex colors — used to cross-fade a word's highlight color/box in and out in sync with its own spoken window, instead of hard-switching it the instant playback crosses `word.start`/`word.end`. */
+function lerpColor(from: string, to: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(from);
+  const [r2, g2, b2] = hexToRgb(to);
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 function shapeRadius(shape: CaptionStyle["shape"], scale: number): number {
@@ -85,16 +111,23 @@ function textFillStyle(style: CaptionStyle, fallbackColor?: string): CSSProperti
  * looks different depending on where you're editing it.
  */
 export default function CaptionOverlay({
-  style,
+  style: baseStyle,
   cue,
   currentTime,
   scale,
+  maxWidthPx,
 }: {
   style: CaptionStyle;
   cue: CaptionCue;
   currentTime: number;
   scale: number;
+  /** On-screen pixel width the caption block has to work with (the preview frame width, minus the drag block's own side margins) — used to shrink oversized text (the Blockbuster style's giant emphasis word, in particular) so it fits instead of running off the frame edge. Omit to skip fitting, e.g. for small mock previews that never overflow. */
+  maxWidthPx?: number;
 }) {
+  // A cue can carry its own fontSize override (set via the floating toolbar
+  // while that specific caption is selected) so one line can be sized
+  // differently from the rest without touching the shared style.
+  const style: CaptionStyle = cue.fontSize !== undefined ? { ...baseStyle, fontSize: cue.fontSize } : baseStyle;
   const font = getTextFont(style.fontId);
   const emphasisFont = getTextFont(style.emphasisFontId);
   const isOverlayEmphasis = style.emphasizeKeyword && style.emphasisLayout === "overlay";
@@ -167,11 +200,18 @@ export default function CaptionOverlay({
       ? visibleWords.filter((w) => cue.words!.indexOf(w) !== emphasisIndex).map((w) => w.text)
       : allWords.filter((_, i) => i !== emphasisIndex);
     const restText = restWords.map(displayText).join(" ");
+    // The big word is normally 3.3x the base size — huge enough that even a
+    // medium-length word can run off the edge of the frame. Shrink it (never
+    // grow it) so it always fits within the block's available width instead.
+    const bigWordBaseSize = (style.fontSize * scale) * 3.3;
+    const bigWordFontSize = maxWidthPx
+      ? fitFontSizeToWidth(bigWord, bigWordBaseSize, maxWidthPx, (size) => `800 ${size}px ${emphasisFont.cssFontFamily}`)
+      : bigWordBaseSize;
 
     return (
       <span
         className={`inline-grid max-w-full place-items-center ${!hasWords && anim ? anim : ""}`}
-        style={{ ...wrapperStyle, lineHeight: 1 }}
+        style={{ ...wrapperStyle, lineHeight: 1, maxWidth: maxWidthPx }}
         key={!hasWords ? cue.id : undefined}
       >
         <span
@@ -180,7 +220,7 @@ export default function CaptionOverlay({
             gridArea: "1 / 1",
             fontFamily: emphasisFont.cssFontFamily,
             fontWeight: 800,
-            fontSize: "3.3em",
+            fontSize: bigWordFontSize,
             lineHeight: 1,
             whiteSpace: "nowrap",
             color: style.highlightColor,
@@ -197,6 +237,8 @@ export default function CaptionOverlay({
             fontWeight: 700,
             fontSize: "1em",
             padding: "0 0.5em",
+            maxWidth: maxWidthPx,
+            overflowWrap: "break-word",
             textAlign: "center",
             ...textFillStyle(style),
           }}
@@ -213,30 +255,45 @@ export default function CaptionOverlay({
         ? visibleWords.map((word, i) => {
             const wordIndex = cue.words!.indexOf(word);
             const active = currentTime >= word.start && currentTime < word.end;
+            // With `style.fade` on, the highlight fades in/out across the
+            // word's own [start, end) window instead of snapping — `highlightT`
+            // is the 0-1 strength of that highlight at the current instant.
+            // Without fade, this collapses back to the old plain on/off `active`
+            // boolean (as `0`/`1`), preserving the existing hard-cut look.
+            const highlightT = style.fade
+              ? fadeOpacity(currentTime, word.start, word.end, WORD_FADE_DURATION)
+              : active
+                ? 1
+                : 0;
+            // A newly-revealed word eases in over a short window from its own
+            // start, rather than popping onto screen the instant playback
+            // crosses `word.start` — only when fade is on, matching the
+            // export-side reveal ramp in build-captions-filter.ts.
+            const revealOpacity = style.fade ? fadeInOpacity(currentTime, word.start) : 1;
             // When `emphasizeKeyword` is on, `highlightColor` is dedicated to
             // that one fixed word — the normal per-word "currently spoken"
             // recolor is suppressed so it doesn't also flash on other words.
-            const boxColor = style.wordBox && active && !style.emphasizeKeyword ? style.highlightColor : undefined;
-            const plainHighlight = !style.wordBox && active && !style.emphasizeKeyword ? style.highlightColor : undefined;
+            const highlightOn = !style.emphasizeKeyword && highlightT > 0;
             return (
               <span
                 key={i}
                 className={active && anim ? anim : undefined}
                 style={{
                   display: "inline-block",
+                  opacity: revealOpacity,
                   ...(wordIndex === emphasisIndex
                     ? emphasisStyle
-                    : boxColor
-                      ? {
-                          backgroundColor: boxColor,
-                          color: contrastTextColor(boxColor),
-                          borderRadius: radius,
-                          padding: `${1 * scale}px ${8 * scale}px`,
-                          boxShadow: style.glow ? `0 0 ${18 * scale}px ${style.glowColor}` : undefined,
-                        }
-                      : plainHighlight
-                        ? { color: plainHighlight }
-                        : {}),
+                    : highlightOn
+                      ? style.wordBox
+                        ? {
+                            backgroundColor: `rgba(${hexToRgb(style.highlightColor).join(", ")}, ${highlightT})`,
+                            color: lerpColor(style.color, contrastTextColor(style.highlightColor), highlightT),
+                            borderRadius: radius,
+                            padding: `${1 * scale}px ${8 * scale}px`,
+                            boxShadow: style.glow ? `0 0 ${18 * scale * highlightT}px ${style.glowColor}` : undefined,
+                          }
+                        : { color: lerpColor(style.color, style.highlightColor, highlightT) }
+                      : {}),
                 }}
               >
                 {wordIndex === emphasisIndex ? emphasisDisplayText(word.text) : displayText(word.text)}

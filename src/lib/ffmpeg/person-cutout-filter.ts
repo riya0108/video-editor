@@ -37,6 +37,7 @@ export function planCutoutOverlay({
   windowEnd,
   targetWidth,
   targetHeight,
+  preserveAlpha = false,
 }: {
   frames: CutoutFrame[];
   timeOffset: number;
@@ -44,6 +45,8 @@ export function planCutoutOverlay({
   windowEnd: number;
   targetWidth: number;
   targetHeight: number;
+  /** Only needed when compositing onto a transparent base (the Remove Background tool's video "transparent" export) — see the note at the overlay filter below for why this isn't just always on. */
+  preserveAlpha?: boolean;
 }): CutoutOverlayPlan | null {
   const relevant = frames
     .map((f) => ({ ...f, relTime: f.time - timeOffset }))
@@ -68,8 +71,18 @@ export function planCutoutOverlay({
         const scaled = newLabel("v");
         filters.push(`[${idx}:v]scale=${targetWidth}:${targetHeight}[${scaled}]`);
         const out = newLabel("v");
+        // `format=auto` is what keeps alpha alive through overlay — its own
+        // default ("yuv420") has no alpha plane at all, so without this a
+        // transparent base layer would flatten to opaque regardless of what
+        // either input carries. But "auto" also costs real per-frame
+        // conversion overhead in this wasm build (measured: turns an export
+        // that finishes in well under a minute into one that takes several
+        // minutes), so it's only worth paying for the one caller that
+        // actually needs alpha to survive — every other overlay stays on the
+        // cheap default.
+        const formatOpt = preserveAlpha ? "format=auto:" : "";
         filters.push(
-          `[${current}][${scaled}]overlay=x=0:y=0:eof_action=pass:enable='between(t\\,${winStart.toFixed(2)}\\,${winEnd.toFixed(2)})'[${out}]`,
+          `[${current}][${scaled}]overlay=x=0:y=0:eof_action=pass:${formatOpt}enable='between(t\\,${winStart.toFixed(2)}\\,${winEnd.toFixed(2)})'[${out}]`,
         );
         current = out;
       }

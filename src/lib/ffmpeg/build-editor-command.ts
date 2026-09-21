@@ -8,18 +8,17 @@ import { toFfmpegTimestamp } from "../time";
 import { escapeDrawtext } from "./drawtext";
 import { freeOverlayExprs } from "./overlay-position";
 import { getTextFont } from "./fonts";
-import { positionExprs } from "./text-position";
+import { positionExprs, type ContentBox } from "./text-position";
 import { VOICE_REMOVER_FILTER, noiseReductionFilter, atempoChain } from "./audio-filters";
 import { resolveQualityTarget, upscaleFilter } from "./upscale-filter";
 import { planCutoutOverlay } from "./person-cutout-filter";
 import { appendDelogoWithClone } from "./logo-removal";
 import { buildCaptionsFilter, remapCuesToTrim } from "../captions/build-captions-filter";
 import { measureKaraokeLayouts } from "../captions/karaoke-layout";
-import { parseHexColor } from "../color";
 import { buildOverlayAnimationFilters, kenBurnsZoompanFilter } from "./media-animation";
 import type { CutoutFrame } from "../captions/person-cutout";
 import type { CaptionCue, CaptionStyle } from "../captions/types";
-import { resolveBackgroundSize } from "./editor-state";
+import { applyResizeCanvas } from "./resize-canvas-filter";
 import type {
   EditorChromaKeyState,
   EditorCropState,
@@ -118,7 +117,7 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
 
   // ---- Remove logo (before crop, so the box the user drew against the
   // original preview still points at the right pixels). ----
-  if (state.logo.enabled) {
+  if (state.logo.enabled && state.logo.regions.length > 0) {
     // x/y clamped to leave room for a minimum 2px box plus a small edge
     // margin, w/h floored against whatever room is left. This build's
     // delogo rejects a box that even just touches the frame edge ("Logo
@@ -127,11 +126,28 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     // a watermark) must be kept strictly inside it, or it silently produces
     // an empty output.
     const EDGE_MARGIN = 2;
-    const x = Math.min(evenRound(state.logo.rect.x * currentW), currentW - EDGE_MARGIN - 2);
-    const y = Math.min(evenRound(state.logo.rect.y * currentH), currentH - EDGE_MARGIN - 2);
-    const w = evenFloor(Math.min(currentW - EDGE_MARGIN - x, state.logo.rect.w * currentW));
-    const h = evenFloor(Math.min(currentH - EDGE_MARGIN - y, state.logo.rect.h * currentH));
-    vLabel = appendDelogoWithClone(filters, vLabel, x, y, w, h, [], currentW, currentH, "", () => newLabel("v"));
+    const boxes = state.logo.regions.map((region) => {
+      const x = Math.min(evenRound(region.rect.x * currentW), currentW - EDGE_MARGIN - 2);
+      const y = Math.min(evenRound(region.rect.y * currentH), currentH - EDGE_MARGIN - 2);
+      const w = evenFloor(Math.min(currentW - EDGE_MARGIN - x, region.rect.w * currentW));
+      const h = evenFloor(Math.min(currentH - EDGE_MARGIN - y, region.rect.h * currentH));
+      return { x, y, w, h };
+    });
+    for (const box of boxes) {
+      vLabel = appendDelogoWithClone(
+        filters,
+        vLabel,
+        box.x,
+        box.y,
+        box.w,
+        box.h,
+        boxes.filter((b) => b !== box),
+        currentW,
+        currentH,
+        "",
+        () => newLabel("v"),
+      );
+    }
   }
 
   // ---- Crop ----
@@ -186,51 +202,38 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
   // ---- Fit onto a target canvas (resize preset / custom size) and fill the
   // empty space: a blurred zoomed copy, a solid color, or a two-color
   // gradient. ----
+  const preResizeW = currentW;
+  const preResizeH = currentH;
   if (state.background.enabled) {
-    const { w: targetW, h: targetH } = resolveBackgroundSize(state.background);
-    const durArg = (trimmedDuration + 1).toFixed(2);
+    const resized = applyResizeCanvas({
+      vLabel,
+      filters,
+      addLavfiInput,
+      newLabel,
+      settings: state.background,
+      durationSeconds: trimmedDuration,
+    });
+    vLabel = resized.vLabel;
+    currentW = resized.width;
+    currentH = resized.height;
+  }
 
-    let bgLabel: string;
-    if (state.background.fillMode === "solid") {
-      const idx = addLavfiInput(
-        `color=c=${state.background.solidColor.replace("#", "0x")}:s=${targetW}x${targetH}:d=${durArg}`,
-      );
-      bgLabel = `${idx}:v`;
-    } else if (state.background.fillMode === "gradient") {
-      const from = parseHexColor(state.background.gradientFrom);
-      const to = parseHexColor(state.background.gradientTo);
-      const t =
-        state.background.gradientDirection === "horizontal"
-          ? "(X/W)"
-          : state.background.gradientDirection === "diagonal"
-            ? "((X+Y)/(W+H))"
-            : "(Y/H)";
-      const expr = (c1: number, c2: number) => `${c1}+(${c2}-${c1})*${t}`;
-      const idx = addLavfiInput(`color=c=black:s=${targetW}x${targetH}:d=${durArg}`);
-      const gradOut = newLabel("v");
-      filters.push(
-        `[${idx}:v]geq=r='${expr(from.r, to.r)}':g='${expr(from.g, to.g)}':b='${expr(from.b, to.b)}'[${gradOut}]`,
-      );
-      bgLabel = gradOut;
-    } else {
-      const split1 = newLabel("v");
-      const split2 = newLabel("v");
-      filters.push(`[${vLabel}]split=2[${split1}][${split2}]`);
-      const blurOut = newLabel("v");
-      filters.push(
-        `[${split1}]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},avgblur=sizeX=40:sizeY=40[${blurOut}]`,
-      );
-      bgLabel = blurOut;
-      vLabel = split2;
-    }
-
-    const fgOut = newLabel("v");
-    filters.push(`[${vLabel}]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease[${fgOut}]`);
-    const composited = newLabel("v");
-    filters.push(`[${bgLabel}][${fgOut}]overlay=(W-w)/2:(H-h)/2[${composited}]`);
-    vLabel = composited;
-    currentW = targetW;
-    currentH = targetH;
+  // Every burned-in overlay below (captions, text, PiP/stickers) positions
+  // itself relative to the video's own content rect, not the raw frame —
+  // when "resize for a platform" padded the frame above, `currentW`/`currentH`
+  // are now the full padded canvas, but the live preview's drag anchors are
+  // percentages of just the inner contain-fitted video (`box` in
+  // FramedVideoStage.tsx). Recomputing that same contain-fit here (same
+  // source dims, same target canvas, same centering) keeps burned-in output
+  // aligned with what was actually shown.
+  let contentBox: ContentBox;
+  if (state.background.enabled) {
+    const fitScale = Math.min(currentW / preResizeW, currentH / preResizeH);
+    const innerW = preResizeW * fitScale;
+    const innerH = preResizeH * fitScale;
+    contentBox = { x: (currentW - innerW) / 2, y: (currentH - innerH) / 2, w: innerW, h: innerH };
+  } else {
+    contentBox = { x: 0, y: 0, w: currentW, h: currentH };
   }
 
   // ---- Captions (burned in before Speed, so filter-time `t` here still
@@ -255,14 +258,27 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
 
     const remapped = remapCuesToTrim(state.captions.cues, state.trimStart, state.trimEnd);
     const karaokeLayouts = state.captions.style.karaoke
-      ? await measureKaraokeLayouts(remapped, state.captions.style, font.cssFontFamily, currentW, emphasisFontCssFamily)
+      ? await measureKaraokeLayouts(remapped, state.captions.style, font.cssFontFamily, contentBox, emphasisFontCssFamily)
       : undefined;
+    // Needed so the text-fit measurements below (fitFontSizeToWidth, inside
+    // buildCaptionsFilter) read this font's real metrics instead of a
+    // fallback system font's — same requirement measureKaraokeLayouts has.
+    try {
+      await document.fonts.load(`600 ${state.captions.style.fontSize}px ${font.cssFontFamily}`);
+      if (emphasisFontCssFamily) {
+        await document.fonts.load(`800 ${Math.round(state.captions.style.fontSize * 3.3)}px ${emphasisFontCssFamily}`);
+      }
+    } catch {
+      // Fall back to whatever's already loaded; fit measurements will just be less accurate.
+    }
     const capFilter = buildCaptionsFilter(
       remapped,
       state.captions.style,
       font.ffmpegName,
       karaokeLayouts,
       emphasisFontFfmpegName,
+      { videoWidth: contentBox.w, fontCssFamily: font.cssFontFamily, emphasisFontCssFamily },
+      contentBox,
     );
     if (capFilter) {
       const out = newLabel("v");
@@ -319,7 +335,7 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     const ext = isImage ? guessImageExtension(layer.file) : guessVideoExtension(layer.file);
     const preArgs = isImage ? ["-loop", "1"] : ["-stream_loop", "-1"];
     const idx = addFileInput(`overlay_${layer.id}.${ext}`, layer.file, preArgs);
-    const w = evenRound(currentW * (layer.sizePercent / 100));
+    const w = evenRound(contentBox.w * (layer.sizePercent / 100));
     const scaled = newLabel("v");
     filters.push(
       `[${idx}:v]scale=${w}:-2,format=rgba,colorchannelmixer=aa=${layer.opacity.toFixed(2)}[${scaled}]`,
@@ -333,7 +349,7 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
       animatedLabel = animOut;
     }
 
-    const { x, y } = freeOverlayExprs(layer.x, layer.y);
+    const { x, y } = freeOverlayExprs(layer.x, layer.y, contentBox);
     const out = newLabel("v");
     const enable = `between(t\\,${layer.start.toFixed(2)}\\,${layer.end.toFixed(2)})`;
     // shortest=1 is essential here: looped image/video overlay inputs are
@@ -351,7 +367,7 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     fontBlobEntry = { name: font.ffmpegName, data: fontBlob };
 
     const colorHex = state.text.color.replace("#", "0x");
-    const { x: xExpr, y: baseY } = positionExprs(state.text.x, state.text.y);
+    const { x: xExpr, y: baseY } = positionExprs(state.text.x, state.text.y, contentBox);
     let finalXExpr = xExpr;
     let yExpr = baseY;
     let alphaExpr = "1";

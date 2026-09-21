@@ -7,6 +7,7 @@ import {
   Trash2,
   Captions as CaptionsIcon,
   List,
+  AlignLeft,
   Languages,
   ArrowRightLeft,
 } from "lucide-react";
@@ -67,6 +68,43 @@ function TimeField({ seconds, onCommit }: { seconds: number; onCommit: (next: nu
   );
 }
 
+/**
+ * Bulk "edit all at once" view — every caption's wording in one text box, one
+ * line per caption in start-time order, for rewriting a transcript's phrasing
+ * without hunting through each caption's own small box individually. Timing
+ * stays with each caption's position in the list, not the text itself, so
+ * lines can't be reordered here — only reworded.
+ */
+function TranscriptEditor({
+  cues,
+  onCommit,
+}: {
+  cues: CaptionCue[];
+  onCommit: (lines: string[]) => void;
+}) {
+  const [draft, setDraft] = useState(cues.map((c) => c.text).join("\n"));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(cues.map((c) => c.text).join("\n"));
+  }, [cues, focused]);
+
+  return (
+    <textarea
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        onCommit(draft.split("\n"));
+      }}
+      rows={10}
+      placeholder="Type the whole transcript here — one line per caption, in order."
+      className="w-full resize-y rounded-md border border-(--color-border) bg-(--color-surface) px-3 py-2 text-body-sm leading-relaxed outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-200"
+    />
+  );
+}
+
 /** Controls only — see CaptionsPreview for the live video + burned-in caption preview that goes in the shared preview column. */
 export default function CaptionsEditor({
   video,
@@ -86,6 +124,7 @@ export default function CaptionsEditor({
   showStylesTab?: boolean;
 }) {
   const [tab, setTab] = useState<"edit" | "styles">("edit");
+  const [cueViewMode, setCueViewMode] = useState<"list" | "transcript">("list");
   const [modelTier, setModelTier] = useState<CaptionModelTier>("fast");
   const [language, setLanguage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -114,6 +153,22 @@ export default function CaptionsEditor({
     const file = e.target.files?.[0];
     e.target.value = "";
     if (file) captions.handleSubtitleFile(file);
+  };
+
+  const sortedCues = [...cues].sort((a, b) => a.start - b.start);
+
+  // One line -> one caption, by position (not by reordering) — a line short
+  // leaves that caption's text empty, extra trailing lines fold into the
+  // last caption, so a mismatched line count degrades predictably instead of
+  // silently creating or dropping captions.
+  const handleTranscriptCommit = (lines: string[]) => {
+    sortedCues.forEach((cue, i) => {
+      const text =
+        i === sortedCues.length - 1
+          ? lines.slice(i).join(" ").trim()
+          : (lines[i] ?? "").trim();
+      if (text !== cue.text) captions.updateCue(cue.id, { text });
+    });
   };
 
   return (
@@ -266,11 +321,41 @@ export default function CaptionsEditor({
               caption and typing it happen in the same glance instead of a scroll away. */}
           <ToolPanelSection icon={List} label={`${cues.length} caption${cues.length === 1 ? "" : "s"}`}>
             {cues.length > 0 && (
-              <div className="mb-2 flex justify-end">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex gap-1 rounded-md border border-(--color-border) p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setCueViewMode("list")}
+                    aria-pressed={cueViewMode === "list"}
+                    title="Edit each caption individually"
+                    className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-caption font-medium transition-colors ${
+                      cueViewMode === "list"
+                        ? "bg-primary-500 text-white"
+                        : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
+                    }`}
+                  >
+                    <List size={12} />
+                    Individually
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCueViewMode("transcript")}
+                    aria-pressed={cueViewMode === "transcript"}
+                    title="Edit every caption's wording in one text box"
+                    className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-caption font-medium transition-colors ${
+                      cueViewMode === "transcript"
+                        ? "bg-primary-500 text-white"
+                        : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"
+                    }`}
+                  >
+                    <AlignLeft size={12} />
+                    All at once
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={() => captions.setCues([])}
-                  className="text-caption text-(--color-text-muted) hover:text-danger-600"
+                  className="shrink-0 text-caption text-(--color-text-muted) hover:text-danger-600"
                 >
                   Clear all
                 </button>
@@ -280,11 +365,11 @@ export default function CaptionsEditor({
               <p className="rounded-lg border border-dashed border-(--color-border) px-4 py-6 text-center text-body-sm text-(--color-text-muted)">
                 No captions yet — generate, type, or upload some above.
               </p>
+            ) : cueViewMode === "transcript" ? (
+              <TranscriptEditor cues={sortedCues} onCommit={handleTranscriptCommit} />
             ) : (
               <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-                {[...cues]
-                  .sort((a, b) => a.start - b.start)
-                  .map((cue: CaptionCue) => (
+                {sortedCues.map((cue: CaptionCue) => (
                     <div
                       key={cue.id}
                       className="flex items-start gap-2 rounded-md border border-(--color-border) bg-(--color-surface) p-2"
