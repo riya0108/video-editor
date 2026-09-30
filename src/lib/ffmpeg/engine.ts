@@ -104,6 +104,19 @@ export interface RunOptions {
   outputMimeType: string;
   onEngineLoad?: EngineLoadListener;
   onRunProgress?: RunProgressListener;
+  /**
+   * PHASE 14 — PERFORMANCE (cancellation). Ties into ffmpeg.wasm's own
+   * per-call `{ signal }` support (`exec()`/`writeFile()` both accept it) —
+   * an abort rejects this promise immediately so the UI can stop waiting
+   * and reset. Honest caveat: this cancels *this call's wait*, not
+   * necessarily the wasm worker's in-flight computation — ffmpeg.wasm has
+   * no API to interrupt a command mid-run short of `ffmpeg.terminate()`
+   * (which kills the whole shared worker and forces every future call to
+   * reload it), so an aborted run's background work may finish silently
+   * and get discarded. Good enough to unblock the user immediately, which
+   * is the actual UX goal.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunResult {
@@ -151,6 +164,13 @@ export class FfmpegRunError extends Error {
  * Runs a single ffmpeg command end to end: loads the engine if needed,
  * stages inputs, executes, reads the output, and cleans up the virtual FS.
  */
+export class FfmpegCancelledError extends Error {
+  constructor() {
+    super("Export cancelled.");
+    this.name = "FfmpegCancelledError";
+  }
+}
+
 export async function runFfmpeg({
   inputs,
   args,
@@ -158,8 +178,11 @@ export async function runFfmpeg({
   outputMimeType,
   onEngineLoad,
   onRunProgress,
+  signal,
 }: RunOptions): Promise<RunResult> {
+  if (signal?.aborted) throw new FfmpegCancelledError();
   return ffmpegEngine.exclusive(async (ffmpeg) => {
+    if (signal?.aborted) throw new FfmpegCancelledError();
     const progressHandler = ({ progress }: { progress: number }) => {
       onRunProgress?.(Math.min(1, Math.max(0, progress)));
     };
@@ -176,7 +199,7 @@ export async function runFfmpeg({
     try {
       for (const input of inputs) {
         const data = typeof input.data === "string" ? input.data : await fetchFile(input.data);
-        await ffmpeg.writeFile(input.name, data);
+        await ffmpeg.writeFile(input.name, data, signal ? { signal } : undefined);
         written.push(input.name);
       }
 
@@ -185,7 +208,7 @@ export async function runFfmpeg({
       // "Logo area is outside of the frame") still leaves a 0-byte output
       // file behind, so readFile() below would otherwise succeed with an
       // empty result and look like a completed export.
-      const exitCode = await ffmpeg.exec(args);
+      const exitCode = await ffmpeg.exec(args, undefined, signal ? { signal } : undefined);
       if (exitCode !== 0) {
         throw new FfmpegRunError(`ffmpeg exited with code ${exitCode}`, recentLogs.join("\n"));
       }
@@ -204,6 +227,12 @@ export async function runFfmpeg({
       const url = URL.createObjectURL(blob);
 
       return { blob, url };
+    } catch (err) {
+      // Normalize whatever ffmpeg.wasm's own AbortSignal handling throws
+      // (a DOMException, in practice) into one recognizable error type so
+      // callers can show "cancelled" instead of a generic failure message.
+      if (signal?.aborted) throw new FfmpegCancelledError();
+      throw err;
     } finally {
       if (onRunProgress) ffmpeg.off("progress", progressHandler);
       ffmpeg.off("log", logHandler);

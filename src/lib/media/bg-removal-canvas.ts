@@ -1,3 +1,5 @@
+import { chromaKeyAlpha, bilinearSampleMask } from "./chroma-key-math";
+
 export type BgReplaceMode = "transparent" | "color" | "gradient" | "blur" | "image" | "video";
 export type BgGradientDirection = "vertical" | "horizontal" | "diagonal";
 
@@ -103,14 +105,8 @@ export function keyChromaForeground(
   const [kr, kg, kb] = hexToRgb(chroma.colorHex);
   const imageData = ctx.getImageData(0, 0, w, h);
   const data = imageData.data;
-  const similarity = chroma.similarity;
-  const blend = Math.max(chroma.blend, 0.0001);
   for (let i = 0; i < data.length; i += 4) {
-    const dr = data[i] - kr;
-    const dg = data[i + 1] - kg;
-    const db = data[i + 2] - kb;
-    const dist = Math.sqrt(dr * dr + dg * dg + db * db) / 441.6729559300637; // sqrt(255^2*3)
-    const alpha = Math.min(1, Math.max(0, (dist - similarity) / blend));
+    const alpha = chromaKeyAlpha(data[i], data[i + 1], data[i + 2], kr, kg, kb, chroma.similarity, chroma.blend);
     data[i + 3] = Math.round(data[i + 3] * alpha);
   }
   ctx.putImageData(imageData, 0, 0);
@@ -149,24 +145,8 @@ export function applyMaskForeground(
   const sy = mh / h;
 
   for (let y = 0; y < h; y++) {
-    const my = Math.min(mh - 1, y * sy);
-    const my0 = Math.floor(my);
-    const my1 = Math.min(mh - 1, my0 + 1);
-    const fy = my - my0;
     for (let x = 0; x < w; x++) {
-      const mx = Math.min(mw - 1, x * sx);
-      const mx0 = Math.floor(mx);
-      const mx1 = Math.min(mw - 1, mx0 + 1);
-      const fx = mx - mx0;
-
-      const v00 = maskData[my0 * mw + mx0];
-      const v10 = maskData[my0 * mw + mx1];
-      const v01 = maskData[my1 * mw + mx0];
-      const v11 = maskData[my1 * mw + mx1];
-      const top = v00 + (v10 - v00) * fx;
-      const bottom = v01 + (v11 - v01) * fx;
-      const v = top + (bottom - top) * fy;
-
+      const v = bilinearSampleMask(maskData, mw, mh, x * sx, y * sy);
       const i = (y * w + x) * 4 + 3;
       data[i] = Math.round(data[i] * Math.min(1, Math.max(0, v)));
     }

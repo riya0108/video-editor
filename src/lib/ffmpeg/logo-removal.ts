@@ -12,6 +12,8 @@ export interface LogoKeyframe {
   y: number;
 }
 
+export type LogoRemovalMode = "reconstruct" | "blur";
+
 export interface LogoRegion {
   id: string;
   shape: "rect" | "brush";
@@ -21,7 +23,15 @@ export interface LogoRegion {
   points: FractionPoint[];
   /** Used when shape === "brush". Brush radius as a fraction of min(videoWidth, videoHeight). */
   brushRadius: number;
-  /** 0-100. Drives how wide a fuzzy edge ffmpeg blends the patch into. */
+  /**
+   * "reconstruct" (default) rebuilds the box from edges + cloned neighboring
+   * texture (see appendDelogoWithClone). "blur" instead just heavily blurs the
+   * box in place — cheaper, and the honest choice when there isn't enough
+   * clean surrounding texture nearby for a convincing reconstruction (busy,
+   * high-motion, or edge-of-frame logos).
+   */
+  mode: LogoRemovalMode;
+  /** 0-100. Reconstruct: how wide a fuzzy edge ffmpeg blends the patch into. Blur: how strong the blur is. */
   strength: number;
   /** null = applied for the whole video. */
   timeRange: { start: number; end: number } | null;
@@ -47,6 +57,14 @@ function escapeFilterArg(value: string): string {
 function strengthToPadding(strength: number, w: number, h: number): number {
   const wanted = Math.round((Math.max(0, Math.min(100, strength)) / 100) * 0.25 * Math.min(w, h));
   return Math.max(0, wanted);
+}
+
+/** Blur mode's "strength" instead controls how strong the blur itself is — a bigger
+ * avgblur kernel, as a fraction of the box's own size, so a small logo and a big one
+ * both blur into an equally unrecognizable smear at the same strength setting. */
+function strengthToBlurSize(strength: number, w: number, h: number): number {
+  const frac = 0.35 + (Math.max(0, Math.min(100, strength)) / 100) * 0.65;
+  return Math.max(6, Math.round(frac * Math.min(w, h)));
 }
 
 const EDGE_MARGIN = 2;
@@ -112,6 +130,9 @@ interface Patch {
   w: string;
   h: string;
   timeRange: LogoRegion["timeRange"];
+  mode: LogoRemovalMode;
+  /** Blur mode's fixed avgblur kernel size for this patch (see strengthToBlurSize). */
+  blurSize: number;
   /** Set only for a static (non-keyframed) rect patch — lets the second pass clone real
    * texture in from a neighboring box instead of leaving delogo's flat interpolation. */
   numeric?: { x: number; y: number; w: number; h: number };
@@ -122,12 +143,15 @@ function evenRoundLocal(n: number): number {
 }
 
 /**
- * Finds a same-size box of *real* video just outside the patch (above, below,
- * left, or right of it) to clone texture from. Tried in that order, skipping
- * any candidate that falls off the frame or overlaps another patch (so one
- * logo's fill doesn't get built out of another logo's box).
+ * Finds every same-size box of *real* video just outside the patch (above,
+ * below, left, and right of it) usable as a texture donor — skipping any
+ * candidate that falls off the frame or overlaps another patch (so one
+ * logo's fill doesn't get built out of another logo's box). Returns as many
+ * as are valid (0-4), not just the first, so the caller can blend several
+ * directions together instead of pasting in one direction's texture verbatim
+ * (which is what reads as an obvious "mirrored" patch on a busy background).
  */
-function findDonorRect(
+function findDonorRects(
   x: number,
   y: number,
   w: number,
@@ -135,33 +159,38 @@ function findDonorRect(
   others: { x: number; y: number; w: number; h: number }[],
   videoWidth: number,
   videoHeight: number,
-): { x: number; y: number } | null {
+): { x: number; y: number }[] {
   const candidates = [
     { x, y: y - h },
     { x, y: y + h },
     { x: x - w, y },
     { x: x + w, y },
   ];
+  const valid: { x: number; y: number }[] = [];
   for (const c of candidates) {
     if (c.x < 0 || c.y < 0 || c.x + w > videoWidth || c.y + h > videoHeight) continue;
     const overlaps = others.some(
       (o) => c.x + w > o.x && o.x + o.w > c.x && c.y + h > o.y && o.y + o.h > c.y,
     );
-    if (!overlaps) return { x: evenRoundLocal(c.x), y: evenRoundLocal(c.y) };
+    if (!overlaps) valid.push({ x: evenRoundLocal(c.x), y: evenRoundLocal(c.y) });
   }
-  return null;
+  return valid;
 }
 
-/** Donor texture is blended over delogo's smoother fill rather than pasted flat, so a
- * mismatched donor (different shadow/gradient) still fades toward delogo's edge-matched
- * base instead of reading as a hard-pasted rectangle. */
+/** The blended donor texture is composited over delogo's smoother fill rather than
+ * pasted flat, so a mismatched donor (different shadow/gradient) still fades toward
+ * delogo's edge-matched base instead of reading as a hard-pasted rectangle. */
 const DONOR_OPACITY = 0.62;
 
 /**
- * Appends the filters for one delogo'd box to `parts`, then — if a clean donor box is
- * found nearby — clones its real texture in over the delogo fill (see findDonorRect and
- * the buildLogoRemovalFilter doc comment for why). Shared by the multi-region tool and
- * the single-box logo step in the main editor so both get the same quality. `makeLabel`
+ * Appends the filters for one delogo'd box to `parts`, then — if any clean donor
+ * boxes are found nearby — clones their real texture in over the delogo fill (see
+ * findDonorRects and the buildLogoRemovalFilter doc comment for why). When more than
+ * one donor is available they're averaged together first (a running mean built from
+ * `overlay` + `colorchannelmixer`, since this build has no `blend`/`avg` filter), so
+ * the result reads as a plausible blended texture instead of an obvious copy-pasted
+ * chunk from one specific direction. Shared by the multi-region tool and the
+ * single-box logo step in the main editor so both get the same quality. `makeLabel`
  * must return a fresh, collision-free label on every call.
  */
 export function appendDelogoWithClone(
@@ -184,34 +213,79 @@ export function appendDelogoWithClone(
   const ry = Math.round(y);
   const rw = Math.min(evenRoundLocal(w), videoWidth - rx);
   const rh = Math.min(evenRoundLocal(h), videoHeight - ry);
-  const donor = findDonorRect(rx, ry, rw, rh, others, videoWidth, videoHeight);
-  if (!donor) return delogoOut;
+  const donors = findDonorRects(rx, ry, rw, rh, others, videoWidth, videoHeight);
+  if (donors.length === 0) return delogoOut;
 
-  // Each labeled pad can only be consumed once, so the frame needs a 3-way split: one
+  // Each labeled pad can only be consumed once, so the frame needs an N-way split: one
   // copy stays whole (the final overlay's base), one gets cropped to the delogo'd
-  // patch, one gets cropped to the donor box.
-  const base = makeLabel();
-  const cropSrc = makeLabel();
-  const donorSrc = makeLabel();
-  parts.push(`[${delogoOut}]split=3[${base}][${cropSrc}][${donorSrc}]`);
+  // patch, and one per donor gets cropped to that donor's box.
+  const outs = Array.from({ length: 2 + donors.length }, () => makeLabel());
+  parts.push(`[${delogoOut}]split=${outs.length}[${outs.join("][")}]`);
+  const [base, cropSrc, ...donorSrcs] = outs;
 
   const delogoCrop = makeLabel();
   parts.push(`[${cropSrc}]crop=${rw}:${rh}:${rx}:${ry}[${delogoCrop}]`);
-  // `blend` isn't compiled into this project's minimal ffmpeg-core.wasm build, so the
-  // donor's opacity is applied via its alpha channel instead: fade it down with
-  // colorchannelmixer, then let `overlay` (which is compiled in and used everywhere
-  // else in this codebase) do the actual compositing.
-  const donorCrop = makeLabel();
-  parts.push(
-    `[${donorSrc}]crop=${rw}:${rh}:${donor.x}:${donor.y},format=rgba,colorchannelmixer=aa=${DONOR_OPACITY}[${donorCrop}]`,
-  );
 
-  const blended = makeLabel();
-  parts.push(`[${delogoCrop}][${donorCrop}]overlay[${blended}]`);
+  // Running average of every donor crop: after folding in the k-th donor, giving it
+  // weight 1/k keeps the accumulator an equal-weighted mean of all k so far.
+  const donorCrops = donorSrcs.map((src, i) => {
+    const out = makeLabel();
+    parts.push(`[${src}]crop=${rw}:${rh}:${donors[i].x}:${donors[i].y},format=rgba[${out}]`);
+    return out;
+  });
+  let avg = donorCrops[0];
+  for (let i = 1; i < donorCrops.length; i++) {
+    const weight = (1 / (i + 1)).toFixed(3);
+    const weighted = makeLabel();
+    parts.push(`[${donorCrops[i]}]colorchannelmixer=aa=${weight}[${weighted}]`);
+    const blended = makeLabel();
+    parts.push(`[${avg}][${weighted}]overlay[${blended}]`);
+    avg = blended;
+  }
+
+  // `blend` isn't compiled into this project's minimal ffmpeg-core.wasm build, so the
+  // averaged donor's opacity onto the delogo fill is applied via its alpha channel
+  // instead: fade it down with colorchannelmixer, then let `overlay` (compiled in and
+  // used everywhere else in this codebase) do the actual compositing.
+  const avgFaded = makeLabel();
+  parts.push(`[${avg}]colorchannelmixer=aa=${DONOR_OPACITY}[${avgFaded}]`);
+  const blendedPatch = makeLabel();
+  parts.push(`[${delogoCrop}][${avgFaded}]overlay[${blendedPatch}]`);
 
   const composited = makeLabel();
-  parts.push(`[${base}][${blended}]overlay=x=${rx}:y=${ry}${enable}[${composited}]`);
+  parts.push(`[${base}][${blendedPatch}]overlay=x=${rx}:y=${ry}${enable}[${composited}]`);
   return composited;
+}
+
+/**
+ * Appends the filters for a blurred (not reconstructed) box: crop the patch out, run
+ * a heavy `avgblur` over just that crop, and overlay it back in place. x/y/w/h accept
+ * either plain numbers or ffmpeg expressions (as strings) — the same values `delogo`
+ * takes above — so this works equally for a static box, a tracked/keyframed box, or a
+ * brush dab. Cheaper than reconstruction (no donor search or multi-way split) and the
+ * honest choice when there isn't enough clean surrounding texture to reconstruct from.
+ */
+export function appendBlurPatch(
+  parts: string[],
+  inputLabel: string,
+  x: string,
+  y: string,
+  w: string,
+  h: string,
+  blurSize: number,
+  enable: string,
+  makeLabel: () => string,
+): string {
+  const base = makeLabel();
+  const cropSrc = makeLabel();
+  parts.push(`[${inputLabel}]split=2[${base}][${cropSrc}]`);
+  const cropped = makeLabel();
+  parts.push(`[${cropSrc}]crop=${w}:${h}:${x}:${y}[${cropped}]`);
+  const blurred = makeLabel();
+  parts.push(`[${cropped}]avgblur=sizeX=${blurSize}:sizeY=${blurSize}[${blurred}]`);
+  const out = makeLabel();
+  parts.push(`[${base}][${blurred}]overlay=x=${x}:y=${y}${enable}[${out}]`);
+  return out;
 }
 
 /**
@@ -257,6 +331,7 @@ export function buildLogoRemovalFilter(
         (p) => !pointInAnyRect(p, protectZones),
       );
       const pad = strengthToPadding(region.strength, radiusPx * 2, radiusPx * 2);
+      const blurSize = strengthToBlurSize(region.strength, radiusPx * 2, radiusPx * 2);
       for (const p of samples) {
         const cx = p.x * videoWidth;
         const cy = p.y * videoHeight;
@@ -264,7 +339,15 @@ export function buildLogoRemovalFilter(
         const y = Math.min(Math.max(0, cy - radiusPx - pad), videoHeight - EDGE_MARGIN - 2);
         const w = Math.min(videoWidth - EDGE_MARGIN - x, radiusPx * 2 + pad * 2);
         const h = Math.min(videoHeight - EDGE_MARGIN - y, radiusPx * 2 + pad * 2);
-        patches.push({ x: String(x), y: String(y), w: String(w), h: String(h), timeRange: region.timeRange });
+        patches.push({
+          x: String(x),
+          y: String(y),
+          w: String(w),
+          h: String(h),
+          timeRange: region.timeRange,
+          mode: region.mode,
+          blurSize,
+        });
       }
       continue;
     }
@@ -272,6 +355,7 @@ export function buildLogoRemovalFilter(
     const baseW = region.rect.w * videoWidth;
     const baseH = region.rect.h * videoHeight;
     const pad = strengthToPadding(region.strength, baseW, baseH);
+    const blurSize = strengthToBlurSize(region.strength, baseW, baseH);
 
     if (region.keyframes.length >= 2) {
       const sorted = [...region.keyframes].sort((a, b) => a.t - b.t);
@@ -281,7 +365,7 @@ export function buildLogoRemovalFilter(
       const yFinal = `min(max((${yFracExpr})*${videoHeight}-${pad},0),${videoHeight - EDGE_MARGIN - 2})`;
       const wFinal = `min(${videoWidth - EDGE_MARGIN}-(${xFinal}),${baseW + 2 * pad})`;
       const hFinal = `min(${videoHeight - EDGE_MARGIN}-(${yFinal}),${baseH + 2 * pad})`;
-      patches.push({ x: xFinal, y: yFinal, w: wFinal, h: hFinal, timeRange: region.timeRange });
+      patches.push({ x: xFinal, y: yFinal, w: wFinal, h: hFinal, timeRange: region.timeRange, mode: region.mode, blurSize });
       continue;
     }
 
@@ -297,6 +381,8 @@ export function buildLogoRemovalFilter(
       w: String(w),
       h: String(h),
       timeRange: region.timeRange,
+      mode: region.mode,
+      blurSize,
       numeric: { x, y, w, h },
     });
   }
@@ -312,6 +398,23 @@ export function buildLogoRemovalFilter(
     const enable = patch.timeRange
       ? `:enable='${escapeFilterArg(`between(t,${patch.timeRange.start},${patch.timeRange.end})`)}'`
       : "";
+
+    if (patch.mode === "blur") {
+      const quoted = !patch.numeric;
+      const wrap = (v: string) => (quoted ? `'${escapeFilterArg(v)}'` : v);
+      current = appendBlurPatch(
+        parts,
+        current,
+        wrap(patch.x),
+        wrap(patch.y),
+        wrap(patch.w),
+        wrap(patch.h),
+        patch.blurSize,
+        enable,
+        nextTmp,
+      );
+      return;
+    }
 
     if (!patch.numeric) {
       const delogoOut = nextTmp();

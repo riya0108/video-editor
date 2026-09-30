@@ -70,6 +70,7 @@ export default function RectOverlay({
   onChange,
   minFraction = 0.05,
   color = "primary",
+  dim = true,
 }: {
   boxWidth: number;
   boxHeight: number;
@@ -77,6 +78,11 @@ export default function RectOverlay({
   onChange: (r: FractionRect) => void;
   minFraction?: number;
   color?: "primary" | "danger";
+  /** Darkens everything outside the box — useful for a crop tool (showing what's
+   * discarded), but wrong for a small logo/watermark box where the rest of the
+   * video needs to stay visible so other regions and the frame itself are still
+   * checkable while this one is selected. */
+  dim?: boolean;
 }) {
   const [mode, setMode] = useState<DragMode>(null);
   const dragStart = useRef({ pointerX: 0, pointerY: 0, rect });
@@ -132,16 +138,18 @@ export default function RectOverlay({
   const bgColor = color === "danger" ? "bg-danger-500/10" : "bg-primary-500/10";
   const handleColor = color === "danger" ? "bg-danger-500" : "bg-primary-500";
 
+  const scrimClass = dim ? "absolute bg-black/60" : "absolute";
+
   return (
     <>
-      <div className="absolute bg-black/60" style={{ left: 0, top: 0, width: boxWidth, height: px.top }} />
+      <div className={scrimClass} style={{ left: 0, top: 0, width: boxWidth, height: px.top }} />
       <div
-        className="absolute bg-black/60"
+        className={scrimClass}
         style={{ left: 0, top: bottom, width: boxWidth, height: boxHeight - bottom }}
       />
-      <div className="absolute bg-black/60" style={{ left: 0, top: px.top, width: px.left, height: px.height }} />
+      <div className={scrimClass} style={{ left: 0, top: px.top, width: px.left, height: px.height }} />
       <div
-        className="absolute bg-black/60"
+        className={scrimClass}
         style={{ left: right, top: px.top, width: boxWidth - right, height: px.height }}
       />
 

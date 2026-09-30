@@ -1,4 +1,5 @@
 import type { EditorChromaKeyState } from "../ffmpeg/editor-state";
+import { chromaKeyAlpha } from "./chroma-key-math";
 
 /** Longest side of the working canvas used for the per-pixel key pass — kept small since this only needs to look right on-screen, not be pixel-exact, and getImageData/putImageData cost scales with pixel count. */
 const WORK_MAX_SIDE = 480;
@@ -39,9 +40,13 @@ export function drawChromaKeyed(
   const ctx = work.getContext("2d", { willReadFrequently: true });
   if (!ctx) return work;
 
-  // Background layer: solid color, or the replacement image/video cover-fit.
+  // Background layer: nothing (transparent — the stage's checkerboard shows
+  // through), solid color, or the replacement image/video cover-fit.
+  ctx.clearRect(0, 0, w, h);
   ctx.globalCompositeOperation = "source-over";
-  if (state.replace === "color" || !replacementEl) {
+  if (state.replace === "transparent") {
+    // Leave cleared.
+  } else if (state.replace === "color" || !replacementEl) {
     ctx.fillStyle = state.replaceColorHex;
     ctx.fillRect(0, 0, w, h);
   } else {
@@ -61,14 +66,8 @@ export function drawChromaKeyed(
   const [kr, kg, kb] = hexToRgb(state.colorHex);
   const imageData = fgCtx.getImageData(0, 0, w, h);
   const data = imageData.data;
-  const similarity = state.similarity;
-  const blend = Math.max(state.blend, 0.0001);
   for (let i = 0; i < data.length; i += 4) {
-    const dr = data[i] - kr;
-    const dg = data[i + 1] - kg;
-    const db = data[i + 2] - kb;
-    const dist = Math.sqrt(dr * dr + dg * dg + db * db) / 441.6729559300637; // sqrt(255^2*3)
-    const alpha = Math.min(1, Math.max(0, (dist - similarity) / blend));
+    const alpha = chromaKeyAlpha(data[i], data[i + 1], data[i + 2], kr, kg, kb, state.similarity, state.blend);
     data[i + 3] = Math.round(alpha * 255);
   }
   fgCtx.putImageData(imageData, 0, 0);

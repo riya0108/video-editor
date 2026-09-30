@@ -12,7 +12,10 @@ import { positionExprs, type ContentBox } from "./text-position";
 import { VOICE_REMOVER_FILTER, noiseReductionFilter, atempoChain } from "./audio-filters";
 import { resolveQualityTarget, upscaleFilter } from "./upscale-filter";
 import { planCutoutOverlay } from "./person-cutout-filter";
-import { appendDelogoWithClone } from "./logo-removal";
+import { appendDelogoWithClone, appendBlurPatch } from "./logo-removal";
+import { despillTypeFor as despillTypeForColor } from "./bg-removal-command";
+import { buildTrimConcatFilter, type KeepInterval } from "./build-trim-concat-filter";
+import { hasRealCuts, totalKeptDuration, remapWindow } from "./cuts";
 import { buildCaptionsFilter, remapCuesToTrim } from "../captions/build-captions-filter";
 import { measureKaraokeLayouts } from "../captions/karaoke-layout";
 import { buildOverlayAnimationFilters, kenBurnsZoompanFilter } from "./media-animation";
@@ -42,6 +45,11 @@ export interface BuildEditorCommandInput {
   videoHeight: number;
   trimStart: number;
   trimEnd: number;
+  /** Kept segments (absolute source time) within [trimStart,trimEnd] — empty
+   * means "no cuts, keep the whole trim range." More than one entry (or a
+   * single entry narrower than the trim range) removes the gaps between/
+   * around them and splices what's left back together. */
+  cuts: KeepInterval[];
   crop: EditorCropState;
   logo: EditorLogoState;
   chromaKey: EditorChromaKeyState;
@@ -64,6 +72,7 @@ export interface BuildEditorCommandResult {
   inputs: { name: string; data: File | Blob }[];
   args: string[];
   outputName: string;
+  outputMimeType: string;
 }
 
 export async function buildEditorCommand(state: BuildEditorCommandInput): Promise<BuildEditorCommandResult> {
@@ -102,15 +111,42 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
   // ---- Main input: trim baked in at demux level so it's unaffected by
   // any later concat with an intro/outro clip. ----
   const mainExt = guessVideoExtension(state.videoFile);
-  const trimmedDuration = Math.max(0, state.trimEnd - state.trimStart);
+  const rawTrimmedDuration = Math.max(0, state.trimEnd - state.trimStart);
   const mainIndex = addFileInput(`input.${mainExt}`, state.videoFile, [
     "-ss",
     toFfmpegTimestamp(state.trimStart),
     "-t",
-    toFfmpegTimestamp(trimmedDuration),
+    toFfmpegTimestamp(rawTrimmedDuration),
   ]);
 
+  // ---- Cuts: one or more middle sections removed from the trim range. Kept
+  // segments arrive in absolute source time (same coordinate space as
+  // trimStart/trimEnd); convert to demux-output-relative time (0 = trimStart,
+  // matching what -ss above already shifted the stream to) and clip into the
+  // trim window before doing anything else, so every later stage — including
+  // captions/overlays below, whose own timings get remapped through the same
+  // segments — operates on the already-compacted timeline. ----
+  const cutSegmentsRelative: KeepInterval[] = (
+    state.cuts.length > 0 ? state.cuts : [{ start: state.trimStart, end: state.trimEnd }]
+  )
+    .map((s) => ({
+      start: Math.max(0, Math.min(rawTrimmedDuration, s.start - state.trimStart)),
+      end: Math.max(0, Math.min(rawTrimmedDuration, s.end - state.trimStart)),
+    }))
+    .filter((s) => s.end - s.start > 0.02)
+    .sort((a, b) => a.start - b.start);
+  const cutsActive = hasRealCuts(cutSegmentsRelative, 0, rawTrimmedDuration);
+
   let vLabel = `${mainIndex}:v`;
+  let cutAudioLabel = `${mainIndex}:a`;
+  let trimmedDuration = rawTrimmedDuration;
+  if (cutsActive) {
+    const { filterComplex, videoLabel, audioLabel } = buildTrimConcatFilter(cutSegmentsRelative, mainIndex, "cuts");
+    filters.push(filterComplex);
+    vLabel = videoLabel;
+    cutAudioLabel = audioLabel;
+    trimmedDuration = totalKeptDuration(cutSegmentsRelative);
+  }
   const vLabelIsRaw = () => vLabel === `${mainIndex}:v`;
   let currentW = state.videoWidth;
   let currentH = state.videoHeight;
@@ -134,19 +170,34 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
       return { x, y, w, h };
     });
     for (const box of boxes) {
-      vLabel = appendDelogoWithClone(
-        filters,
-        vLabel,
-        box.x,
-        box.y,
-        box.w,
-        box.h,
-        boxes.filter((b) => b !== box),
-        currentW,
-        currentH,
-        "",
-        () => newLabel("v"),
-      );
+      if (state.logo.mode === "blur") {
+        const blurSize = Math.max(6, Math.round(0.6 * Math.min(box.w, box.h)));
+        vLabel = appendBlurPatch(
+          filters,
+          vLabel,
+          String(box.x),
+          String(box.y),
+          String(box.w),
+          String(box.h),
+          blurSize,
+          "",
+          () => newLabel("v"),
+        );
+      } else {
+        vLabel = appendDelogoWithClone(
+          filters,
+          vLabel,
+          box.x,
+          box.y,
+          box.w,
+          box.h,
+          boxes.filter((b) => b !== box),
+          currentW,
+          currentH,
+          "",
+          () => newLabel("v"),
+        );
+      }
     }
   }
 
@@ -164,39 +215,76 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
   }
 
   // ---- Chroma key / remove a color ----
+  // "transparent" carries real alpha all the way to the encoder (see the
+  // exportAlpha branch at the bottom of this function) instead of compositing
+  // onto a replacement layer, so it only makes sense standing alone — combined
+  // with "resize for a platform" (which always pads onto an opaque backdrop)
+  // or an intro/outro clip (concat needs a matching, non-alpha pixel format),
+  // it silently falls back to compositing over black rather than erroring.
+  const chromaWantsAlpha =
+    state.chromaKey.enabled &&
+    state.chromaKey.replace === "transparent" &&
+    !state.background.enabled &&
+    !state.extraClip.enabled;
   if (state.chromaKey.enabled) {
     const color = state.chromaKey.colorHex.replace("#", "0x");
-    const keyed = newLabel("v");
-    filters.push(
-      `[${vLabel}]colorkey=${color}:${state.chromaKey.similarity}:${state.chromaKey.blend},format=yuva420p[${keyed}]`,
-    );
+    const keyedRaw = newLabel("v");
+    filters.push(`[${vLabel}]colorkey=${color}:${state.chromaKey.similarity}:${state.chromaKey.blend}[${keyedRaw}]`);
 
-    let bgLabel: string;
-    if (state.chromaKey.replace === "image" && state.chromaKey.replaceImageFile) {
-      const imgExt = guessImageExtension(state.chromaKey.replaceImageFile);
-      const idx = addFileInput(`chromabg.${imgExt}`, state.chromaKey.replaceImageFile, ["-loop", "1"]);
-      const scaled = newLabel("v");
-      filters.push(
-        `[${idx}:v]scale=${currentW}:${currentH}:force_original_aspect_ratio=increase,crop=${currentW}:${currentH}[${scaled}]`,
-      );
-      bgLabel = scaled;
-    } else if (state.chromaKey.replace === "video" && state.chromaKey.replaceVideoFile) {
-      const vidExt = guessVideoExtension(state.chromaKey.replaceVideoFile);
-      const idx = addFileInput(`chromabg.${vidExt}`, state.chromaKey.replaceVideoFile, ["-stream_loop", "-1"]);
-      const scaled = newLabel("v");
-      filters.push(
-        `[${idx}:v]scale=${currentW}:${currentH}:force_original_aspect_ratio=increase,crop=${currentW}:${currentH}[${scaled}]`,
-      );
-      bgLabel = scaled;
-    } else {
-      const color2 = state.chromaKey.replaceColorHex.replace("#", "0x");
-      const idx = addLavfiInput(`color=c=${color2}:s=${currentW}x${currentH}:d=${(trimmedDuration + 1).toFixed(2)}`);
-      bgLabel = `${idx}:v`;
+    // Pull the key first, *then* despill (mirrors bg-removal-command.ts):
+    // despilling a saturated key color before colorkey desaturates it toward
+    // black, which moves it too far from the key color for colorkey to
+    // recognize as background at all. Despilling the already-keyed result
+    // instead only cleans up residual green/blue fringing on the subject's
+    // edges — hair, semi-transparent skin — which is what actually improves
+    // edge quality here.
+    const despillType = despillTypeForColor(state.chromaKey.colorHex);
+    let keyedColor = keyedRaw;
+    if (despillType) {
+      const despilled = newLabel("v");
+      filters.push(`[${keyedRaw}]despill=type=${despillType}[${despilled}]`);
+      keyedColor = despilled;
     }
 
-    const composited = newLabel("v");
-    filters.push(`[${bgLabel}][${keyed}]overlay=shortest=1[${composited}]`);
-    vLabel = composited;
+    const keyed = newLabel("v");
+    filters.push(`[${keyedColor}]format=yuva420p[${keyed}]`);
+
+    if (chromaWantsAlpha) {
+      vLabel = keyed;
+    } else {
+      let bgLabel: string;
+      if (state.chromaKey.replace === "image" && state.chromaKey.replaceImageFile) {
+        const imgExt = guessImageExtension(state.chromaKey.replaceImageFile);
+        const idx = addFileInput(`chromabg.${imgExt}`, state.chromaKey.replaceImageFile, ["-loop", "1"]);
+        const scaled = newLabel("v");
+        filters.push(
+          `[${idx}:v]scale=${currentW}:${currentH}:force_original_aspect_ratio=increase,crop=${currentW}:${currentH}[${scaled}]`,
+        );
+        bgLabel = scaled;
+      } else if (state.chromaKey.replace === "video" && state.chromaKey.replaceVideoFile) {
+        const vidExt = guessVideoExtension(state.chromaKey.replaceVideoFile);
+        const idx = addFileInput(`chromabg.${vidExt}`, state.chromaKey.replaceVideoFile, ["-stream_loop", "-1"]);
+        const scaled = newLabel("v");
+        filters.push(
+          `[${idx}:v]scale=${currentW}:${currentH}:force_original_aspect_ratio=increase,crop=${currentW}:${currentH}[${scaled}]`,
+        );
+        bgLabel = scaled;
+      } else {
+        // "transparent" chosen alongside resize/extraClip (which rules out a
+        // real alpha export, see chromaWantsAlpha above) falls back to black
+        // here, same as "color" with no color picked.
+        const color2 =
+          state.chromaKey.replace === "transparent"
+            ? "0x000000"
+            : state.chromaKey.replaceColorHex.replace("#", "0x");
+        const idx = addLavfiInput(`color=c=${color2}:s=${currentW}x${currentH}:d=${(trimmedDuration + 1).toFixed(2)}`);
+        bgLabel = `${idx}:v`;
+      }
+
+      const composited = newLabel("v");
+      filters.push(`[${bgLabel}][${keyed}]overlay=shortest=1[${composited}]`);
+      vLabel = composited;
+    }
   }
 
   // ---- Fit onto a target canvas (resize preset / custom size) and fill the
@@ -256,7 +344,27 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
       }
     }
 
-    const remapped = remapCuesToTrim(state.captions.cues, state.trimStart, state.trimEnd);
+    let remapped = remapCuesToTrim(state.captions.cues, state.trimStart, state.trimEnd);
+    // Cuts compact the trim-relative timeline (see cutSegmentsRelative above)
+    // — shift each cue/word through the same segments so captions still land
+    // on the right compacted moment instead of drifting by however much was
+    // cut before them. A cue straddling a removed gap gets truncated to its
+    // visible portion rather than dropped or left misaligned.
+    if (cutsActive) {
+      remapped = remapped
+        .map((cue) => {
+          const window = remapWindow(cue.start, cue.end, cutSegmentsRelative);
+          if (!window) return null;
+          const words = cue.words
+            ?.map((w) => {
+              const ww = remapWindow(w.start, w.end, cutSegmentsRelative);
+              return ww ? { ...w, start: ww.start, end: ww.end } : null;
+            })
+            .filter((w): w is NonNullable<typeof w> => w !== null);
+          return { ...cue, start: window.start, end: window.end, words };
+        })
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+    }
     const karaokeLayouts = state.captions.style.karaoke
       ? await measureKaraokeLayouts(remapped, state.captions.style, font.cssFontFamily, contentBox, emphasisFontCssFamily)
       : undefined;
@@ -286,6 +394,11 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
       vLabel = out;
     }
 
+    // Known limitation: unlike captions/overlays above, the person-cutout
+    // overlay's frame timing isn't remapped through cuts — occludeByPerson
+    // combined with a mid-clip cut can drift out of sync with the subject
+    // after the cut point. Narrow, secondary combination; not worth the
+    // added complexity of teaching planCutoutOverlay about compacted time.
     if (state.captions.style.occludeByPerson && state.personCutoutFrames.length > 0) {
       const plan = planCutoutOverlay({
         frames: state.personCutoutFrames,
@@ -331,6 +444,19 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
 
   // ---- Overlays: picture-in-picture, stickers/emoji, GIFs ----
   for (const layer of state.overlays) {
+    // layer.start/end are trim-relative — remap them through the same cut
+    // segments captions use above, so a PiP/sticker overlay stays timed to
+    // the same compacted moment instead of drifting after a mid-clip cut.
+    // One that falls entirely inside a removed gap is skipped outright.
+    let layerStart = layer.start;
+    let layerEnd = layer.end;
+    if (cutsActive) {
+      const window = remapWindow(layer.start, layer.end, cutSegmentsRelative);
+      if (!window) continue;
+      layerStart = window.start;
+      layerEnd = window.end;
+    }
+
     const isImage = layer.kind === "image";
     const ext = isImage ? guessImageExtension(layer.file) : guessVideoExtension(layer.file);
     const preArgs = isImage ? ["-loop", "1"] : ["-stream_loop", "-1"];
@@ -344,14 +470,14 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
     let animatedLabel = scaled;
     if (layer.animation !== "none") {
       const animOut = newLabel("v");
-      const animFilters = buildOverlayAnimationFilters(layer.animation, scaled, animOut, layer.start, newLabel);
+      const animFilters = buildOverlayAnimationFilters(layer.animation, scaled, animOut, layerStart, newLabel);
       filters.push(...animFilters);
       animatedLabel = animOut;
     }
 
     const { x, y } = freeOverlayExprs(layer.x, layer.y, contentBox);
     const out = newLabel("v");
-    const enable = `between(t\\,${layer.start.toFixed(2)}\\,${layer.end.toFixed(2)})`;
+    const enable = `between(t\\,${layerStart.toFixed(2)}\\,${layerEnd.toFixed(2)})`;
     // shortest=1 is essential here: looped image/video overlay inputs are
     // unbounded, and without this the output follows the infinite overlay
     // instead of stopping when the (bounded) main video ends.
@@ -429,13 +555,15 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
   if (fontBlobEntry) inputs.push(fontBlobEntry);
 
   // ---- Audio chain: voice remover -> noise reduction -> speed -> dub -> music ----
-  let aLabel = `${mainIndex}:a`;
+  let aLabel = cutAudioLabel;
   // Tracks whether `aLabel` is still a bare demuxer stream reference (e.g.
   // "0:a" or, after a "replace" swap, "1:a") rather than a filtergraph pad —
   // -map needs the bracketed form only for the latter. A same-as-mainIndex
   // check isn't enough here: "replace" modes repoint aLabel at a *different*
-  // input's raw stream, which is just as unbracketed as the main one.
-  let aIsRaw = true;
+  // input's raw stream, which is just as unbracketed as the main one. Cuts
+  // route audio through the same trim+concat filtergraph as video, so it's
+  // generated too whenever they're active.
+  let aIsRaw = !cutsActive;
   const audioStageFilters: string[] = [];
   if (state.voiceRemover) audioStageFilters.push(VOICE_REMOVER_FILTER);
   if (state.noise.enabled) audioStageFilters.push(noiseReductionFilter(state.noise.strength));
@@ -583,8 +711,19 @@ export async function buildEditorCommand(state: BuildEditorCommandInput): Promis
   // enough that pinning everything to one thread is the reliable choice,
   // trading some encode speed for actually finishing.
   args.push("-filter_threads", "1", "-filter_complex_threads", "1");
+
+  if (chromaWantsAlpha) {
+    // ProRes 4444 in a .mov container carries real alpha end to end and
+    // plays back natively — see bg-removal-command.ts's buildChromaRemovalCommand
+    // for the fuller rationale (same environment, same choice) on why this
+    // beats the other alpha-capable encoders available in this wasm build.
+    args.push("-pix_fmt", "yuva444p10le", "-c:v", "prores_ks", "-profile:v", "4444", "-threads", "1", "-c:a", "aac");
+    args.push("output.mov");
+    return { inputs, args, outputName: "output.mov", outputMimeType: "video/quicktime" };
+  }
+
   args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "1", "-c:a", "aac");
   args.push("output.mp4");
 
-  return { inputs, args, outputName: "output.mp4" };
+  return { inputs, args, outputName: "output.mp4", outputMimeType: "video/mp4" };
 }

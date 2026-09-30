@@ -10,6 +10,8 @@
     "build": "astro build",
     "preview": "node scripts/preview-server.mjs",
     "astro": "astro",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "postinstall": "node scripts/copy-ffmpeg-core.mjs && node scripts/build-drawtext-font.mjs"
   },
   "dependencies": {
@@ -53,6 +55,7 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
     "typescript": "^6.0.3",
+    "vitest": "^5.0.2",
     "wawoff2": "^2.0.1"
   }
 }

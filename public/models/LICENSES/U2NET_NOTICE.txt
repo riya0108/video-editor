@@ -1,0 +1,15 @@
+Model: u2netp.onnx (U²-Net "portable" variant)
+Original work: U²-Net — https://github.com/xuebinqin/U-2-Net (Apache-2.0, see U2NET_LICENSE.txt in this directory)
+Original paper: Qin et al., "U^2-Net: Going Deeper with Nested U-Structure for Salient Object Detection", Pattern Recognition 2020.
+
+This ONNX export was downloaded, unmodified, from:
+https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx
+(danielgatis/rembg, MIT-licensed tool that re-exports the official U²-Net
+checkpoints to ONNX for CPU/GPU inference — the model weights themselves
+remain covered by U²-Net's own Apache-2.0 license, not rembg's MIT license.)
+
+Downloaded 2026-09-26.
+SHA-256: 309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8
+Size: 4,574,861 bytes
+
+See /MODEL_LICENSES.md at the repo root for the full license audit.

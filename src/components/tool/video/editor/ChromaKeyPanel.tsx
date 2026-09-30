@@ -79,7 +79,7 @@ export default function ChromaKeyPanel({
       <div>
         <p className="text-caption text-(--color-text-muted)">Replace with</p>
         <div className="mt-1.5 flex items-center gap-1 rounded-md border border-(--color-border) p-1">
-          {(["color", "image", "video"] as const).map((mode) => (
+          {(["transparent", "color", "image", "video"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
@@ -95,6 +95,14 @@ export default function ChromaKeyPanel({
           ))}
         </div>
 
+        {state.replace === "transparent" && (
+          <p className="mt-2 text-caption text-(--color-text-muted)">
+            Exports a .mov with a real alpha channel instead of compositing onto anything — drop it into Premiere
+            Pro, DaVinci Resolve, Final Cut Pro, or iMovie. Most browsers can't preview transparent video inline. Not
+            available together with "Resize for a platform" or an intro/outro clip, since both need an opaque frame
+            to composite onto — enable either of those and this falls back to a black backdrop instead.
+          </p>
+        )}
         {state.replace === "color" && (
           <input
             type="color"

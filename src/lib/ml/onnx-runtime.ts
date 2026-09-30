@@ -63,4 +63,19 @@ export async function createInferenceSession(
   });
 }
 
+/**
+ * PHASE 14 — PERFORMANCE. Frees a session's underlying WASM heap allocation
+ * / GPU buffers. Every adapter's `unload()` must call this instead of just
+ * dropping its own `session` reference — `InferenceSession` isn't a plain
+ * JS object GC can reclaim on its own; onnxruntime-web only actually frees
+ * the native-side memory once `.release()` resolves. Fire-and-forget by
+ * design: `unload()` itself stays synchronous (MattingModel's interface
+ * contract), and a caller unloading a model to free memory has no further
+ * use for this promise — logged rather than thrown so a release failure
+ * can't surface as an unhandled rejection.
+ */
+export function releaseInferenceSession(session: ort.InferenceSession): void {
+  session.release().catch((err) => console.error("Failed to release inference session:", err));
+}
+
 export { ort };

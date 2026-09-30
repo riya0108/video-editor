@@ -44,7 +44,7 @@ function isTransparentMode(mode: BgReplaceMode): boolean {
  * suppress). Removes the green/blue fringing that bleeds onto hair and
  * semi-transparent edges even after a clean colorkey pull.
  */
-function despillTypeFor(colorHex: string): "green" | "blue" | null {
+export function despillTypeFor(colorHex: string): "green" | "blue" | null {
   const c = parseHexColor(colorHex);
   const max = Math.max(c.r, c.g, c.b);
   if (max < 40) return null; // too dark to have a meaningful dominant hue

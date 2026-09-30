@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ZoomIn, ZoomOut, Trash2, Play, Pause, Maximize2 } from "lucide-react";
+import { ZoomIn, ZoomOut, Trash2, Play, Pause, Maximize2, Scissors } from "lucide-react";
 import { clamp } from "../../../../lib/time";
 import { formatTime } from "../../../../lib/time";
 
@@ -93,6 +93,7 @@ export default function EditorTimeline({
   isPlaying,
   onTogglePlay,
   lanes = [],
+  onSplit,
 }: {
   duration: number;
   start: number;
@@ -104,6 +105,11 @@ export default function EditorTimeline({
   isPlaying: boolean;
   onTogglePlay: () => void;
   lanes?: TimelineLane[];
+  /** Present => shows a "Split" (scissors) button that cuts the clip at the current
+   * playhead position — click a point on the timeline to move the playhead, then
+   * click Split to divide it there. The resulting piece can then be selected in the
+   * Cuts lane and deleted to actually remove it (ripple-closing the gap). */
+  onSplit?: () => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -254,6 +260,17 @@ export default function EditorTimeline({
           </span>
         </div>
         <div className="flex items-center gap-1 text-(--color-text-muted)">
+          {onSplit && (
+            <button
+              type="button"
+              onClick={onSplit}
+              title="Split the clip at the current playhead position"
+              className="mr-1 inline-flex items-center gap-1.5 rounded-md border border-(--color-border) px-2 py-1 text-caption font-medium transition-colors hover:border-(--color-border-strong) hover:text-(--color-text)"
+            >
+              <Scissors size={13} />
+              Split
+            </button>
+          )}
           <button
             type="button"
             aria-label="Zoom out"

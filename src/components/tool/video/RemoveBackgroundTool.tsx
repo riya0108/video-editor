@@ -13,6 +13,7 @@ import Dropzone from "../Dropzone";
 import ToolUploadScreen from "../ToolUploadScreen";
 import ExportStatus from "../ExportStatus";
 import ResultPanel from "../ResultPanel";
+import ExportValidationPanel from "../ExportValidationPanel";
 import TrimSlider from "../TrimSlider";
 import ToolSplitLayout from "../ToolSplitLayout";
 import ToolPanelSection from "../ToolPanelSection";
@@ -21,17 +22,25 @@ import PickColorOverlay from "./editor/PickColorOverlay";
 import { usePersonCutout } from "../../../lib/hooks/usePersonCutout";
 import { useBgRemovalPreview, type BgRemovalReplaceState } from "../../../lib/hooks/useBgRemovalPreview";
 import { useBgRemovalExport } from "../../../lib/hooks/useBgRemovalExport";
+import { useAiImageMatte } from "../../../lib/hooks/useAiImageMatte";
+import { useExportValidation, type ExportValidationExpectation } from "../../../lib/hooks/useExportValidation";
+import { validateUploadedMediaFile } from "../../../lib/media/upload-validation";
+import RefineMattePanel from "./RefineMattePanel";
 import {
   keyChromaForeground,
   drawBgReplacement,
   drawBlurredBackdrop,
   sampleColorAt,
+  compositeBgRemoval,
   type BgReplaceMode,
   type BgReplaceSettings,
   type ChromaSettings,
 } from "../../../lib/media/bg-removal-canvas";
+import { encodeCanvasForExport, IMAGE_FORMAT_EXTENSIONS, IMAGE_FORMAT_LABELS, type ImageExportFormat } from "../../../lib/media/image-export";
+import { probeVideoMeta } from "../../../lib/media/export-validation";
 import type { BgReplaceExportSettings } from "../../../lib/ffmpeg/bg-removal-command";
 import { stripExtension } from "../../../lib/ffmpeg/format";
+import { compositeTransparentForeground } from "../../../lib/matting/pipeline";
 
 const PRESET_COLORS = ["#00ff00", "#00b140", "#0047ff", "#ffffff", "#000000"];
 const GRADIENT_PRESETS: [string, string][] = [
@@ -74,6 +83,11 @@ export default function RemoveBackgroundTool() {
     videoFile: null,
   });
   const [replaceImageEl, setReplaceImageEl] = useState<HTMLImageElement | null>(null);
+  // PHASE 13 — TRANSPARENT EXPORT. Only meaningful for image exports in
+  // "transparent" mode — every other replace mode is fully opaque, so
+  // format choice has no visual effect and PNG is used regardless (see
+  // bg-removal-image.ts).
+  const [imageFormat, setImageFormat] = useState<ImageExportFormat>("png");
 
   const toReplaceSettings = (imageEl: HTMLImageElement | null): BgReplaceSettings => ({
     mode: replace.mode,
@@ -94,6 +108,22 @@ export default function RemoveBackgroundTool() {
   const cutout = usePersonCutout("subject");
   const exportState = useBgRemovalExport();
   const videoPreview = useBgRemovalPreview({ mode, chroma, replace, cutoutFrames: cutout.frames });
+  // PHASE 12 — BACKGROUND REMOVAL UI. Image AI mode's REFINE step: generates
+  // the matte separately from compositing (see useAiImageMatte.ts) so the
+  // model never re-runs while the user tries different preview backgrounds
+  // or paints touch-ups in RefineMattePanel — only handleApplyRefinedMatte
+  // below (the APPLY step) produces the final flattened export.
+  const aiMatte = useAiImageMatte();
+  // PHASE 13 — TRANSPARENT EXPORT. Automatic post-export verification (file
+  // exists/readable, resolution, frame rate, real alpha, no flatten-to-
+  // black) — see src/lib/media/export-validation.ts. `expectationRef`
+  // snapshots what the export SHOULD look like at the moment it's kicked
+  // off (not read fresh when the result lands), since the user could in
+  // principle change kind/mode/replace settings while a slow export is
+  // still running.
+  const exportValidation = useExportValidation();
+  const expectationRef = useRef<ExportValidationExpectation | null>(null);
+  const lastValidatedResultRef = useRef<Blob | null>(null);
 
   // Load the replacement background image (image-kind path only — the video
   // preview hook manages its own copy for canvas-mode video previews).
@@ -140,6 +170,31 @@ export default function RemoveBackgroundTool() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, mode, chroma, replace, replaceImageEl, width, height, sourceUrl]);
 
+  // PHASE 13 — TRANSPARENT EXPORT. Fires the automatic post-export
+  // verification pass the instant any export path (chroma image, AI image
+  // via the REFINE/APPLY step, chroma video, AI video) lands a result —
+  // all four funnel through the same exportState.result, so one effect
+  // here covers all of them instead of each call site remembering to do it.
+  useEffect(() => {
+    const blob = exportState.result?.blob ?? null;
+    const expectation = expectationRef.current;
+    if (!blob || !expectation || lastValidatedResultRef.current === blob) return;
+    lastValidatedResultRef.current = blob;
+    (async () => {
+      let finalExpectation = expectation;
+      // Video's expected fps isn't known at click-time without adding a
+      // probe to the critical path — filled in here instead, during the
+      // "verifying" phase that already runs after the result lands, so it
+      // adds no perceived latency to the export itself.
+      if (expectation.kind === "video" && expectation.fps === undefined && file) {
+        const sourceProbe = await probeVideoMeta(file).catch(() => null);
+        if (sourceProbe?.fps) finalExpectation = { ...expectation, fps: sourceProbe.fps };
+      }
+      exportValidation.validate(blob, finalExpectation);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportState.result]);
+
   const resetFileState = () => {
     if (sourceUrl) URL.revokeObjectURL(sourceUrl);
     setFile(null);
@@ -156,17 +211,43 @@ export default function RemoveBackgroundTool() {
   const handleFiles = (files: File[]) => {
     const picked = files[0];
     if (!picked) return;
+    const validation = validateUploadedMediaFile(picked);
+    if (!validation.ok) {
+      setMetadataError(validation.message ?? "That file couldn't be used.");
+      return;
+    }
     resetFileState();
     exportState.reset();
-    const isVideo = picked.type.startsWith("video/");
+    const isVideo = validation.kind === "video";
     setFile(picked);
     setKind(isVideo ? "video" : "image");
     setSourceUrl(URL.createObjectURL(picked));
     // Video defaults to "blur" — "transparent" is still available for video,
-    // but (like cutout.pro's own transparent export) it's a qtrle .mov with
-    // real alpha that most browsers can't preview inline, so it's an opt-in
-    // rather than the default.
+    // but (like cutout.pro's own transparent export) it's a ProRes 4444
+    // .mov with real alpha that most browsers can't preview inline, so it's
+    // an opt-in rather than the default.
     setReplace((r) => ({ ...r, mode: isVideo ? "blur" : "transparent" }));
+    exportValidation.reset();
+  };
+
+  // PRODUCTION READINESS (H5): the background-replace image/video pickers
+  // used to set replace.imageFile/videoFile straight from the raw
+  // FileList, bypassing the same type/size gate the main Dropzone already
+  // enforces — closing that gap here rather than leaving a second,
+  // inconsistent upload entry point in the same tool.
+  const handleBackgroundReplaceFile = (picked: File | undefined, expectedKind: "image" | "video") => {
+    if (!picked) return;
+    const validation = validateUploadedMediaFile(picked);
+    if (!validation.ok) {
+      setMetadataError(validation.message ?? "That file couldn't be used.");
+      return;
+    }
+    if (validation.kind !== expectedKind) {
+      setMetadataError(`That looks like a${validation.kind === "image" ? "n image" : " video"} file — choose a ${expectedKind} instead.`);
+      return;
+    }
+    setMetadataError(null);
+    setReplace((r) => (expectedKind === "image" ? { ...r, imageFile: picked } : { ...r, videoFile: picked }));
   };
 
   const handleImageLoad = () => {
@@ -188,6 +269,16 @@ export default function RemoveBackgroundTool() {
 
   const handleVideoError = () => {
     setMetadataError("Your browser couldn't read this video. Try converting it to MP4 (H.264) first.");
+  };
+
+  // PHASE 16 — ADVERSARIAL MATTE TESTING ("corrupt media", #24). Without
+  // this, a file that fails to decode as an image (wrong bytes, truncated,
+  // a non-image file with an image-like extension) left width/height at 0
+  // forever — canExport correctly stayed false (no fake success), but the
+  // user got zero explanation for why "Remove background" was stuck
+  // disabled. Mirrors handleVideoError's existing pattern for the video path.
+  const handleImageError = () => {
+    setMetadataError("Your browser couldn't read this image. It may be corrupted, or not actually an image file — try a different file.");
   };
 
   const handlePickColor = (fx: number, fy: number) => {
@@ -222,6 +313,7 @@ export default function RemoveBackgroundTool() {
     width > 0 &&
     height > 0 &&
     !exportState.isProcessing &&
+    !aiMatte.isProcessing &&
     (kind === "image" || trimmedDuration > 0) &&
     (mode === "chroma" || kind === "image" || aiVideoReady);
 
@@ -234,16 +326,28 @@ export default function RemoveBackgroundTool() {
   const handleExport = async () => {
     if (!file) return;
     const filenameBase = `no-bg-${stripExtension(file.name)}`;
+    const expectAlpha = replace.mode === "transparent";
 
     if (kind === "image") {
+      if (mode === "ai") {
+        // Generates the matte only — see useAiImageMatte.ts. Once it
+        // succeeds, aiMatte.result becomes truthy and the render below
+        // switches to RefineMattePanel instead of compositing immediately;
+        // handleApplyRefinedMatte does the actual export once the user hits
+        // Apply there.
+        if (imgRef.current) await aiMatte.generate(imgRef.current, width, height);
+        return;
+      }
+      expectationRef.current = { kind: "image", width, height, expectAlpha };
       await exportState.runImage(
         file,
         {
           mode,
-          chroma: mode === "chroma" ? chroma : undefined,
+          chroma: chroma,
           replace: toReplaceSettings(replaceImageEl),
+          format: imageFormat,
         },
-        `${filenameBase}.png`,
+        filenameBase,
       );
       return;
     }
@@ -257,9 +361,12 @@ export default function RemoveBackgroundTool() {
       imageFile: replace.imageFile,
       videoFile: replace.videoFile,
     };
-    // "transparent" video exports real alpha as a qtrle .mov — every other
-    // mode composites onto something opaque and stays mp4.
+    // "transparent" video exports real alpha as a ProRes 4444 .mov — every
+    // other mode composites onto something opaque and stays mp4.
     const videoExt = replace.mode === "transparent" ? "mov" : "mp4";
+    // fps is filled in lazily by the validation effect once the export
+    // lands, probing the source rather than adding latency here.
+    expectationRef.current = { kind: "video", width, height, expectAlpha };
 
     if (mode === "chroma") {
       await exportState.runVideoChroma(
@@ -275,8 +382,52 @@ export default function RemoveBackgroundTool() {
     }
   };
 
+  /**
+   * PHASE 12 — APPLY step. Composites the refined alpha (from
+   * RefineMattePanel — a Phase 6 ManualRefinementEngine edit over the
+   * matte useAiImageMatte.ts already generated) onto whichever background
+   * is selected in "Replace background with", reusing the exact same
+   * compositeTransparentForeground + compositeBgRemoval canvas calls the
+   * ordinary chroma/video export paths use — the model does not run again
+   * here; this is pure compositing over an already-finished alpha.
+   */
+  const handleApplyRefinedMatte = async (finalAlpha: Float32Array, workingRgba: Uint8ClampedArray) => {
+    if (!file || width === 0 || height === 0 || !imgRef.current) return;
+    const foreground = compositeTransparentForeground(workingRgba, finalAlpha, width, height);
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = width;
+    outCanvas.height = height;
+    const ctx = outCanvas.getContext("2d");
+    if (!ctx) return;
+    const stage = { width, height };
+    compositeBgRemoval(ctx, imgRef.current, width, height, foreground, stage, stage, toReplaceSettings(replaceImageEl), blurPxFor(width, height));
+
+    const expectAlpha = replace.mode === "transparent";
+    const requestedFormat: ImageExportFormat = expectAlpha ? imageFormat : "png";
+    const encoded = await encodeCanvasForExport(outCanvas, requestedFormat);
+    const cutoutBlob = await new Promise<Blob | null>((resolve) => foreground.toBlob((b) => resolve(b), "image/png"));
+
+    expectationRef.current = { kind: "image", width, height, expectAlpha };
+    exportState.finishWithBlob(
+      encoded.blob,
+      `no-bg-${stripExtension(file.name)}.${IMAGE_FORMAT_EXTENSIONS[encoded.format]}`,
+      cutoutBlob ?? undefined,
+      {
+        confidence: aiMatte.result?.confidence ?? 0,
+        warnings: aiMatte.result?.warnings ?? [],
+        modelUsed: aiMatte.result?.modelUsed ?? "",
+      },
+      encoded.fellBack,
+    );
+    aiMatte.reset();
+  };
+
   const reset = () => {
     exportState.reset();
+    aiMatte.reset();
+    exportValidation.reset();
+    expectationRef.current = null;
+    lastValidatedResultRef.current = null;
     resetFileState();
   };
 
@@ -293,28 +444,79 @@ export default function RemoveBackgroundTool() {
           hint="Works with green-screen footage, or any clip/photo via AI subject detection"
           onFiles={handleFiles}
         />
+        {metadataError && (
+          <p role="alert" className="mt-3 text-body-sm text-red-600 dark:text-red-400">
+            {metadataError}
+          </p>
+        )}
       </ToolUploadScreen>
     );
   }
 
+  // Rendered as one persistent element (never unmounted while result/refine/
+  // main views swap) — otherwise RefineMattePanel would receive a stale or
+  // not-yet-(re)loaded imgRef.current the moment the AI matte finishes and
+  // this component switches away from the main layout's own preview, which
+  // is where this element used to live.
+  const sourceImgElement = kind === "image" && sourceUrl && (
+    <img ref={imgRef} src={sourceUrl} onLoad={handleImageLoad} onError={handleImageError} alt="" className="hidden" />
+  );
+
   if (exportState.result) {
     return (
-      <ResultPanel
-        url={exportState.result.url}
-        blob={exportState.result.blob}
-        filename={exportState.result.filename}
-        kind={kind}
-        previewNote={
-          kind === "video" && replace.mode === "transparent"
-            ? "This is a .mov with a real alpha channel — most browsers can't preview transparent video inline, so this player won't show it. Open it in Premiere Pro, DaVinci Resolve, Final Cut Pro, or iMovie to see the transparency. Need something that plays everywhere instead? Use a solid color background and key it out in your editor."
-            : undefined
-        }
-        onReset={reset}
-      />
+      <>
+        {sourceImgElement}
+        {exportState.matting && (exportState.matting.warnings.length > 0 || exportState.matting.confidence < 0.5) && (
+          <div className="mb-3 rounded-lg border border-warning-500/40 bg-warning-500/10 px-4 py-3 text-body-sm">
+            <p className="font-medium text-warning-600">
+              AI matte confidence: {(exportState.matting.confidence * 100).toFixed(0)}% (via {exportState.matting.modelUsed})
+            </p>
+            {exportState.matting.warnings.map((w, i) => (
+              <p key={i} className="mt-1 text-caption text-(--color-text-muted)">
+                {w}
+              </p>
+            ))}
+          </div>
+        )}
+        {exportState.formatFellBack && (
+          <div className="mb-3 rounded-lg border border-warning-500/40 bg-warning-500/10 px-4 py-3 text-body-sm text-warning-600">
+            This browser couldn't encode {IMAGE_FORMAT_LABELS[imageFormat]} with transparency, so PNG was used instead.
+          </div>
+        )}
+        <ExportValidationPanel report={exportValidation.report} isValidating={exportValidation.isValidating} />
+        <ResultPanel
+          url={exportState.result.url}
+          blob={exportState.result.blob}
+          filename={exportState.result.filename}
+          kind={kind}
+          previewNote={
+            kind === "video" && replace.mode === "transparent"
+              ? "This is a .mov with a real alpha channel — most browsers can't preview transparent video inline, so this player won't show it. Open it in Premiere Pro, DaVinci Resolve, Final Cut Pro, or iMovie to see the transparency. Need something that plays everywhere instead? Use a solid color background and key it out in your editor."
+              : undefined
+          }
+          onReset={reset}
+        />
+      </>
+    );
+  }
+
+  if (mode === "ai" && kind === "image" && aiMatte.result && imgRef.current) {
+    return (
+      <>
+        {sourceImgElement}
+        <RefineMattePanel
+          sourceImg={imgRef.current}
+          matting={aiMatte.result}
+          onCancel={() => aiMatte.reset()}
+          onApply={handleApplyRefinedMatte}
+        />
+      </>
     );
   }
 
   return (
+    <>
+      {sourceImgElement}
     <ToolSplitLayout
       controls={
         <>
@@ -405,20 +607,31 @@ export default function RemoveBackgroundTool() {
             ) : (
               <div className="mt-4 space-y-3">
                 <p className="text-caption text-(--color-text-muted)">
-                  Runs an on-device AI segmentation model to find the subject — no green screen needed. A one-time ~44MB model
-                  download, cached after first use.
+                  Runs an on-device AI matting pipeline to find the subject — no green screen needed. A one-time model
+                  download (a few MB), cached after first use.
                 </p>
                 {kind === "video" ? (
                   <>
-                    <button
-                      type="button"
-                      disabled={!canDetectSubject || cutout.isGenerating}
-                      onClick={handleDetectSubject}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle) disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Sparkles size={15} />
-                      {cutout.isGenerating ? "Detecting…" : cutout.frames.length > 0 ? "Re-detect subject" : "Detect subject"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!canDetectSubject || cutout.isGenerating}
+                        onClick={handleDetectSubject}
+                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle) disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Sparkles size={15} />
+                        {cutout.isGenerating ? "Detecting…" : cutout.frames.length > 0 ? "Re-detect subject" : "Detect subject"}
+                      </button>
+                      {cutout.isGenerating && (
+                        <button
+                          type="button"
+                          onClick={cutout.cancel}
+                          className="rounded-md border border-(--color-border) px-3 py-2 text-body-sm font-semibold text-(--color-text-muted) transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
                     {cutout.isGenerating && cutout.progress && (
                       <p className="text-caption text-(--color-text-muted)">
                         {cutout.progress.phase === "downloading"
@@ -532,7 +745,7 @@ export default function RemoveBackgroundTool() {
                     type="file"
                     accept="image/*"
                     className="sr-only"
-                    onChange={(e) => setReplace((r) => ({ ...r, imageFile: e.target.files?.[0] ?? null }))}
+                    onChange={(e) => handleBackgroundReplaceFile(e.target.files?.[0], "image")}
                   />
                 </label>
               )}
@@ -543,15 +756,38 @@ export default function RemoveBackgroundTool() {
                     type="file"
                     accept="video/*"
                     className="sr-only"
-                    onChange={(e) => setReplace((r) => ({ ...r, videoFile: e.target.files?.[0] ?? null }))}
+                    onChange={(e) => handleBackgroundReplaceFile(e.target.files?.[0], "video")}
                   />
                 </label>
               )}
-              {replace.mode === "transparent" && (
+              {replace.mode === "transparent" && kind === "image" && (
+                <div className="space-y-2">
+                  <p className="text-caption text-(--color-text-muted)">Exports with real transparency — drop it straight into another design or edit.</p>
+                  <div className="flex items-center gap-1 rounded-md border border-(--color-border) p-1">
+                    {(["png", "webp", "tiff"] as const).map((f) => (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => setImageFormat(f)}
+                        className={`flex-1 rounded px-2 py-1 text-caption font-medium transition-colors ${imageFormat === f ? "bg-primary-500 text-white" : "text-(--color-text-muted) hover:bg-(--color-bg-subtle)"}`}
+                      >
+                        {IMAGE_FORMAT_LABELS[f]}
+                      </button>
+                    ))}
+                  </div>
+                  {imageFormat === "webp" && (
+                    <p className="text-caption text-(--color-text-muted)">
+                      Falls back to PNG automatically if this browser can't encode transparent WebP.
+                    </p>
+                  )}
+                  {imageFormat === "tiff" && (
+                    <p className="text-caption text-(--color-text-muted)">Uncompressed, so files are large — best for print or further editing, not web use.</p>
+                  )}
+                </div>
+              )}
+              {replace.mode === "transparent" && kind === "video" && (
                 <p className="text-caption text-(--color-text-muted)">
-                  {kind === "image"
-                    ? "Exports a PNG with real transparency — drop it straight into another design or edit."
-                    : "Exports a .mov with a real alpha channel — drop it into Premiere Pro, DaVinci Resolve, Final Cut Pro, or iMovie. Most browsers and simpler players can't preview transparent video, so use \"Blur\" or a color/image backdrop if you need something that plays everywhere."}
+                  Exports a .mov with a real alpha channel — drop it into Premiere Pro, DaVinci Resolve, Final Cut Pro, or iMovie. Most browsers and simpler players can't preview transparent video, so use "Blur" or a color/image backdrop if you need something that plays everywhere.
                 </p>
               )}
             </div>
@@ -583,15 +819,39 @@ export default function RemoveBackgroundTool() {
             tip="This runs entirely on your device, so it's fine to switch tabs while it finishes."
           />
 
-          <button
-            type="button"
-            disabled={!canExport}
-            onClick={handleExport}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Layers size={16} />
-            {exportState.isProcessing ? "Removing background…" : "Remove background"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={!canExport}
+              onClick={handleExport}
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-primary-500 px-5 py-2.5 text-body-sm font-semibold text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Layers size={16} />
+              {exportState.isProcessing || aiMatte.isProcessing
+                ? mode === "ai" && kind === "image"
+                  ? aiMatte.progress > 0 && aiMatte.progress < 1
+                    ? `Downloading model… ${Math.round(aiMatte.progress * 100)}%`
+                    : "Analyzing image…"
+                  : "Removing background…"
+                : "Remove background"}
+            </button>
+            {/* PHASE 14 — PERFORMANCE (cancellation). Only the video export
+                path (ffmpeg-backed) has a real cancel mechanism — see
+                useBgRemovalExport.ts's `cancel`. Image export (matting
+                inference) has no cancellable API, so no button is shown for it. */}
+            {kind === "video" && exportState.isProcessing && (
+              <button
+                type="button"
+                onClick={exportState.cancel}
+                className="rounded-md border border-(--color-border) px-4 py-2.5 text-body-sm font-semibold text-(--color-text-muted) transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+          {mode === "ai" && kind === "image" && aiMatte.error && (
+            <p className="text-center text-caption text-danger-600">{aiMatte.error}</p>
+          )}
           {mode === "ai" && kind === "video" && cutout.frames.length === 0 && (
             <p className="text-center text-caption text-(--color-text-muted)">Detect the subject above before exporting.</p>
           )}
@@ -600,7 +860,6 @@ export default function RemoveBackgroundTool() {
       preview={
         kind === "image" ? (
           <div className={`overflow-hidden rounded-lg ${replace.mode === "transparent" ? "bg-checkerboard" : "bg-black"}`}>
-            <img ref={imgRef} src={sourceUrl ?? undefined} onLoad={handleImageLoad} alt="" className="hidden" />
             <div className="relative">
               <canvas ref={imagePreviewCanvasRef} className="max-h-[32rem] w-full object-contain" />
               {picking && (
@@ -632,5 +891,6 @@ export default function RemoveBackgroundTool() {
         )
       }
     />
+    </>
   );
 }

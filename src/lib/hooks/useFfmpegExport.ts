@@ -1,7 +1,7 @@
-import { useState } from "react";
-import { runFfmpeg, FfmpegRunError, type RunOptions } from "../ffmpeg/engine";
+import { useRef, useState } from "react";
+import { runFfmpeg, FfmpegRunError, FfmpegCancelledError, type RunOptions } from "../ffmpeg/engine";
 
-type RunInput = Omit<RunOptions, "onEngineLoad" | "onRunProgress">;
+type RunInput = Omit<RunOptions, "onEngineLoad" | "onRunProgress" | "signal">;
 
 function describeError(err: unknown): string {
   if (err instanceof FfmpegRunError) {
@@ -29,8 +29,14 @@ export function useFfmpegExport() {
   const [result, setResult] = useState<{ url: string; blob: Blob; filename: string } | null>(
     null,
   );
+  // PHASE 14 — PERFORMANCE (cancellation). One AbortController per run() —
+  // see runFfmpeg's own doc comment on `signal` for what this actually
+  // cancels (the wait, not necessarily ffmpeg.wasm's in-flight work).
+  const abortRef = useRef<AbortController | null>(null);
 
   const run = async (opts: RunInput, filename: string) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsProcessing(true);
     setError(null);
     setEnginePhase("engine");
@@ -39,6 +45,7 @@ export function useFfmpegExport() {
     try {
       const { url, blob } = await runFfmpeg({
         ...opts,
+        signal: controller.signal,
         onEngineLoad: (f) => {
           setEngineFraction(f);
           if (f >= 1) setEnginePhase("run");
@@ -50,13 +57,18 @@ export function useFfmpegExport() {
       });
       setResult({ url, blob, filename });
     } catch (err) {
-      console.error(err);
-      setError(describeError(err));
+      if (!(err instanceof FfmpegCancelledError)) {
+        console.error(err);
+        setError(describeError(err));
+      }
     } finally {
       setIsProcessing(false);
       setEnginePhase(null);
+      abortRef.current = null;
     }
   };
+
+  const cancel = () => abortRef.current?.abort();
 
   const reset = () => {
     if (result) URL.revokeObjectURL(result.url);
@@ -72,6 +84,7 @@ export function useFfmpegExport() {
     error,
     result,
     run,
+    cancel,
     reset,
   };
 }

@@ -2,6 +2,7 @@ import type { FractionRect } from "../../components/tool/video/RectOverlay";
 import type { OverlayLayer } from "./overlay-layer";
 import type { Anchor } from "./overlay-position";
 import type { ImageEntranceAnimation } from "./media-animation";
+import type { LogoRemovalMode } from "./logo-removal";
 import { getSocialPreset } from "../social-presets";
 
 export type TextAnimation =
@@ -14,7 +15,7 @@ export type TextAnimation =
   | "pop"
   | "bounce";
 export type TextPosition = "top" | "center" | "bottom";
-export type ChromaReplace = "color" | "image" | "video";
+export type ChromaReplace = "color" | "image" | "video" | "transparent";
 export type ExtraClipPosition = "before" | "after";
 
 export interface EditorTextState {
@@ -61,6 +62,9 @@ export interface EditorLogoRegion {
 export interface EditorLogoState {
   enabled: boolean;
   regions: EditorLogoRegion[];
+  /** "reconstruct" clones/blends in surrounding texture; "blur" just heavily
+   * blurs each box in place — cheaper and more honest on busy backgrounds. */
+  mode: LogoRemovalMode;
 }
 
 let logoRegionCounter = 0;

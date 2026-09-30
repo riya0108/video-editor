@@ -1,0 +1,27 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import MatteQualityBenchmarkPanel from "../../../components/tool/video/MatteQualityBenchmarkPanel.tsx";
+---
+
+<Layout
+  title="Matte Quality Benchmark — Clipbench"
+  description="Scores the Remove Background tool's matting pipeline against a permanent synthetic benchmark dataset (SAD, MSE, MAD, gradient error, connectivity, temporal consistency) plus human visual evaluation, to track quality changes between versions."
+>
+  <div class="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:px-8">
+    <nav class="mb-4 flex items-center gap-1.5 text-caption text-(--color-text-muted)" aria-label="Breadcrumb">
+      <a href="/" class="hover:text-(--color-text)">Home</a>
+      <span aria-hidden="true">/</span>
+      <a href="/tools/video/remove-background" class="hover:text-(--color-text)">Remove Background</a>
+      <span aria-hidden="true">/</span>
+      <span class="text-(--color-text)">Matte Quality Benchmark</span>
+    </nav>
+    <h1 class="mb-1 text-heading-2 font-semibold">Matte Quality Benchmark</h1>
+    <p class="mb-6 text-body-sm text-(--color-text-muted)">
+      An internal diagnostic tool, not listed in the main tools directory. Runs the same on-device AI
+      background-removal pipeline the Remove Background tool uses against a permanent synthetic dataset with exact
+      ground truth, so quality changes can be tracked between versions of this app — not compared against any other
+      product. See <a href="/tools/video/remove-background-benchmark" class="underline hover:text-(--color-text)">the performance benchmark</a> for speed/memory instead of accuracy.
+    </p>
+    <MatteQualityBenchmarkPanel client:load />
+  </div>
+</Layout>

@@ -25,11 +25,27 @@ for (const file of ["ffmpeg-core.js", "ffmpeg-core.wasm", "ffmpeg-core.worker.js
 // 32 concurrent same-blob-URL fetches can stall forever, hanging the whole
 // engine load with no error — not just wasteful, but a real reliability bug.
 // Patch the pool down to a small, still-genuinely-parallel size.
+//
+// That smaller pool (hardwareConcurrency+4, e.g. 12 on an 8-core machine)
+// later turned out to be too small for its own reason: every `-i` input,
+// `-f lavfi` source, and looped image ffmpeg opens claims its own pthread
+// regardless of `-threads 1` pinning that input's *codec* parallelism, and
+// once total simultaneous inputs/filters exceeds the pool, the on-demand
+// pthread request just hangs forever with no error (same failure family as
+// the decoder-thread hangs fixed elsewhere in build-editor-command.ts and
+// VideoSpeedTool.tsx). Reproduced concretely: the Remove Background tool's
+// AI video mode with a "color" replacement background (main video + 1 lavfi
+// color source + N per-frame cutout PNGs = 8+ simultaneous inputs) hung
+// indefinitely at hardwareConcurrency+4, and completed in ~3s once the pool
+// was raised — confirmed empirically before landing this constant, not
+// guessed. +16 keeps real parallelism scaling with the machine while giving
+// multi-input filter graphs enough headroom; it's well under the 32 that
+// caused the original load-time stall.
 const corePath = join(dest, "ffmpeg-core.js");
 const original = readFileSync(corePath, "utf8");
 const patched = original.replace(
   "var pthreadPoolSize=32;",
-  "var pthreadPoolSize=Math.max(navigator.hardwareConcurrency||4,4)+4;",
+  "var pthreadPoolSize=Math.max(navigator.hardwareConcurrency||4,4)+16;",
 );
 if (patched === original) {
   console.warn("[copy-ffmpeg-core] pthreadPoolSize patch target not found — core-mt build may have changed, check manually.");

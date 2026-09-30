@@ -65,6 +65,9 @@ export function useChromaBgPreview({
 
   const canvasMode = chromaKey.enabled || background.enabled;
   const effectiveAspect = background.enabled ? resolveBackgroundSize(background) : null;
+  // Real transparency preview only makes sense standing alone — same rule
+  // build-editor-command.ts uses for whether the export actually carries alpha.
+  const checkerboard = chromaKey.enabled && chromaKey.replace === "transparent" && !background.enabled;
 
   const onDrawFrame = useMemo(() => {
     if (!canvasMode) return undefined;
@@ -111,5 +114,5 @@ export function useChromaBgPreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasMode, chromaKey, background]);
 
-  return { canvasMode, effectiveAspect, onDrawFrame };
+  return { canvasMode, effectiveAspect, checkerboard, onDrawFrame };
 }

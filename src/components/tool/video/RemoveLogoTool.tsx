@@ -3,6 +3,7 @@ import {
   Brush,
   CircleCheck,
   CircleX,
+  Droplets,
   Eraser,
   Hand,
   Layers,
@@ -18,6 +19,7 @@ import {
   Subtitles,
   Trash2,
   Undo2,
+  Wand2,
   X,
   ZoomIn,
   ZoomOut,
@@ -44,6 +46,7 @@ import {
   buildLogoRemovalFilter,
   type LogoRegion,
   type LogoKeyframe,
+  type LogoRemovalMode,
   type FractionPoint,
 } from "../../../lib/ffmpeg/logo-removal";
 import { formatTime } from "../../../lib/time";
@@ -60,6 +63,10 @@ interface Region {
   brushRadius: number;
   /** rect-only. 2+ entries make the box follow a moving watermark. */
   keyframes: LogoKeyframe[];
+  /** "reconstruct" clones/blends in surrounding texture; "blur" just heavily
+   * blurs the box in place — cheaper and more honest on busy backgrounds
+   * where a clean reconstruction isn't possible. */
+  mode: LogoRemovalMode;
   /** 0-100 */
   strength: number;
   timeRangeEnabled: boolean;
@@ -106,6 +113,7 @@ function makeRegion(rect: FractionRect, duration: number): Region {
     points: [],
     brushRadius: DEFAULT_BRUSH_RADIUS,
     keyframes: [],
+    mode: "reconstruct",
     strength: 60,
     timeRangeEnabled: false,
     start: 0,
@@ -136,6 +144,7 @@ function tileRegion(
       const cy = (r + 0.5) / rows;
       const shared = {
         id: `region-${nextRegionId++}`,
+        mode: base.mode,
         strength: base.strength,
         brushRadius: base.brushRadius,
         timeRangeEnabled: base.timeRangeEnabled,
@@ -474,6 +483,7 @@ export default function RemoveLogoTool() {
       points: r.points,
       brushRadius: r.brushRadius,
       keyframes: r.keyframes,
+      mode: r.mode,
       strength: r.strength,
       timeRange: r.timeRangeEnabled ? { start: r.start, end: r.end } : null,
     }));
@@ -891,6 +901,43 @@ export default function RemoveLogoTool() {
                 </>
               )}
 
+              <div className="mt-4 flex items-center gap-2">
+                <span className="text-caption text-(--color-text-muted)">
+                  Removal mode
+                </span>
+                <div className="inline-flex overflow-hidden rounded-md border border-(--color-border)">
+                  <button
+                    type="button"
+                    onClick={() => updateRegion(selected.id, { mode: "reconstruct" })}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-caption font-medium transition-colors ${
+                      selected.mode === "reconstruct"
+                        ? "bg-danger-500/10 text-danger-600"
+                        : "text-(--color-text-muted) hover:text-(--color-text)"
+                    }`}
+                  >
+                    <Wand2 size={12} />
+                    Reconstruct
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateRegion(selected.id, { mode: "blur" })}
+                    className={`inline-flex items-center gap-1.5 border-l border-(--color-border) px-2.5 py-1 text-caption font-medium transition-colors ${
+                      selected.mode === "blur"
+                        ? "bg-danger-500/10 text-danger-600"
+                        : "text-(--color-text-muted) hover:text-(--color-text)"
+                    }`}
+                  >
+                    <Droplets size={12} />
+                    Blur
+                  </button>
+                </div>
+              </div>
+              <p className="mt-1 text-caption text-(--color-text-muted)">
+                {selected.mode === "reconstruct"
+                  ? "Rebuilds the box from its edges plus real texture cloned from the surrounding video — looks best when there's clean, fairly uniform background nearby."
+                  : "Heavily blurs the box in place instead of reconstructing it — clearly hides the logo, works on any background, and is the more honest choice when there isn't enough clean surrounding texture to reconstruct from."}
+              </p>
+
               <label className="mt-4 flex items-center gap-3 text-caption text-(--color-text-muted)">
                 Removal strength
                 <input
@@ -908,9 +955,9 @@ export default function RemoveLogoTool() {
                 <span className="w-10 tabular-nums">{selected.strength}%</span>
               </label>
               <p className="mt-1 text-caption text-(--color-text-muted)">
-                Higher grows the erased area outward, giving the reconstruction
-                more surrounding pixels to blend from — better on busy
-                backgrounds, at the cost of erasing a larger area.
+                {selected.mode === "reconstruct"
+                  ? "Higher grows the erased area outward, giving the reconstruction more surrounding pixels to blend from — better on busy backgrounds, at the cost of erasing a larger area."
+                  : "Higher makes the blur stronger, so higher-resolution or high-contrast logos stay fully unreadable."}
               </p>
 
               {selected.shape === "rect" && (
@@ -1283,6 +1330,7 @@ export default function RemoveLogoTool() {
                           rect={r.rect}
                           onChange={(rect) => updateRegion(r.id, { rect })}
                           color="danger"
+                          dim={false}
                           minFraction={0.03}
                         />
                       ) : (
@@ -1354,6 +1402,7 @@ export default function RemoveLogoTool() {
                         rect={z.rect}
                         onChange={(rect) => updateProtectZone(z.id, rect)}
                         color="primary"
+                        dim={false}
                         minFraction={0.03}
                       />
                     ) : (

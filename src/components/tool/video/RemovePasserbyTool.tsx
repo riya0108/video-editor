@@ -261,6 +261,7 @@ export default function RemovePasserbyTool() {
       points: [],
       brushRadius: 0,
       keyframes: r.keyframes,
+      mode: "reconstruct",
       strength: r.strength,
       timeRange: r.timeRangeEnabled ? { start: r.start, end: r.end } : null,
     }));
@@ -658,6 +659,7 @@ export default function RemovePasserbyTool() {
                         onChange={(rect) => updateRegion(r.id, { rect })}
                         color="danger"
                         minFraction={0.03}
+                        dim={false}
                       />
                     ) : (
                       <button

@@ -17,6 +17,8 @@ import {
   Upload,
   Wrench,
   Wand2,
+  Droplets,
+  Scissors,
   Volume2,
   GripHorizontal,
   Maximize,
@@ -84,6 +86,7 @@ import {
   type TextPositionPreset,
 } from "../../../lib/ffmpeg/text-position-presets";
 import { resolveBackgroundSize, nextLogoRegionId } from "../../../lib/ffmpeg/editor-state";
+import { effectiveSegments, nextCutSegmentId, type CutSegment } from "../../../lib/ffmpeg/cuts";
 import { SOCIAL_PRESET_GROUPS } from "../../../lib/social-presets";
 import {
   IMAGE_ENTRANCE_ANIMATIONS,
@@ -156,6 +159,7 @@ const FILL_MODES: { id: BgFillMode; label: string }[] = [
 type RailId =
   | "media"
   | "crop"
+  | "cuts"
   | "speed"
   | "color"
   | "logo"
@@ -177,6 +181,9 @@ type RailId =
  * else the rail panels expose lives here. */
 interface EditorDocument {
   crop: EditorCropState;
+  /** Kept segments within the trim range — see cuts.ts. Empty means "no cuts,
+   * keep the whole trim range." */
+  cuts: CutSegment[];
   speedFadeOpen: boolean;
   speed: number;
   fade: EditorFadeState;
@@ -198,6 +205,7 @@ interface EditorDocument {
 function makeInitialDocument(): EditorDocument {
   return {
     crop: { enabled: false, rect: DEFAULT_CROP_RECT },
+    cuts: [],
     speedFadeOpen: false,
     speed: 1,
     fade: { in: 0, out: 0 },
@@ -213,7 +221,7 @@ function makeInitialDocument(): EditorDocument {
     },
     voiceRemover: false,
     noise: { enabled: false, strength: 12 },
-    logo: { enabled: false, regions: [{ id: nextLogoRegionId(), rect: DEFAULT_LOGO_RECT }] },
+    logo: { enabled: false, mode: "reconstruct", regions: [{ id: nextLogoRegionId(), rect: DEFAULT_LOGO_RECT }] },
     background: {
       enabled: false,
       presetId: "instagram-reel",
@@ -516,6 +524,36 @@ export default function VideoEditorTool() {
 
   const trimmedDuration = Math.max(0, end - start);
 
+  // Kept segments within [start,end] — see cuts.ts. Recomputed from doc.cuts
+  // on every render (cheap) rather than kept in sync via an effect, so moving
+  // the trim handles after making a cut can never leave a stale segment
+  // hanging outside the new range.
+  const cutSegments = effectiveSegments(doc.cuts, start, end);
+
+  const splitAtPlayhead = () => {
+    const p = currentTime;
+    const MIN_PIECE = 0.15;
+    const idx = cutSegments.findIndex((s) => p > s.start + MIN_PIECE && p < s.end - MIN_PIECE);
+    if (idx === -1) return;
+    const seg = cutSegments[idx];
+    const next = [
+      ...cutSegments.slice(0, idx),
+      { id: nextCutSegmentId(), start: seg.start, end: p },
+      { id: nextCutSegmentId(), start: p, end: seg.end },
+      ...cutSegments.slice(idx + 1),
+    ];
+    patch("cuts", next, "Split");
+  };
+
+  const deleteCutSegment = (id: string) => {
+    if (cutSegments.length <= 1) return;
+    patch(
+      "cuts",
+      cutSegments.filter((s) => s.id !== id),
+      "Cut",
+    );
+  };
+
   // Live preview: mirrors ffmpeg's setpts/atempo speed change directly via
   // the native playback rate (both are pitch-preserving by default).
   useEffect(() => {
@@ -560,12 +598,13 @@ export default function VideoEditorTool() {
   const handleExport = async () => {
     if (!video.file || trimmedDuration <= 0) return;
 
-    const { inputs, args, outputName } = await buildEditorCommand({
+    const { inputs, args, outputName, outputMimeType } = await buildEditorCommand({
       videoFile: video.file,
       videoWidth: video.videoWidth,
       videoHeight: video.videoHeight,
       trimStart: start,
       trimEnd: end,
+      cuts: cutSegments.map((s) => ({ start: s.start, end: s.end })),
       crop: doc.crop,
       logo: doc.logo,
       chromaKey: doc.chromaKey,
@@ -588,9 +627,10 @@ export default function VideoEditorTool() {
       quality: doc.quality,
     });
 
+    const outExt = outputName.endsWith(".mov") ? "mov" : "mp4";
     await exportState.run(
-      { inputs, args, outputName, outputMimeType: "video/mp4" },
-      `edited-${stripExtension(video.file.name)}.mp4`,
+      { inputs, args, outputName, outputMimeType },
+      `edited-${stripExtension(video.file.name)}.${outExt}`,
     );
   };
 
@@ -757,6 +797,20 @@ export default function VideoEditorTool() {
         patch("dub", (s) => ({ ...s, enabled: false }), "Dub"),
     });
   }
+  if (cutSegments.length > 1) {
+    lanes.push({
+      id: "cuts",
+      label: "Cuts",
+      colorClass: "bg-orange-500",
+      segments: cutSegments.map((s, i) => ({
+        id: s.id,
+        start: s.start + laneOffset,
+        end: s.end + laneOffset,
+        label: `${i + 1}`,
+      })),
+      onSegmentDelete: (id) => deleteCutSegment(id),
+    });
+  }
 
   type RailItem = {
     id: RailId;
@@ -793,6 +847,12 @@ export default function VideoEditorTool() {
           icon: CropIcon,
           label: "Crop",
           enabled: doc.crop.enabled,
+        },
+        {
+          id: "cuts",
+          icon: Scissors,
+          label: "Cut",
+          enabled: cutSegments.length > 1,
         },
         {
           id: "speed",
@@ -1084,6 +1144,51 @@ export default function VideoEditorTool() {
               </>
             )}
 
+            {activePanel === "cuts" && (
+              <>
+                <PanelHeader
+                  label="Cut"
+                  description="Remove a middle section — the rest splices back together with no gap."
+                />
+                <button
+                  type="button"
+                  onClick={splitAtPlayhead}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-(--color-border) px-4 py-2 text-body-sm font-semibold transition-colors hover:border-(--color-border-strong) hover:bg-(--color-bg-subtle)"
+                >
+                  <Scissors size={15} />
+                  Split at playhead ({formatTime(currentTime, true)})
+                </button>
+                <p className="mt-2 text-caption text-(--color-text-muted)">
+                  Move the playhead to where you want to cut (click the timeline, or
+                  play/scrub to it), then split. Splitting divides the clip into
+                  pieces at that point — select a piece below or in the Cuts row of
+                  the timeline and delete it to actually remove that section.
+                </p>
+                {cutSegments.length > 1 && (
+                  <div className="mt-3 space-y-1.5">
+                    {cutSegments.map((seg, i) => (
+                      <div
+                        key={seg.id}
+                        className="flex items-center gap-2 rounded-md border border-(--color-border) px-2.5 py-1.5 text-caption"
+                      >
+                        <span className="min-w-0 flex-1 truncate">
+                          Piece {i + 1}: {formatTime(seg.start, true)} – {formatTime(seg.end, true)}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Remove piece ${i + 1}`}
+                          onClick={() => deleteCutSegment(seg.id)}
+                          className="shrink-0 text-(--color-text-muted) hover:text-danger-600"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
             {activePanel === "speed" && (
               <>
                 <PanelHeader
@@ -1245,6 +1350,46 @@ export default function VideoEditorTool() {
                     Add box
                   </button>
                 </div>
+                <div className="mt-4 flex items-center gap-2">
+                  <span className="text-caption text-(--color-text-muted)">
+                    Removal mode
+                  </span>
+                  <div className="inline-flex overflow-hidden rounded-md border border-(--color-border)">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patch("logo", (s) => ({ ...s, mode: "reconstruct" }), "Logo")
+                      }
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-caption font-medium transition-colors ${
+                        doc.logo.mode === "reconstruct"
+                          ? "bg-danger-500/10 text-danger-600"
+                          : "text-(--color-text-muted) hover:text-(--color-text)"
+                      }`}
+                    >
+                      <Wand2 size={12} />
+                      Reconstruct
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patch("logo", (s) => ({ ...s, mode: "blur" }), "Logo")
+                      }
+                      className={`inline-flex items-center gap-1.5 border-l border-(--color-border) px-2.5 py-1 text-caption font-medium transition-colors ${
+                        doc.logo.mode === "blur"
+                          ? "bg-danger-500/10 text-danger-600"
+                          : "text-(--color-text-muted) hover:text-(--color-text)"
+                      }`}
+                    >
+                      <Droplets size={12} />
+                      Blur
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-1 text-caption text-(--color-text-muted)">
+                  {doc.logo.mode === "reconstruct"
+                    ? "Rebuilds each box from its edges plus real texture cloned from the surrounding video — best on clean, fairly uniform backgrounds."
+                    : "Heavily blurs each box in place — clearly hides the logo on any background, and is the more honest choice when there isn't clean surrounding texture to reconstruct from."}
+                </p>
               </>
             )}
 
@@ -2230,6 +2375,7 @@ export default function VideoEditorTool() {
                     clipTimeline.activeSegmentKind === "main")
                 }
                 onDrawFrame={chromaBg.onDrawFrame}
+                checkerboard={chromaBg.checkerboard}
                 onLoadedMetadata={handleLoadedMetadata}
                 onError={video.onError}
                 onTimeUpdate={handleTimeUpdate}
@@ -2573,6 +2719,11 @@ export default function VideoEditorTool() {
               else togglePlay();
             }}
             lanes={lanes}
+            onSplit={
+              !clipTimeline.active || clipTimeline.activeSegmentKind === "main"
+                ? splitAtPlayhead
+                : undefined
+            }
           />
 
           <ExportStatus

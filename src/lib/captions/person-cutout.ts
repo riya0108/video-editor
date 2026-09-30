@@ -137,24 +137,43 @@ export function waitForSeek(video: HTMLVideoElement): Promise<void> {
 /**
  * Shared scaffolding for both cutout strategies below: works out a safe,
  * capped set of sample times, seeks `video` to each one, draws it into a
- * shared canvas at the (possibly downscaled) working resolution, and hands
- * that canvas to `produceBlob` to actually run the segmentation model and
- * return the cut-out PNG. Keeping this here means the sampling/seeking/
- * cap/progress logic — and its safety margin against ffmpeg's pthread pool
- * (see `maxSafeCutoutInputs`) — only has to be right in one place.
+ * fresh per-frame canvas at the (possibly downscaled) working resolution,
+ * and hands that canvas to `produceBlob` to actually run the segmentation
+ * model and return the cut-out PNG. Keeping this here means the sampling/
+ * seeking/cap/progress logic — and its safety margin against ffmpeg's
+ * pthread pool (see `maxSafeCutoutInputs`) — only has to be right in one
+ * place. Exported so src/lib/matting/pipeline/video-cutout.ts can reuse the
+ * exact same sampling behavior for its router-driven alternative to
+ * generateSubjectCutouts below.
+ *
+ * PHASE 14 — PERFORMANCE (frame pipelining / CPU-GPU overlap). Frame i+1's
+ * seek+draw (native, hardware-accelerated video decode) starts as soon as
+ * frame i's canvas snapshot is taken, running concurrently with frame i's
+ * `produceBlob` inference (CPU/GPU compute) instead of waiting for it —
+ * decode and inference use different hardware resources, so this overlap
+ * is close to free. Deliberately capped at one in-flight `produceBlob` call
+ * at a time rather than true unbounded concurrency: most onnxruntime-web
+ * sessions aren't documented as safe for concurrent `.run()` calls on the
+ * same session, and each frame already gets its OWN freshly-allocated
+ * canvas specifically so the overlapping seek/draw for the next frame can
+ * never race with (or corrupt) the still-in-flight inference reading the
+ * previous frame's canvas.
  */
-async function sampleTrimmedFrames(
+export async function sampleTrimmedFrames(
   video: HTMLVideoElement,
   {
     start,
     end,
     onProgress,
     produceBlob,
+    signal,
   }: {
     start: number;
     end: number;
     onProgress?: (p: CutoutProgress) => void;
     produceBlob: (canvas: HTMLCanvasElement, index: number) => Promise<Blob | null>;
+    /** PHASE 14 — checked between frames; stops scheduling new work but lets any already-in-flight `produceBlob` call finish (there's no way to interrupt an in-progress model inference). */
+    signal?: AbortSignal;
   },
 ): Promise<CutoutFrame[]> {
   const duration = Math.max(0, end - start);
@@ -173,29 +192,56 @@ async function sampleTrimmedFrames(
   if (times.length === 0) times.push(start);
   times = capSampleTimes(times, maxSafeCutoutInputs());
 
-  const canvas = document.createElement("canvas");
-  canvas.width = outW;
-  canvas.height = outH;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return [];
+  const drawFrame = (): HTMLCanvasElement | null => {
+    const frameCanvas = document.createElement("canvas");
+    frameCanvas.width = outW;
+    frameCanvas.height = outH;
+    const frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
+    if (!frameCtx) return null;
+    frameCtx.drawImage(video, 0, 0, outW, outH);
+    return frameCanvas;
+  };
 
   const originalTime = video.currentTime;
   const wasPaused = video.paused;
   video.pause();
 
   const frames: CutoutFrame[] = [];
+  // The one in-flight produceBlob() call, paired with the timestamp it's
+  // for — awaited right before the NEXT frame would otherwise start a
+  // second one, so the seek/draw for frame i+1 always overlaps frame i's
+  // inference instead of running after it.
+  let pending: { t: number; work: Promise<Blob | null> } | null = null;
+
+  const settlePending = async () => {
+    if (!pending) return;
+    const { t, work } = pending;
+    pending = null;
+    const blob = await work;
+    if (blob) frames.push({ time: t, blob, url: URL.createObjectURL(blob) });
+  };
+
   try {
     for (let i = 0; i < times.length; i++) {
+      if (signal?.aborted) break;
       const t = times[i];
       video.currentTime = t;
       await waitForSeek(video);
-      ctx.drawImage(video, 0, 0, outW, outH);
+      const frameCanvas = drawFrame();
 
-      const blob = await produceBlob(canvas, i);
-      if (blob) frames.push({ time: t, blob, url: URL.createObjectURL(blob) });
+      await settlePending();
+      onProgress?.({ phase: "processing", fraction: i / times.length });
 
-      onProgress?.({ phase: "processing", fraction: (i + 1) / times.length });
+      // Re-checked here, not just at the top of the loop: settlePending()
+      // above just awaited a real, potentially slow model inference, which
+      // is plenty of time for a cancel click to land — scheduling one more
+      // frame's worth of work anyway (only to discard it) would make
+      // cancellation lag by up to two full frames instead of stopping as
+      // soon as the current one finishes.
+      if (frameCanvas && !signal?.aborted) pending = { t, work: produceBlob(frameCanvas, i) };
     }
+    await settlePending();
+    if (!signal?.aborted) onProgress?.({ phase: "processing", fraction: 1 });
   } finally {
     video.currentTime = originalTime;
     if (!wasPaused) video.play().catch(() => {});
@@ -217,7 +263,7 @@ async function sampleTrimmedFrames(
  */
 export async function generatePersonCutouts(
   video: HTMLVideoElement,
-  { start, end, onProgress }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void },
+  { start, end, onProgress, signal }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void; signal?: AbortSignal },
 ): Promise<CutoutFrame[]> {
   onProgress?.({ phase: "downloading", fraction: 0 });
   const segmenter = await loadSelfieSegmenter();
@@ -228,6 +274,7 @@ export async function generatePersonCutouts(
     start,
     end,
     onProgress,
+    signal,
     produceBlob: async (canvas, i) => {
       const mask = segmentPersonMask(segmenter, canvas, i);
       if (!mask) return null;
@@ -247,7 +294,7 @@ export async function generatePersonCutouts(
  */
 export async function generateSubjectCutouts(
   video: HTMLVideoElement,
-  { start, end, onProgress }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void },
+  { start, end, onProgress, signal }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void; signal?: AbortSignal },
 ): Promise<CutoutFrame[]> {
   const [segmenter, { RawImage }] = await Promise.all([loadSegmenter(onProgress), import("@huggingface/transformers")]);
 
@@ -255,6 +302,7 @@ export async function generateSubjectCutouts(
     start,
     end,
     onProgress,
+    signal,
     produceBlob: async (canvas) => {
       const output = await segmenter(canvas);
       let mask = output[0]?.mask;

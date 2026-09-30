@@ -1,20 +1,22 @@
 import { useCallback, useRef, useState } from "react";
 import {
   generatePersonCutouts,
-  generateSubjectCutouts,
   revokeCutoutFrames,
   type CutoutFrame,
   type CutoutProgress,
 } from "../captions/person-cutout";
+import { generateSubjectCutoutsViaMatting } from "../matting/pipeline/video-cutout";
 
 /**
  * Manages sampled cutout frames, generated on demand (a real, potentially
  * slow, in-browser ML pass) — shared by two different callers:
  * - "person" (default): the "Behind a person" caption style, backed by the
  *   small/fast person-only selfie model.
- * - "subject": the Remove Background tool's video AI mode, backed by
- *   RMBG-1.4 so it can find any subject (hand, product, gadget, person),
- *   not just people.
+ * - "subject": the Remove Background tool's video AI mode, backed by the
+ *   router-driven matting pipeline (src/lib/matting/pipeline) so it can find
+ *   any subject (hand, product, gadget, person), not just people — and,
+ *   like the image path, prefers U²-Net/MODNet/selfie-segmenter over
+ *   RMBG-1.4 by default (see MODEL_LICENSES.md).
  */
 export function usePersonCutout(kind: "person" | "subject" = "person") {
   const [frames, setFrames] = useState<CutoutFrame[]>([]);
@@ -22,14 +24,31 @@ export function usePersonCutout(kind: "person" | "subject" = "person") {
   const [progress, setProgress] = useState<CutoutProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const framesRef = useRef<CutoutFrame[]>([]);
+  // PHASE 14 — PERFORMANCE (cancellation). sampleTrimmedFrames checks this
+  // between frames — genuinely effective (unlike ffmpeg's), since this is
+  // this app's own JS loop, not a single opaque native call.
+  const abortRef = useRef<AbortController | null>(null);
 
   const generate = useCallback(async (video: HTMLVideoElement, start: number, end: number) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsGenerating(true);
     setError(null);
     setProgress({ phase: "downloading", fraction: 0 });
     try {
-      const generator = kind === "subject" ? generateSubjectCutouts : generatePersonCutouts;
-      const next = await generator(video, { start, end, onProgress: setProgress });
+      const generator = kind === "subject" ? generateSubjectCutoutsViaMatting : generatePersonCutouts;
+      const next = await generator(video, { start, end, onProgress: setProgress, signal: controller.signal });
+      // PHASE — PRODUCTION READINESS (C1). A cancelled run can still have
+      // produced some frames (sampling checks the signal between frames, not
+      // mid-frame) — adopting `next` here regardless of `aborted` would let
+      // export proceed as if the cutout covered the whole trimmed range, when
+      // it silently only covers the fraction completed before Cancel was
+      // pressed. Discard the partial result instead of shipping it as if it
+      // were a real, complete success.
+      if (controller.signal.aborted) {
+        revokeCutoutFrames(next);
+        return;
+      }
       revokeCutoutFrames(framesRef.current);
       framesRef.current = next;
       setFrames(next);
@@ -50,8 +69,11 @@ export function usePersonCutout(kind: "person" | "subject" = "person") {
     } finally {
       setIsGenerating(false);
       setProgress(null);
+      abortRef.current = null;
     }
   }, [kind]);
+
+  const cancel = useCallback(() => abortRef.current?.abort(), []);
 
   const clear = useCallback(() => {
     revokeCutoutFrames(framesRef.current);
@@ -60,5 +82,5 @@ export function usePersonCutout(kind: "person" | "subject" = "person") {
     setError(null);
   }, []);
 
-  return { frames, isGenerating, progress, error, generate, clear };
+  return { frames, isGenerating, progress, error, generate, cancel, clear };
 }

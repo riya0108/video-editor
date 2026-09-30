@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { runFfmpeg } from "../ffmpeg/engine";
-import { removeBackgroundFromImage, type ImageBgRemovalResult } from "../media/bg-removal-image";
+import { useRef, useState } from "react";
+import { runFfmpeg, FfmpegCancelledError } from "../ffmpeg/engine";
+import { removeBackgroundFromImage, type ImageBgRemovalResult, type ImageBgRemovalMattingInfo } from "../media/bg-removal-image";
+import { IMAGE_FORMAT_EXTENSIONS, type ImageExportFormat } from "../media/image-export";
 import type { ChromaSettings, BgReplaceSettings } from "../media/bg-removal-canvas";
 import {
   buildChromaRemovalCommand,
@@ -8,8 +9,15 @@ import {
   type BgReplaceExportSettings,
 } from "../ffmpeg/bg-removal-command";
 import type { CutoutFrame, CutoutProgress } from "../captions/person-cutout";
+import { MattingError } from "../matting/pipeline";
 
 function describeError(err: unknown): string {
+  if (err instanceof MattingError) {
+    if (err.code === "NO_ELIGIBLE_MODEL") {
+      return "No AI matting model is available for this request right now.";
+    }
+    return "Couldn't find a clear subject to cut out of this image — try green-screen mode instead, or a photo with a clearer subject.";
+  }
   if (err instanceof Error && err.message === "NO_SUBJECT") {
     return "Couldn't find a subject to cut out of this clip — try green-screen mode instead, or a clip with a clearer person/object in frame.";
   }
@@ -31,6 +39,15 @@ export function useBgRemovalExport() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ url: string; blob: Blob; filename: string } | null>(null);
   const [cutoutUrl, setCutoutUrl] = useState<string | null>(null);
+  /** Only set for the image AI path — see src/lib/matting/pipeline. Video AI mode runs the same router-driven pipeline per sampled frame (see video-cutout.ts) but doesn't surface per-export matting info here; chroma mode never does. */
+  const [matting, setMatting] = useState<ImageBgRemovalMattingInfo | null>(null);
+  /** True when the user picked WebP/TIFF but this browser couldn't actually honor it and the export silently used PNG instead — see encodeCanvasForExport. */
+  const [formatFellBack, setFormatFellBack] = useState(false);
+  // PHASE 14 — PERFORMANCE (cancellation). Only the two ffmpeg-backed video
+  // paths use this — runImage's matting inference has no cancellable API
+  // (onnxruntime-web's session.run() takes no AbortSignal), and is a single
+  // fast-enough call rather than a long loop, unlike video export.
+  const abortRef = useRef<AbortController | null>(null);
 
   const start = (label: string) => {
     setIsProcessing(true);
@@ -39,11 +56,14 @@ export function useBgRemovalExport() {
     setEngineFraction(0);
     setRunFraction(0);
     setRunLabel(label);
+    setMatting(null);
+    setFormatFellBack(false);
   };
 
-  const finish = (blob: Blob, filename: string, cutoutBlob?: Blob) => {
+  const finish = (blob: Blob, filename: string, cutoutBlob?: Blob, mattingInfo?: ImageBgRemovalMattingInfo) => {
     setResult({ url: URL.createObjectURL(blob), blob, filename });
     if (cutoutBlob) setCutoutUrl(URL.createObjectURL(cutoutBlob));
+    if (mattingInfo) setMatting(mattingInfo);
   };
 
   const fail = (err: unknown) => {
@@ -53,8 +73,8 @@ export function useBgRemovalExport() {
 
   const runImage = async (
     file: File,
-    opts: { mode: "chroma" | "ai"; chroma?: ChromaSettings; replace: BgReplaceSettings },
-    filename: string,
+    opts: { mode: "chroma" | "ai"; chroma?: ChromaSettings; replace: BgReplaceSettings; format?: ImageExportFormat },
+    filenameBase: string,
   ) => {
     start(opts.mode === "ai" ? "Downloading AI model…" : "Removing background…");
     try {
@@ -68,7 +88,8 @@ export function useBgRemovalExport() {
           setRunFraction(p.fraction);
         }
       });
-      finish(res.blob, filename, res.cutoutBlob);
+      setFormatFellBack(res.formatFellBack);
+      finish(res.blob, `${filenameBase}.${IMAGE_FORMAT_EXTENSIONS[res.format]}`, res.cutoutBlob, res.matting);
     } catch (err) {
       fail(err);
     } finally {
@@ -90,10 +111,13 @@ export function useBgRemovalExport() {
     filename: string,
   ) => {
     start("Removing background…");
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const cmd = buildChromaRemovalCommand(input);
       const { blob } = await runFfmpeg({
         ...cmd,
+        signal: controller.signal,
         onEngineLoad: (f) => {
           setEngineFraction(f);
           if (f >= 1) setEnginePhase("run");
@@ -105,10 +129,11 @@ export function useBgRemovalExport() {
       });
       finish(blob, filename);
     } catch (err) {
-      fail(err);
+      if (!(err instanceof FfmpegCancelledError)) fail(err);
     } finally {
       setIsProcessing(false);
       setEnginePhase(null);
+      abortRef.current = null;
     }
   };
 
@@ -125,10 +150,13 @@ export function useBgRemovalExport() {
     filename: string,
   ) => {
     start("Rendering video…");
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const cmd = buildAiCutoutRemovalCommand(input);
       const { blob } = await runFfmpeg({
         ...cmd,
+        signal: controller.signal,
         onEngineLoad: (f) => {
           setEngineFraction(f);
           if (f >= 1) setEnginePhase("run");
@@ -140,12 +168,15 @@ export function useBgRemovalExport() {
       });
       finish(blob, filename);
     } catch (err) {
-      fail(err);
+      if (!(err instanceof FfmpegCancelledError)) fail(err);
     } finally {
       setIsProcessing(false);
       setEnginePhase(null);
+      abortRef.current = null;
     }
   };
+
+  const cancel = () => abortRef.current?.abort();
 
   const reset = () => {
     if (result) URL.revokeObjectURL(result.url);
@@ -153,6 +184,21 @@ export function useBgRemovalExport() {
     setResult(null);
     setCutoutUrl(null);
     setError(null);
+    setMatting(null);
+    setFormatFellBack(false);
+  };
+
+  /**
+   * PHASE 12 — BACKGROUND REMOVAL UI. Lets a caller that already produced a
+   * final blob itself (the AI-image REFINE/APPLY step in
+   * RemoveBackgroundTool.tsx, which composites a Phase 6/11-refined alpha
+   * without going through runImage's own model+composite call) still land
+   * on the exact same result/ResultPanel UI as every other export path,
+   * instead of that screen needing its own parallel implementation.
+   */
+  const finishWithBlob = (blob: Blob, filename: string, cutoutBlob?: Blob, mattingInfo?: ImageBgRemovalMattingInfo, fellBack?: boolean) => {
+    setFormatFellBack(!!fellBack);
+    finish(blob, filename, cutoutBlob, mattingInfo);
   };
 
   return {
@@ -164,9 +210,13 @@ export function useBgRemovalExport() {
     error,
     result,
     cutoutUrl,
+    matting,
+    formatFellBack,
     runImage,
     runVideoChroma,
     runVideoAi,
+    finishWithBlob,
+    cancel,
     reset,
   };
 }
