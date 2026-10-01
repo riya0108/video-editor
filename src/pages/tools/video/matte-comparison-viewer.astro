@@ -1,0 +1,30 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import MatteComparisonViewerPanel from "../../../components/tool/video/MatteComparisonViewerPanel.tsx";
+---
+
+<Layout
+  title="Matte Comparison Viewer — Clipbench"
+  description="Runs the same on-device AI background-removal pipeline the Remove Background tool uses against a real uploaded image or video, and shows it across several visualizations (alpha matte, composites, edge diagnostic) with zoom/pan and a before/after slider — a diagnostic tool, not a benchmark."
+>
+  <div class="mx-auto max-w-[1200px] px-4 py-8 sm:px-6 lg:px-8">
+    <nav class="mb-4 flex items-center gap-1.5 text-caption text-(--color-text-muted)" aria-label="Breadcrumb">
+      <a href="/" class="hover:text-(--color-text)">Home</a>
+      <span aria-hidden="true">/</span>
+      <a href="/tools/video/remove-background" class="hover:text-(--color-text)">Remove Background</a>
+      <span aria-hidden="true">/</span>
+      <span class="text-(--color-text)">Matte Comparison Viewer</span>
+    </nav>
+    <h1 class="mb-1 text-heading-2 font-semibold">Matte Comparison Viewer</h1>
+    <p class="mb-6 text-body-sm text-(--color-text-muted)">
+      An internal diagnostic tool, not listed in the main tools directory. Runs the real, unmodified background-removal
+      pipeline against whatever image or video you upload, and lets you inspect it against the original across several
+      visualizations. Nothing here changes the matting algorithm — see
+      <a href="/tools/video/matte-quality-benchmark" class="underline hover:text-(--color-text)">the quality benchmark</a>
+      for scoring against ground truth, or
+      <a href="/tools/video/remove-background-benchmark" class="underline hover:text-(--color-text)">the performance benchmark</a>
+      for speed/memory, instead of visual inspection.
+    </p>
+    <MatteComparisonViewerPanel client:load />
+  </div>
+</Layout>
