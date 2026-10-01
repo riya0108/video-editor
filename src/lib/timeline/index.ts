@@ -1,0 +1,13 @@
+// Public barrel for the core non-destructive timeline engine.
+// See TIMELINE_ARCHITECTURE.md for the full design.
+
+export * from "./errors";
+export * from "./time-model";
+export * from "./clip";
+export * from "./track";
+export * from "./model";
+export * from "./selection";
+export * from "./snapping";
+export * from "./history";
+export * from "./operations";
+export * from "./engine";
