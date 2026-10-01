@@ -33,6 +33,45 @@ const REFINE_RADIUS_MATTING = 3;
 const REFINE_RADIUS_SEGMENTATION = 2;
 const REFINE_EPS = 1e-3;
 
+// v1.1 FIX — no-subject noise floor. Only applied inside the pre-existing
+// "unusual coverage" branch below (i.e. only when we're already about to
+// warn that this may be a failed segmentation) — snaps residual low-
+// confidence alpha noise to exactly 0 rather than leaving it as a diffuse
+// haze spread across the frame. Gated strictly behind that pre-existing
+// condition, so ordinary, normal-coverage results are provably untouched.
+const NO_SUBJECT_ALPHA_FLOOR = 0.1;
+
+// v1.2 FIX — diffuse/low-confidence edge band warning. Targets
+// MATTE_V1_BENCHMARK_REPORT.md's failure mode #5: "degraded output on
+// complex/cluttered scenes ships with zero warning" (hard-complex-background,
+// hard-motion-blur — both NEEDS_REFINEMENT-tier, both scored >0.96
+// confidence under the existing bimodality-based metric, which only looks
+// at the whole-frame histogram and cannot see a boundary-only problem).
+//
+// Both thresholds were derived by running the real pipeline against the
+// full 34-case quality-benchmark dataset (25 image + 9 video, 8 frames
+// each), not reverse-engineered from the two target cases alone. At these
+// values: fires on 0 of the dataset's PASS-tier cases; fires on both
+// failure-mode-#5 targets; also fires on hard-curly-hair (itself
+// NEEDS_REFINEMENT) and on 7 of 8 video-fast-movement frames (the
+// dominant video failure mode, MATTE_V1_BENCHMARK_REPORT.md failure #4)
+// plus a genuine single-frame failure inside video-occlusion (MAD 0.153)
+// that the case's averaged score alone hides; the only false-positive
+// cost is 2 of 25 image cases (hard-fine-hair, hard-fur) — both
+// ACCEPTABLE-tier, not PASS, and both have genuinely soft hair/fur edges,
+// so an advisory there is a defensible (not a silent) trade, not a
+// regression of a clean result.
+//
+// Deliberately does NOT fire on hard-semi-transparent-fabric /
+// hard-transparent-plastic / hard-transparent-objects — those have a
+// structurally different signature (a narrow, high-gradient edge; the
+// error lives in the subject's INTERIOR, not a diffuse boundary) that
+// MATTE_V1.1_FIXES.md already diagnosed as unfixable by any post-
+// processing signal — conflating the two failure classes under one
+// warning would misdescribe what's actually wrong.
+const DIFFUSE_EDGE_SOFT_FRACTION_THRESHOLD = 0.45;
+const DIFFUSE_EDGE_GRADIENT_ENERGY_THRESHOLD = 0.22;
+
 // PHASE 16 — ADVERSARIAL MATTE TESTING ("extremely high resolution"). Every
 // model resizes down to a small fixed input for inference (e.g. U²-Net's
 // 320x320), but refinement/decontamination/compositing below all run at
@@ -202,6 +241,7 @@ export async function removeBackgroundFromImage(
     holesFilled: refined.holesFilled,
     islandsRemoved: refined.islandsRemoved,
     islandsPreserved: refined.islandsPreserved,
+    remainingComponentCount: refined.remainingComponentCount,
   });
   if (refined.holesFilled > 0) warnings.push(`Filled ${refined.holesFilled} small hole(s) in the matte.`);
   if (refined.islandsRemoved > 0) warnings.push(`Removed ${refined.islandsRemoved} small disconnected speck(s) from the matte.`);
@@ -230,9 +270,29 @@ export async function removeBackgroundFromImage(
     warnings.push(
       `Unusual foreground coverage (${(qualityMetrics.coverageFraction * 100).toFixed(1)}%) — this may be a failed segmentation rather than a real subject.`,
     );
+    // v1.1 FIX — no-subject noise floor: only inside this pre-existing
+    // "likely failed segmentation" branch, snap residual low-confidence
+    // alpha to exactly 0 instead of leaving a diffuse haze spread across
+    // the frame. Normal-coverage results never reach this branch at all.
+    let pixelsFloored = 0;
+    for (let i = 0; i < alpha.length; i++) {
+      if (alpha[i] < NO_SUBJECT_ALPHA_FLOOR) {
+        if (alpha[i] > 0) pixelsFloored++;
+        alpha[i] = 0;
+      }
+    }
+    if (pixelsFloored > 0) log.info("quality-analysis", `Floored ${pixelsFloored} residual low-confidence pixel(s) to 0`);
   }
   if (confidence < 0.4) {
     warnings.push(`Low confidence (${confidence.toFixed(2)}) — the model's output was not clearly separated into foreground and background.`);
+  }
+  if (
+    qualityMetrics.softEdgeFraction > DIFFUSE_EDGE_SOFT_FRACTION_THRESHOLD &&
+    qualityMetrics.edgeGradientEnergy < DIFFUSE_EDGE_GRADIENT_ENERGY_THRESHOLD
+  ) {
+    warnings.push(
+      `Wide, low-definition edge band (${(qualityMetrics.softEdgeFraction * 100).toFixed(0)}% of the boundary is a gradual, low-gradient transition) — this result's edge may be diffuse or low-confidence rather than a deliberate soft edge; worth a visual check before exporting.`,
+    );
   }
   log.info("quality-analysis", "Done", { ...qualityMetrics, confidence });
 

@@ -76,6 +76,7 @@ export interface RefineAlphaMatteResult {
   holesFilled: number;
   islandsRemoved: number;
   islandsPreserved: number;
+  remainingComponentCount: number;
 }
 
 /**
@@ -130,5 +131,6 @@ export function refineAlphaMatte(
     holesFilled: cleanup.holesFilled,
     islandsRemoved: cleanup.islandsRemoved,
     islandsPreserved: cleanup.islandsPreserved,
+    remainingComponentCount: cleanup.remainingComponentCount,
   };
 }

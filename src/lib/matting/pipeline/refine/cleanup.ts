@@ -43,6 +43,8 @@ export interface CleanupResult {
   holesFilled: number;
   islandsRemoved: number;
   islandsPreserved: number;
+  /** Count of disconnected foreground components still present AFTER island suppression/preservation above — i.e. how many separate pieces the surviving matte is split into. 1 means one coherent shape (the common, healthy case); a large count means the output is fragmented even after cleanup removed the tiny noise-sized specks. Free to compute — `labelConnectedComponents` already ran for island cleanup above; this just counts what's left. */
+  remainingComponentCount: number;
 }
 
 export function cleanupHolesAndIslands(
@@ -96,5 +98,7 @@ export function cleanupHolesAndIslands(
     islandsRemoved++;
   }
 
-  return { alpha: out, holesFilled, islandsRemoved, islandsPreserved };
+  const remainingComponentCount = foregroundComponents.sizes.length - islandsRemoved;
+
+  return { alpha: out, holesFilled, islandsRemoved, islandsPreserved, remainingComponentCount };
 }

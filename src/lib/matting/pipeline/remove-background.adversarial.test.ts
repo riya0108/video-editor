@@ -298,6 +298,38 @@ describe("failure mode: smoke-like diffuse low-alpha regions (#9)", () => {
   });
 });
 
+describe("failure mode: diffuse/low-confidence edge band ships with no warning (MATTE_V1_BENCHMARK_REPORT.md failure mode #5)", () => {
+  it("warns when most of the matte boundary is a wide, gradual, low-gradient transition rather than a clean edge", async () => {
+    // A full-width horizontal ramp (0 at x=0 to 1 at x=63), identical on
+    // every row: every column step is a "boundary" pixel (gradient just
+    // over the 0.01 threshold), and nearly all of them sit strictly
+    // between 0.05 and 0.95 alpha — a textbook wide/diffuse, low-gradient
+    // edge, the signature behind hard-complex-background/hard-motion-blur
+    // in the real benchmark (not a reproduction of either fixture itself).
+    const alpha = new Float32Array(WIDTH * HEIGHT);
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) alpha[y * WIDTH + x] = x / (WIDTH - 1);
+    }
+    const model = makeMockModel({ modelId: "m", alpha });
+
+    const result = await removeBackgroundFromImage(neutralRgba() as unknown as CanvasImageSource, WIDTH, HEIGHT, { models: [model] });
+    expect(result.qualityMetrics.softEdgeFraction).toBeGreaterThan(0.45);
+    expect(result.qualityMetrics.edgeGradientEnergy).toBeLessThan(0.22);
+    expect(result.warnings.some((w) => /diffuse|low-confidence/i.test(w))).toBe(true);
+  });
+
+  it("does not fire for an ordinary matte with a single, clean hard edge", async () => {
+    const alpha = new Float32Array(WIDTH * HEIGHT);
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = Math.floor(WIDTH / 2); x < WIDTH; x++) alpha[y * WIDTH + x] = 1;
+    }
+    const model = makeMockModel({ modelId: "m", alpha });
+
+    const result = await removeBackgroundFromImage(neutralRgba() as unknown as CanvasImageSource, WIDTH, HEIGHT, { models: [model] });
+    expect(result.warnings.some((w) => /diffuse|low-confidence rather than a deliberate soft edge/i.test(w))).toBe(false);
+  });
+});
+
 describe("invariant: never destroys the original media", () => {
   it("never mutates the Uint8ClampedArray drawSourceToRgba returned", async () => {
     const rgba = neutralRgba();

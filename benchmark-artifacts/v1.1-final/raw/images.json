@@ -1,0 +1,462 @@
+[
+  {
+    "caseId": "easy-person-plain-bg",
+    "category": "easy",
+    "subcategory": "person on plain background",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9927473958333334,
+    "processingTimeMs": 2333.4650000333786,
+    "warnings": [],
+    "metrics": {
+      "sad": 471.1341739854414,
+      "mse": 0.00047305936613590167,
+      "mad": 0.0020448531857007006,
+      "gradientError": 0.013352060231089676,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "easy-product-plain-bg",
+    "category": "easy",
+    "subcategory": "product on plain background",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9954036458333333,
+    "processingTimeMs": 425.8299999833107,
+    "warnings": [],
+    "metrics": {
+      "sad": 279.24079370861574,
+      "mse": 0.00021374690240850188,
+      "mad": 0.0012119826115825337,
+      "gradientError": 0.006151848632266619,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "easy-high-contrast-object",
+    "category": "easy",
+    "subcategory": "high contrast object",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9949652777777778,
+    "processingTimeMs": 454.2950000166893,
+    "warnings": [],
+    "metrics": {
+      "sad": 273.28415995428406,
+      "mse": 0.00023768228077831126,
+      "mad": 0.0011861291664682467,
+      "gradientError": 0.00449567424401097,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "medium-person-with-hair",
+    "category": "medium",
+    "subcategory": "person with hair",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9894053819444445,
+    "processingTimeMs": 353.8799999952316,
+    "warnings": [],
+    "metrics": {
+      "sad": 772.0992689840247,
+      "mse": 0.0007702788327053705,
+      "mad": 0.0033511252994098293,
+      "gradientError": 0.02181435457266266,
+      "connectivityError": 0.009680492701350846
+    },
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "medium-glasses",
+    "category": "medium",
+    "subcategory": "glasses",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9928776041666667,
+    "processingTimeMs": 329.94999998807907,
+    "warnings": [],
+    "metrics": {
+      "sad": 3615.917278422036,
+      "mse": 0.009330940243490512,
+      "mad": 0.015694085409817864,
+      "gradientError": 0.02652072897585574,
+      "connectivityError": 0
+    },
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "medium-loose-clothing",
+    "category": "medium",
+    "subcategory": "loose clothing",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9917795138888889,
+    "processingTimeMs": 398.625,
+    "warnings": [],
+    "metrics": {
+      "sad": 573.0066138588008,
+      "mse": 0.0006238980720310573,
+      "mad": 0.0024870078726510455,
+      "gradientError": 0.01769156394266009,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "medium-textured-background",
+    "category": "medium",
+    "subcategory": "textured background",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9927387152777778,
+    "processingTimeMs": 415.18000000715256,
+    "warnings": [],
+    "metrics": {
+      "sad": 461.8925931894311,
+      "mse": 0.0004602632565833694,
+      "mad": 0.0020047421579402393,
+      "gradientError": 0.013034881859711522,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "medium-similar-fg-bg-colors",
+    "category": "medium",
+    "subcategory": "similar foreground/background colours",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9921701388888889,
+    "processingTimeMs": 450.38499999046326,
+    "warnings": [],
+    "metrics": {
+      "sad": 507.07342043235917,
+      "mse": 0.0005251358990332244,
+      "mad": 0.0022008394984043365,
+      "gradientError": 0.014779164897092502,
+      "connectivityError": 0.0019779896050333523
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "hard-curly-hair",
+    "category": "hard",
+    "subcategory": "curly hair",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9704383680555555,
+    "processingTimeMs": 367.5,
+    "warnings": [
+      "Filled 2 small hole(s) in the matte."
+    ],
+    "metrics": {
+      "sad": 17514.7025211689,
+      "mse": 0.06621532604365896,
+      "mad": 0.0760186741370178,
+      "gradientError": 0.10785376167680925,
+      "connectivityError": 0.1544029513861864
+    },
+    "classification": "NEEDS_REFINEMENT"
+  },
+  {
+    "caseId": "hard-fine-hair",
+    "category": "hard",
+    "subcategory": "fine hair",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9698220486111111,
+    "processingTimeMs": 401.30000001192093,
+    "warnings": [],
+    "metrics": {
+      "sad": 2021.6002776295063,
+      "mse": 0.002352405220331633,
+      "mad": 0.008774306760544732,
+      "gradientError": 0.04243245232169642,
+      "connectivityError": 0.018663287306002207
+    },
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "hard-transparent-objects",
+    "category": "hard",
+    "subcategory": "transparent objects",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9943706597222223,
+    "processingTimeMs": 393.33000004291534,
+    "warnings": [],
+    "metrics": {
+      "sad": 17327.227644582053,
+      "mse": 0.040726234054565255,
+      "mad": 0.07520498109627627,
+      "gradientError": 0.021476216035784767,
+      "connectivityError": 0
+    },
+    "classification": "NEEDS_REFINEMENT"
+  },
+  {
+    "caseId": "hard-semi-transparent-fabric",
+    "category": "hard",
+    "subcategory": "semi-transparent fabric",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9964670138888889,
+    "processingTimeMs": 355.55500000715256,
+    "warnings": [],
+    "metrics": {
+      "sad": 23232.417453636925,
+      "mse": 0.043916920218547185,
+      "mad": 0.10083514519807693,
+      "gradientError": 0.11279391556873669,
+      "connectivityError": 0.020823682991535773
+    },
+    "classification": "FAIL"
+  },
+  {
+    "caseId": "hard-motion-blur",
+    "category": "hard",
+    "subcategory": "motion blur",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9832118055555555,
+    "processingTimeMs": 435.1449999809265,
+    "warnings": [],
+    "metrics": {
+      "sad": 12980.10709556996,
+      "mse": 0.014297967488781956,
+      "mad": 0.05633727038007795,
+      "gradientError": 0.04436288813763171,
+      "connectivityError": 0
+    },
+    "classification": "NEEDS_REFINEMENT"
+  },
+  {
+    "caseId": "hard-shadows",
+    "category": "hard",
+    "subcategory": "shadows",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9922873263888888,
+    "processingTimeMs": 429.44499999284744,
+    "warnings": [],
+    "metrics": {
+      "sad": 522.1314323030657,
+      "mse": 0.0005393902499772447,
+      "mad": 0.002266195452704278,
+      "gradientError": 0.01617153645447279,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "hard-reflections",
+    "category": "hard",
+    "subcategory": "reflections",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9925173611111111,
+    "processingTimeMs": 358.49000000953674,
+    "warnings": [],
+    "metrics": {
+      "sad": 491.0470646781312,
+      "mse": 0.0004920698637379591,
+      "mad": 0.0021312806626655,
+      "gradientError": 0.01409007927255193,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "hard-dark-subject-dark-bg",
+    "category": "hard",
+    "subcategory": "dark subject on dark background",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9913715277777778,
+    "processingTimeMs": 419.1700000166893,
+    "warnings": [],
+    "metrics": {
+      "sad": 618.2048222350379,
+      "mse": 0.0007063134459628959,
+      "mad": 0.0026831806520617963,
+      "gradientError": 0.019444555831744606,
+      "connectivityError": 0.003913894324853229
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "hard-light-subject-light-bg",
+    "category": "hard",
+    "subcategory": "light subject on light background",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9919010416666667,
+    "processingTimeMs": 407.5600000023842,
+    "warnings": [],
+    "metrics": {
+      "sad": 722.2803878813282,
+      "mse": 0.0010988201868546454,
+      "mad": 0.0031348975168460427,
+      "gradientError": 0.025556073160638387,
+      "connectivityError": 0.005660417061212466
+    },
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "hard-complex-background",
+    "category": "hard",
+    "subcategory": "complex background",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9616449652777778,
+    "processingTimeMs": 360.02000004053116,
+    "warnings": [
+      "Removed 1 small disconnected speck(s) from the matte."
+    ],
+    "metrics": {
+      "sad": 13037.094842740906,
+      "mse": 0.047515322785505555,
+      "mad": 0.05658461303272962,
+      "gradientError": 0.07229837251055907,
+      "connectivityError": 0.0002104244260673779
+    },
+    "classification": "NEEDS_REFINEMENT"
+  },
+  {
+    "caseId": "hard-multiple-subjects",
+    "category": "hard",
+    "subcategory": "multiple subjects",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9873220486111111,
+    "processingTimeMs": 450.9950000047684,
+    "warnings": [],
+    "metrics": {
+      "sad": 773.6310038754941,
+      "mse": 0.0007737838147741097,
+      "mad": 0.003357773454320721,
+      "gradientError": 0.02235956962849537,
+      "connectivityError": 0
+    },
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "hard-overlapping-subjects",
+    "category": "hard",
+    "subcategory": "overlapping subjects",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9916145833333333,
+    "processingTimeMs": 457.7549999952316,
+    "warnings": [],
+    "metrics": {
+      "sad": 473.1335665087547,
+      "mse": 0.00042910180745685586,
+      "mad": 0.002053531104638692,
+      "gradientError": 0.011712771058414399,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "hard-no-subject",
+    "category": "hard",
+    "subcategory": "no subject",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.48963541666666666,
+    "processingTimeMs": 615.9549999833107,
+    "warnings": [
+      "Removed 2 small disconnected speck(s) from the matte.",
+      "Unusual foreground coverage (0.0%) \u2014 this may be a failed segmentation rather than a real subject."
+    ],
+    "metrics": {
+      "sad": 534.2679168209434,
+      "mse": 0.00026202626082197426,
+      "mad": 0.0023188711667575666,
+      "gradientError": 0.0016564568357756038,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  },
+  {
+    "caseId": "hard-fur",
+    "category": "hard",
+    "subcategory": "fur",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9881467013888889,
+    "processingTimeMs": 402.2549999952316,
+    "warnings": [],
+    "metrics": {
+      "sad": 909.926655681767,
+      "mse": 0.0008945459142106476,
+      "mad": 0.003949334443063225,
+      "gradientError": 0.022844600614634614,
+      "connectivityError": 0.014561634138942259
+    },
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "hard-transparent-plastic",
+    "category": "hard",
+    "subcategory": "transparent plastic",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9942230902777778,
+    "processingTimeMs": 553.4850000143051,
+    "warnings": [],
+    "metrics": {
+      "sad": 10991.012083348445,
+      "mse": 0.016462015110171754,
+      "mad": 0.04770404550064429,
+      "gradientError": 0.009312215113766563,
+      "connectivityError": 0
+    },
+    "classification": "NEEDS_REFINEMENT"
+  },
+  {
+    "caseId": "hard-smoke-like-regions",
+    "category": "hard",
+    "subcategory": "smoke-like regions",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.4197808159722222,
+    "processingTimeMs": 593.4650000333786,
+    "warnings": [
+      "Removed 5 small disconnected speck(s) from the matte.",
+      "Unusual foreground coverage (0.2%) \u2014 this may be a failed segmentation rather than a real subject."
+    ],
+    "metrics": {
+      "sad": 20247.12868203642,
+      "mse": 0.01957437161922895,
+      "mad": 0.08787816268244973,
+      "gradientError": 0.0038344383823479987,
+      "connectivityError": 0.6419712395322151
+    },
+    "classification": "NEEDS_REFINEMENT"
+  },
+  {
+    "caseId": "hard-rotated-subject",
+    "category": "hard",
+    "subcategory": "rotated subject",
+    "ok": true,
+    "modelUsed": "u2net",
+    "confidence": 0.9922135416666666,
+    "processingTimeMs": 503.36500000953674,
+    "warnings": [],
+    "metrics": {
+      "sad": 430.58244065604333,
+      "mse": 0.0003601619859086253,
+      "mad": 0.0018688473986807437,
+      "gradientError": 0.006271438683330318,
+      "connectivityError": 0
+    },
+    "classification": "PASS"
+  }
+]

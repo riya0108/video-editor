@@ -92,6 +92,32 @@ describe("cleanupHolesAndIslands — small-island cleanup", () => {
   });
 });
 
+describe("cleanupHolesAndIslands — remainingComponentCount", () => {
+  it("is 1 for a single coherent shape", () => {
+    const alpha = makeSolidSquare();
+    const result = cleanupHolesAndIslands(alpha, WIDTH, HEIGHT, null, DEFAULT_CLEANUP_OPTIONS);
+    expect(result.remainingComponentCount).toBe(1);
+  });
+
+  it("does not count a small island that was already removed", () => {
+    const alpha = makeSolidSquare();
+    alpha[0] = 1; // a lone speck, disconnected from the square, below maxIslandSize
+    const result = cleanupHolesAndIslands(alpha, WIDTH, HEIGHT, null, DEFAULT_CLEANUP_OPTIONS);
+    expect(result.islandsRemoved).toBe(1);
+    expect(result.remainingComponentCount).toBe(1); // only the square remains
+  });
+
+  it("counts multiple surviving components when several are each above maxIslandSize", () => {
+    const alpha = new Float32Array(WIDTH * HEIGHT).fill(0);
+    // Two separate 2x2 blocks, each well above maxIslandSize=1 with a tiny custom threshold.
+    for (let y = 0; y <= 1; y++) for (let x = 0; x <= 1; x++) alpha[y * WIDTH + x] = 1;
+    for (let y = 0; y <= 1; y++) for (let x = 7; x <= 8; x++) alpha[y * WIDTH + x] = 1;
+    const result = cleanupHolesAndIslands(alpha, WIDTH, HEIGHT, null, { ...DEFAULT_CLEANUP_OPTIONS, maxIslandSize: 1 });
+    expect(result.islandsRemoved).toBe(0);
+    expect(result.remainingComponentCount).toBe(2);
+  });
+});
+
 describe("cleanupHolesAndIslands — non-destructive", () => {
   it("returns a new array, never mutates the input", () => {
     const alpha = makeSolidSquare();

@@ -1,0 +1,212 @@
+[
+  {
+    "caseId": "video-talking-person",
+    "subcategory": "talking person",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 87481585,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2951.2149999141693,
+    "totalInferenceTimeMs": 2710.6599999666214,
+    "meanMetrics": {
+      "sad": 371.4835384852063,
+      "mse": 0.0006484148185254368,
+      "mad": 0.0025192839795274945,
+      "gradientError": 0.014702785779992567,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.0006231933405132351,
+    "representativeFrameIndex": 4,
+    "classification": "PASS",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-talking-person/"
+  },
+  {
+    "caseId": "video-walking-person",
+    "subcategory": "walking person",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 0,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2553.519999921322,
+    "totalInferenceTimeMs": 2368.045000076294,
+    "meanMetrics": {
+      "sad": 326.22848510156564,
+      "mse": 0.0004833161494667987,
+      "mad": 0.002212378506819428,
+      "gradientError": 0.013398538768273486,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.00020294476783970505,
+    "representativeFrameIndex": 4,
+    "classification": "PASS",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-walking-person/"
+  },
+  {
+    "caseId": "video-hand-movement",
+    "subcategory": "hand movement",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 36959585,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2658.7900000214577,
+    "totalInferenceTimeMs": 2465.3450000286102,
+    "meanMetrics": {
+      "sad": 435.24027942730675,
+      "mse": 0.0011403857026884617,
+      "mad": 0.002951662051237703,
+      "gradientError": 0.01546667055375308,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.0008361525039740983,
+    "representativeFrameIndex": 4,
+    "classification": "PASS",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-hand-movement/"
+  },
+  {
+    "caseId": "video-hair-movement",
+    "subcategory": "hair movement",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 0,
+    "warnings": [
+      "Removed 2 small disconnected speck(s) from the matte.",
+      "Removed 1 small disconnected speck(s) from the matte."
+    ],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2682.7000000476837,
+    "totalInferenceTimeMs": 2475.399999976158,
+    "meanMetrics": {
+      "sad": 627.6044143607407,
+      "mse": 0.0009369311964780795,
+      "mad": 0.004256214832633061,
+      "gradientError": 0.023793305505878833,
+      "connectivityError": 0.009907070868182488
+    },
+    "temporalConsistencyError": 0.0005730759907842267,
+    "representativeFrameIndex": 4,
+    "classification": "ACCEPTABLE",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-hair-movement/"
+  },
+  {
+    "caseId": "video-fast-movement",
+    "subcategory": "fast movement",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 35820162,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2811.6650000214577,
+    "totalInferenceTimeMs": 2601.8700000047684,
+    "meanMetrics": {
+      "sad": 10128.484084247279,
+      "mse": 0.022685195128703088,
+      "mad": 0.0686881787397412,
+      "gradientError": 0.07458769278588231,
+      "connectivityError": 0.0000540307414673559
+    },
+    "temporalConsistencyError": 0.01999072941077803,
+    "representativeFrameIndex": 4,
+    "classification": "NEEDS_REFINEMENT",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-fast-movement/"
+  },
+  {
+    "caseId": "video-occlusion",
+    "subcategory": "occlusion",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 0,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2989.2150000333786,
+    "totalInferenceTimeMs": 2758.685000002384,
+    "meanMetrics": {
+      "sad": 3205.309509007079,
+      "mse": 0.016805024434537928,
+      "mad": 0.021737396301317543,
+      "gradientError": 0.04184107487951229,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.004175974700775399,
+    "representativeFrameIndex": 4,
+    "classification": "ACCEPTABLE",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-occlusion/"
+  },
+  {
+    "caseId": "video-camera-movement",
+    "subcategory": "camera movement",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 0,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2999.900000035763,
+    "totalInferenceTimeMs": 2781.0300000309944,
+    "meanMetrics": {
+      "sad": 371.64876627454294,
+      "mse": 0.0005856183684089555,
+      "mad": 0.002520404502187384,
+      "gradientError": 0.013106280046065686,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.0009374302480687352,
+    "representativeFrameIndex": 4,
+    "classification": "PASS",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-camera-movement/"
+  },
+  {
+    "caseId": "video-changing-background",
+    "subcategory": "changing background",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 133358,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2865.2000000476837,
+    "totalInferenceTimeMs": 2652.4049999713898,
+    "meanMetrics": {
+      "sad": 365.05302944717175,
+      "mse": 0.0005926980585309759,
+      "mad": 0.002475674299093775,
+      "gradientError": 0.015966055339170396,
+      "connectivityError": 0.0011321126205946052
+    },
+    "temporalConsistencyError": 0.0005830021390412452,
+    "representativeFrameIndex": 4,
+    "classification": "PASS",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-changing-background/"
+  },
+  {
+    "caseId": "video-scene-cut",
+    "subcategory": "scene cut",
+    "framesTotal": 8,
+    "framesProcessed": 8,
+    "memoryDeltaBytes": 343478,
+    "warnings": [],
+    "ok": true,
+    "modelUsed": "u2net",
+    "totalProcessingTimeMs": 2769.3999999165535,
+    "totalInferenceTimeMs": 2561.230000078678,
+    "meanMetrics": {
+      "sad": 288.0171357210844,
+      "mse": 0.00037937506884947115,
+      "mad": 0.0019532412090459824,
+      "gradientError": 0.009989022388545186,
+      "connectivityError": 0.00004493574188909859
+    },
+    "temporalConsistencyError": 0.00016253623683558965,
+    "representativeFrameIndex": 4,
+    "classification": "PASS",
+    "artifactPath": "benchmark-artifacts/v1/videos/video-scene-cut/"
+  }
+]

@@ -1,0 +1,172 @@
+[
+  {
+    "caseId": "video-talking-person",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 3465.8200001120567,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 371.4835384852063,
+      "mse": 0.0006484148185254368,
+      "mad": 0.0025192839795274945,
+      "gradientError": 0.014702785779992567,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.0006231933405132351,
+    "classification": "PASS"
+  },
+  {
+    "caseId": "video-walking-person",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 3358.4950000047684,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 326.22848510156564,
+      "mse": 0.0004833161494667987,
+      "mad": 0.002212378506819428,
+      "gradientError": 0.013398538768273486,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.00020294476783970505,
+    "classification": "PASS"
+  },
+  {
+    "caseId": "video-hand-movement",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 3120.6150000095367,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 435.24027942730675,
+      "mse": 0.0011403857026884617,
+      "mad": 0.002951662051237703,
+      "gradientError": 0.01546667055375308,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.0008361525039740983,
+    "classification": "PASS"
+  },
+  {
+    "caseId": "video-hair-movement",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 3209.655000090599,
+    "warnings": [
+      "Removed 2 small disconnected speck(s) from the matte.",
+      "Removed 1 small disconnected speck(s) from the matte.",
+      "Removed 1 small disconnected speck(s) from the matte.",
+      "Removed 1 small disconnected speck(s) from the matte.",
+      "Removed 1 small disconnected speck(s) from the matte.",
+      "Removed 1 small disconnected speck(s) from the matte.",
+      "Removed 2 small disconnected speck(s) from the matte."
+    ],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 627.6044143607407,
+      "mse": 0.0009369311964780795,
+      "mad": 0.004256214832633061,
+      "gradientError": 0.023793305505878833,
+      "connectivityError": 0.009907070868182488
+    },
+    "temporalConsistencyError": 0.0005730759907842267,
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "video-fast-movement",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 3456.710000038147,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 10128.484084247279,
+      "mse": 0.022685195128703088,
+      "mad": 0.0686881787397412,
+      "gradientError": 0.07458769278588231,
+      "connectivityError": 5.40307414673559e-05
+    },
+    "temporalConsistencyError": 0.01999072941077803,
+    "classification": "NEEDS_REFINEMENT"
+  },
+  {
+    "caseId": "video-occlusion",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 3305.0899999141693,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 3205.309509007079,
+      "mse": 0.016805024434537928,
+      "mad": 0.021737396301317543,
+      "gradientError": 0.04184107487951229,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.004175974700775399,
+    "classification": "ACCEPTABLE"
+  },
+  {
+    "caseId": "video-camera-movement",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 3157.555000066757,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 371.64876627454294,
+      "mse": 0.0005856183684089555,
+      "mad": 0.002520404502187384,
+      "gradientError": 0.013106280046065686,
+      "connectivityError": 0
+    },
+    "temporalConsistencyError": 0.0009374302480687352,
+    "classification": "PASS"
+  },
+  {
+    "caseId": "video-changing-background",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 2996.1449999809265,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 365.05302944717175,
+      "mse": 0.0005926980585309759,
+      "mad": 0.002475674299093775,
+      "gradientError": 0.015966055339170396,
+      "connectivityError": 0.0011321126205946052
+    },
+    "temporalConsistencyError": 0.0005830021390412452,
+    "classification": "PASS"
+  },
+  {
+    "caseId": "video-scene-cut",
+    "framesProcessed": 8,
+    "framesTotal": 8,
+    "modelUsed": "u2net",
+    "processingTimeMs": 2946.5150000452995,
+    "warnings": [],
+    "ok": true,
+    "meanMetrics": {
+      "sad": 288.0171357210844,
+      "mse": 0.00037937506884947115,
+      "mad": 0.0019532412090459824,
+      "gradientError": 0.009989022388545186,
+      "connectivityError": 4.493574188909859e-05
+    },
+    "temporalConsistencyError": 0.00016253623683558965,
+    "classification": "PASS"
+  }
+]
