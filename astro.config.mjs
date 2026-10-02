@@ -48,7 +48,29 @@ export default defineConfig({
       // "504 Outdated Optimize Dep" instead of completing, breaking every
       // AI feature until `node_modules/.vite` is wiped by hand. Listing it
       // here forces it into the eager cold-start bundle instead.
-      include: ["@huggingface/transformers"],
+      //
+      // The same failure hit EVERY tool (2026-10): Astro's cold-start scan
+      // only pre-bundles react + the line above, so every other browser
+      // dependency is discovered at runtime, the first time some page
+      // imports it. Each discovery re-optimizes mid-session, which can
+      // invalidate deps already handed out — after that, @ffmpeg/* (imported
+      // by every tool) answered "504 Outdated Optimize Dep", React islands
+      // failed to hydrate, and every upload dropzone was dead HTML until a
+      // restart. Listing ALL browser-side deps makes the optimized set
+      // complete at startup, so no page can ever trigger a re-optimize.
+      // (Same pre-bundled output as runtime discovery produced — just built
+      // up front — so ffmpeg's worker loading is unchanged.)
+      // When adding a new browser dependency, add it here too.
+      include: [
+        "@huggingface/transformers",
+        "@ffmpeg/ffmpeg",
+        "@ffmpeg/util",
+        "lucide-react",
+        "onnxruntime-web",
+        "@mediapipe/tasks-vision",
+        "wavesurfer.js",
+        "wavesurfer.js/plugins/regions",
+      ],
     },
   },
 });
