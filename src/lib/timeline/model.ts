@@ -2,18 +2,49 @@ import { createId } from "./id";
 import type { Track } from "./track";
 import { clipTimelineEnd, type Clip } from "./clip";
 
+/** Output canvas of the project — the coordinate space every ClipVisual is authored in. See COMPOSITION_ARCHITECTURE.md §1. */
+export interface CompositionSettings {
+  /** Output pixels. */
+  width: number;
+  height: number;
+  /** CSS color, or "transparent" for an alpha-carrying output. */
+  background: string;
+}
+
+export const DEFAULT_COMPOSITION: Readonly<CompositionSettings> = Object.freeze({ width: 1920, height: 1080, background: "#000000" });
+
+/** A ruler guide: a vertical line at x = position (axis "x") or a horizontal line at y = position (axis "y"), in composition pixels. Project state, so guide edits are undoable like any other edit. */
+export interface Guide {
+  id: string;
+  axis: "x" | "y";
+  position: number;
+}
+
 export interface TimelineModel {
   id: string;
   frameRate: number;
+  composition: CompositionSettings;
+  guides: Guide[];
   /** Track order — index 0 is topmost/frontmost for visual compositing. Maintained exclusively by operations.ts (addTrack/removeTrack/reorderTrack). */
   trackIds: string[];
   tracks: Record<string, Track>;
   clips: Record<string, Clip>;
 }
 
-export function createTimeline(frameRate: number): TimelineModel {
+export function createTimeline(frameRate: number, composition: Partial<CompositionSettings> = {}): TimelineModel {
   if (!(frameRate > 0)) throw new Error(`frameRate must be > 0, got ${frameRate}.`);
-  return { id: createId("timeline"), frameRate, trackIds: [], tracks: {}, clips: {} };
+  const comp = { ...DEFAULT_COMPOSITION, ...composition };
+  validateCompositionSize(comp.width, comp.height);
+  return { id: createId("timeline"), frameRate, composition: comp, guides: [], trackIds: [], tracks: {}, clips: {} };
+}
+
+/** Even, positive integers — every video codec this app encodes with requires even dimensions, so an odd size is rejected here rather than silently cropped at export. */
+export function validateCompositionSize(width: number, height: number): void {
+  for (const [name, v] of [["width", width], ["height", height]] as const) {
+    if (!Number.isInteger(v) || v < 2 || v > 8192 || v % 2 !== 0) {
+      throw new Error(`composition ${name} must be an even integer in [2, 8192], got ${v}.`);
+    }
+  }
 }
 
 export function getTrack(timeline: TimelineModel, trackId: string): Track | undefined {

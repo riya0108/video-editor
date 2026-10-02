@@ -1,4 +1,5 @@
 import { createId } from "./id";
+import type { ClipVisual, ShapeSpec, TextStyle } from "./visual";
 
 /** Opaque reference to source media — never bytes, never a File/Blob/URL. Resolving sourceId to real media is a different layer's job; see TIMELINE_ARCHITECTURE.md §2. */
 export interface MediaSourceRef {
@@ -25,6 +26,10 @@ export interface AuthoredClipContent {
   kind: "image" | "graphic" | "text";
   source?: MediaSourceRef; // present for image/graphic, absent for text
   text?: string; // present for text only
+  /** text only — undefined means DEFAULT_TEXT_STYLE. */
+  textStyle?: TextStyle;
+  /** graphic only — a vector shape drawn by the compositor instead of a sourced image (a graphic clip has a source OR a shape). */
+  shape?: ShapeSpec;
   durationFrames: number;
 }
 
@@ -36,6 +41,8 @@ export interface Clip {
   /** Frames, >= 0 — position of this clip's start on the timeline. */
   timelineStart: number;
   content: ClipContent;
+  /** Placement on the canvas (transform/crop/opacity/blend/matte). Undefined = defaultClipVisual() for the timeline's composition — so changing the composition size re-centers untouched clips automatically. Never present on audio clips. See visual.ts. */
+  visual?: ClipVisual;
 }
 
 export function isTrimmableContent(content: ClipContent): content is TrimmableClipContent {
@@ -79,8 +86,17 @@ export function createGraphicClip(trackId: string, timelineStart: number, source
   return createClip(trackId, timelineStart, { kind: "graphic", source, durationFrames });
 }
 
-export function createTextClip(trackId: string, timelineStart: number, text: string, durationFrames: number): Clip {
-  return createClip(trackId, timelineStart, { kind: "text", text, durationFrames });
+export function createTextClip(trackId: string, timelineStart: number, text: string, durationFrames: number, textStyle?: TextStyle): Clip {
+  return createClip(trackId, timelineStart, textStyle ? { kind: "text", text, textStyle, durationFrames } : { kind: "text", text, durationFrames });
+}
+
+export function createShapeClip(trackId: string, timelineStart: number, shape: ShapeSpec, durationFrames: number): Clip {
+  return createClip(trackId, timelineStart, { kind: "graphic", shape, durationFrames });
+}
+
+/** Audio is the only kind with no visual representation — every other kind is a compositor layer. */
+export function hasVisual(kind: ClipKind): boolean {
+  return kind !== "audio";
 }
 
 /** Returns a new Clip with the same id/trackId/timelineStart but a fresh content object — used internally by operations.ts (trim/split) to produce an updated clip without ever mutating the original. */

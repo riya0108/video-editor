@@ -1,0 +1,26 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import CompositionPlaygroundPanel from "../../../components/tool/video/composition/CompositionPlaygroundPanel.tsx";
+---
+
+<Layout
+  title="Composition Preview — Clipbench"
+  description="Internal playground for the multi-layer composition and preview engine: video, images, transparent assets, text, shapes and alpha mattes with transforms, cropping, opacity, blending, zoom/pan, fit-to-screen and fullscreen preview."
+>
+  <div class="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
+    <nav class="mb-4 flex items-center gap-1.5 text-caption text-(--color-text-muted)" aria-label="Breadcrumb">
+      <a href="/" class="hover:text-(--color-text)">Home</a>
+      <span aria-hidden="true">/</span>
+      <a href="/tools/video/video-editor" class="hover:text-(--color-text)">Video Editor</a>
+      <span aria-hidden="true">/</span>
+      <span class="text-(--color-text)">Composition Preview</span>
+    </nav>
+    <h1 class="mb-1 text-heading-2 font-semibold">Composition Preview</h1>
+    <p class="mb-6 text-body-sm text-(--color-text-muted)">
+      An internal page, not listed in the main tools directory. It runs the new composition engine on a demo multi-track
+      timeline. The preview renders at an adjustable resolution. "Render this frame" uses the separate final renderer,
+      which always renders at full composition resolution from exact source frames.
+    </p>
+    <CompositionPlaygroundPanel client:only="react" />
+  </div>
+</Layout>

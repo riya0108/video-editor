@@ -6,7 +6,9 @@ export type TimelineEditErrorReason =
   | "overlap"
   | "out-of-range"
   | "invalid-split-point"
-  | "invalid-track-index";
+  | "invalid-track-index"
+  | "invalid-visual"
+  | "guide-not-found";
 
 /**
  * Thrown by every mutating function in operations.ts. Deliberately a single

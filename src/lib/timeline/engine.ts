@@ -1,5 +1,6 @@
 import { createHistory, pushHistory, undo as historyUndo, redo as historyRedo, canUndo as historyCanUndo, canRedo as historyCanRedo, type History } from "./history";
-import { createTimeline, type TimelineModel } from "./model";
+import { createTimeline, type CompositionSettings, type Guide, type TimelineModel } from "./model";
+import type { ClipVisualPatch } from "./visual";
 import {
   createSelection,
   select as selectOp,
@@ -37,8 +38,8 @@ export class TimelineEngine {
   private history: History<TimelineModel>;
   private _selection: Selection = createSelection();
 
-  constructor(frameRate: number) {
-    this.history = createHistory(createTimeline(frameRate));
+  constructor(frameRate: number, composition?: Partial<CompositionSettings>) {
+    this.history = createHistory(createTimeline(frameRate, composition));
   }
 
   get timeline(): TimelineModel {
@@ -55,6 +56,17 @@ export class TimelineEngine {
 
   get canRedo(): boolean {
     return historyCanRedo(this.history);
+  }
+
+  /** Replaces the whole project (e.g. after deserializeTimeline) as a fresh history baseline with an empty selection. */
+  loadTimeline(timeline: TimelineModel): void {
+    this.history = createHistory(timeline);
+    this._selection = createSelection();
+  }
+
+  /** Makes the current timeline the history baseline (nothing to undo). For a freshly loaded/constructed project, so "undo" can't take apart the project's own setup. */
+  resetHistory(): void {
+    this.history = createHistory(this.timeline);
   }
 
   undo(): void {
@@ -147,8 +159,56 @@ export class TimelineEngine {
     return this.runVoid(() => ops.setTrackSolo(this.timeline, trackId, solo));
   }
 
-  insertClip(trackId: string, content: ClipContent, timelineStart: number): EditResult<{ clip: Clip }> {
-    return this.run(() => ops.insertClip(this.timeline, trackId, content, timelineStart));
+  insertClip(trackId: string, content: ClipContent, timelineStart: number, visual?: ClipVisualPatch): EditResult<{ clip: Clip }> {
+    return this.run(() => ops.insertClip(this.timeline, trackId, content, timelineStart, visual));
+  }
+
+  /** Multi-object visual edit — one undo step for the whole batch. */
+  setClipVisuals(patches: Readonly<Record<string, ClipVisualPatch>>): EditResult {
+    return this.runVoid(() => ops.setClipVisuals(this.timeline, patches));
+  }
+
+  /** Duplicates clips as new layers (same timing, stacked above), one undo step; selects the copies. */
+  duplicateClipsAsLayers(clipIds: readonly string[], offset?: { x: number; y: number }): EditResult<{ clips: Clip[] }> {
+    const r = this.run(() => ops.duplicateClipsAsLayers(this.timeline, clipIds, offset));
+    if (r.ok) this.selectMany(r.clips.map((c) => c.id));
+    return r;
+  }
+
+  setClipVisual(clipId: string, patch: ClipVisualPatch): EditResult {
+    return this.runVoid(() => ops.setClipVisual(this.timeline, clipId, patch));
+  }
+
+  updateAuthoredContent(clipId: string, patch: ops.AuthoredContentPatch): EditResult {
+    return this.runVoid(() => ops.updateAuthoredContent(this.timeline, clipId, patch));
+  }
+
+  addGuide(axis: Guide["axis"], position: number): EditResult<{ guide: Guide }> {
+    return this.run(() => ops.addGuide(this.timeline, axis, position));
+  }
+
+  moveGuide(guideId: string, position: number): EditResult {
+    return this.runVoid(() => ops.moveGuide(this.timeline, guideId, position));
+  }
+
+  removeGuide(guideId: string): EditResult {
+    return this.runVoid(() => ops.removeGuide(this.timeline, guideId));
+  }
+
+  setCompositionSettings(patch: Partial<CompositionSettings>, reposition: "proportional" | "keep" = "proportional"): EditResult {
+    return this.runVoid(() => ops.setCompositionSettings(this.timeline, patch, reposition));
+  }
+
+  /** Content and/or visual edits to several clips, one undo step. */
+  editClips(edits: Readonly<Record<string, ops.ClipEdit>>): EditResult {
+    return this.runVoid(() => ops.editClips(this.timeline, edits));
+  }
+
+  /** Adds a text layer at the front (own track) and selects it. One undo step. */
+  addTextLayer(opts: Parameters<typeof ops.addTextLayer>[1]): EditResult<{ clip: Clip; track: Track }> {
+    const r = this.run(() => ops.addTextLayer(this.timeline, opts));
+    if (r.ok) this.select(r.clip.id);
+    return r;
   }
 
   trimClip(clipId: string, edge: "start" | "end", newFrame: number): EditResult {

@@ -4,6 +4,7 @@ import {
   clipDurationFrames,
   clipKind,
   clipTimelineEnd,
+  hasVisual,
   isTrimmableContent,
   withContent,
   withTimelineStart,
@@ -12,7 +13,9 @@ import {
   type ClipContent,
 } from "./clip";
 import { createTrack, withTrack, type Track, type TrackKind } from "./track";
-import { findOverlap, getClip, getTrack, getTrackClips, type TimelineModel } from "./model";
+import { findOverlap, getClip, getTrack, getTrackClips, validateCompositionSize, type CompositionSettings, type Guide, type TimelineModel } from "./model";
+import { applyVisualPatch, defaultClipVisual, InvalidVisualError, type ClipVisual, type ClipVisualPatch, type ShapeSpec } from "./visual";
+import { patchTextStyle, type TextStylePatch } from "./text-style";
 
 const MIN_CLIP_DURATION_FRAMES = 1;
 
@@ -115,7 +118,13 @@ function contentDurationFrames(content: ClipContent): number {
   return isTrimmableContent(content) ? content.sourceOutFrame - content.sourceInFrame : content.durationFrames;
 }
 
-export function insertClip(timeline: TimelineModel, trackId: string, content: ClipContent, timelineStart: number): { timeline: TimelineModel; clip: Clip } {
+export function insertClip(
+  timeline: TimelineModel,
+  trackId: string,
+  content: ClipContent,
+  timelineStart: number,
+  visual?: ClipVisualPatch,
+): { timeline: TimelineModel; clip: Clip } {
   const track = requireTrack(timeline, trackId);
   requireUnlocked(track);
   requireKindMatch(track, content);
@@ -126,6 +135,7 @@ export function insertClip(timeline: TimelineModel, trackId: string, content: Cl
   if (conflict) throw new TimelineEditError("overlap", `Placement overlaps existing clip "${conflict.id}" on track "${trackId}".`);
 
   const clip: Clip = { id: createId("clip"), trackId, timelineStart, content };
+  if (visual) clip.visual = resolvePatchedVisual(timeline, clip, visual);
   const clips = { ...timeline.clips, [clip.id]: clip };
   const next: TimelineModel = {
     ...timeline,
@@ -218,7 +228,8 @@ export function duplicateClip(timeline: TimelineModel, clipId: string, newTimeli
   const conflict = findOverlap(timeline, track.id, targetStart, targetStart + duration);
   if (conflict) throw new TimelineEditError("overlap", `Duplicate would overlap existing clip "${conflict.id}" on track "${track.id}".`);
 
-  const copy: Clip = { id: createId("clip"), trackId: track.id, timelineStart: targetStart, content: original.content };
+  // Spread (not a fresh literal) so the copy keeps every per-clip property — notably `visual` — rather than silently resetting the duplicate to default placement.
+  const copy: Clip = { ...original, id: createId("clip"), trackId: track.id, timelineStart: targetStart };
   const clips = { ...timeline.clips, [copy.id]: copy };
   return {
     timeline: { ...timeline, clips, tracks: { ...timeline.tracks, [track.id]: withTrack(track, { clipIds: sortedByStart([...track.clipIds, copy.id], clips) }) } },
@@ -311,7 +322,8 @@ export function splitClip(timeline: TimelineModel, clipId: string, atFrame: numb
   }
 
   const left: Clip = withContent(clip, leftContent);
-  const right: Clip = { id: createId("clip"), trackId: track.id, timelineStart: atFrame, content: rightContent };
+  // Spread from the original so the right piece inherits `visual` (transform/crop/opacity/matte) — a split must never make half the clip jump to a different place on screen.
+  const right: Clip = { ...clip, id: createId("clip"), timelineStart: atFrame, content: rightContent };
 
   const clips = { ...timeline.clips, [left.id]: left, [right.id]: right };
   const clipIds = sortedByStart([...track.clipIds, right.id], clips); // right.id wasn't in track.clipIds yet; left.id already was
@@ -320,6 +332,215 @@ export function splitClip(timeline: TimelineModel, clipId: string, atFrame: numb
     left,
     right,
   };
+}
+
+// ---------------------------------------------------------------------------
+// VISUAL / CONTENT PROPERTIES (composition engine inputs — see visual.ts)
+// ---------------------------------------------------------------------------
+
+function resolvePatchedVisual(timeline: TimelineModel, clip: Clip, patch: ClipVisualPatch): ClipVisual {
+  if (!hasVisual(clip.content.kind)) {
+    throw new TimelineEditError("kind-mismatch", `"${clip.content.kind}" clips have no visual properties.`);
+  }
+  const base = clip.visual ?? defaultClipVisual(timeline.composition.width, timeline.composition.height);
+  try {
+    return applyVisualPatch(base, patch);
+  } catch (e) {
+    if (e instanceof InvalidVisualError) throw new TimelineEditError("invalid-visual", e.message);
+    throw e;
+  }
+}
+
+/** Transform/crop/opacity/blend/fit/matte edit. Deep-merges the patch onto the clip's current (or default) visual. */
+export function setClipVisual(timeline: TimelineModel, clipId: string, patch: ClipVisualPatch): TimelineModel {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  const visual = resolvePatchedVisual(timeline, clip, patch);
+  return withPatchedClip(timeline, clipId, (c) => ({ ...c, visual }));
+}
+
+/**
+ * Visual edits to several clips as ONE atomic operation (one undo step) —
+ * multi-object move/nudge/align. Every clip and its track lock are validated
+ * and every patch is applied BEFORE anything is committed: a batch that would
+ * partially fail never partially applies (same contract as deleteClips).
+ */
+export function setClipVisuals(timeline: TimelineModel, patches: Readonly<Record<string, ClipVisualPatch>>): TimelineModel {
+  const next: Record<string, Clip> = {};
+  for (const [clipId, patch] of Object.entries(patches)) {
+    const clip = requireClip(timeline, clipId);
+    requireUnlocked(requireTrack(timeline, clip.trackId));
+    next[clipId] = { ...clip, visual: resolvePatchedVisual(timeline, clip, patch) };
+  }
+  return { ...timeline, clips: { ...timeline.clips, ...next } };
+}
+
+/**
+ * "Duplicate" as a canvas editor means it: a second, independent LAYER with
+ * the same timing, stacked directly above the original — not a copy placed
+ * later in time (that's duplicateClip). Each copy gets its own new track of
+ * the same kind (a track can't hold two overlapping clips), inherits the
+ * original's visual, and is offset by `offset` composition px so it's
+ * visibly distinct. One atomic op / one undo step for the whole batch.
+ * Copies share the original's MediaSourceRef — the source is never copied.
+ */
+export function duplicateClipsAsLayers(
+  timeline: TimelineModel,
+  clipIds: readonly string[],
+  offset: { x: number; y: number } = { x: 0, y: 0 },
+): { timeline: TimelineModel; clips: Clip[] } {
+  let tl = timeline;
+  const created: Clip[] = [];
+  for (const clipId of clipIds) {
+    const original = requireClip(tl, clipId);
+    const sourceTrack = requireTrack(tl, original.trackId);
+    const { timeline: withTrack_, track } = addTrack(tl, sourceTrack.kind, `${sourceTrack.name} copy`);
+    tl = reorderTrack(withTrack_, track.id, tl.trackIds.indexOf(sourceTrack.id));
+    const visual = hasVisual(original.content.kind)
+      ? applyVisualPatch(original.visual ?? defaultClipVisual(tl.composition.width, tl.composition.height), {
+          transform: {
+            x: (original.visual?.transform.x ?? tl.composition.width / 2) + offset.x,
+            y: (original.visual?.transform.y ?? tl.composition.height / 2) + offset.y,
+          },
+        })
+      : undefined;
+    const copy: Clip = { ...original, id: createId("clip"), trackId: track.id, ...(visual ? { visual } : {}) };
+    tl = {
+      ...tl,
+      clips: { ...tl.clips, [copy.id]: copy },
+      tracks: { ...tl.tracks, [track.id]: withTrack(tl.tracks[track.id], { clipIds: [copy.id] }) },
+    };
+    created.push(copy);
+  }
+  return { timeline: tl, clips: created };
+}
+
+export interface AuthoredContentPatch {
+  text?: string;
+  textStyle?: TextStylePatch;
+  shape?: Partial<ShapeSpec>;
+}
+
+/** Text/text-style/shape edits on timeline-authored content. Duration and source are deliberately not patchable here — those are trim/replace operations with their own invariants. */
+export function updateAuthoredContent(
+  timeline: TimelineModel,
+  clipId: string,
+  patch: AuthoredContentPatch,
+): TimelineModel {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  const content = clip.content;
+  if (isTrimmableContent(content)) {
+    throw new TimelineEditError("kind-mismatch", `"${content.kind}" clips have no authored text/shape content.`);
+  }
+  if ((patch.text !== undefined || patch.textStyle) && content.kind !== "text") {
+    throw new TimelineEditError("kind-mismatch", "text/textStyle only apply to text clips.");
+  }
+  if (patch.shape && !(content.kind === "graphic" && content.shape)) {
+    throw new TimelineEditError("kind-mismatch", "shape only applies to shape graphic clips.");
+  }
+  const next: ClipContent = { ...content };
+  if (patch.text !== undefined) next.text = patch.text;
+  if (patch.textStyle) next.textStyle = patchTextStyle(content.textStyle, patch.textStyle);
+  if (patch.shape && content.shape) next.shape = { ...content.shape, ...patch.shape };
+  return withPatchedClip(timeline, clipId, (c) => withContent(c, next));
+}
+
+/**
+ * Changes output resolution/background. Not blocked by any track lock (it's
+ * project-level).
+ *
+ * `reposition` (only matters when the size changes):
+ *  - "proportional" (default): every explicit layer position and every guide
+ *    is scaled by the size ratio, so layout survives an aspect change — a
+ *    lower-third stays a lower-third, centered text stays centered, going
+ *    1920x1080 <-> 1080x1920 <-> 1080x1080. Sizes are NOT scaled.
+ *  - "keep": positions keep their raw composition-px values.
+ * Clips on the derived default visual re-center automatically either way.
+ */
+export function setCompositionSettings(
+  timeline: TimelineModel,
+  patch: Partial<CompositionSettings>,
+  reposition: "proportional" | "keep" = "proportional",
+): TimelineModel {
+  const composition = { ...timeline.composition, ...patch };
+  try {
+    validateCompositionSize(composition.width, composition.height);
+  } catch (e) {
+    throw new TimelineEditError("out-of-range", (e as Error).message);
+  }
+  const kx = composition.width / timeline.composition.width;
+  const ky = composition.height / timeline.composition.height;
+  if (reposition === "keep" || (kx === 1 && ky === 1)) return { ...timeline, composition };
+  const clips: Record<string, Clip> = {};
+  for (const [id, c] of Object.entries(timeline.clips)) {
+    clips[id] = c.visual ? { ...c, visual: { ...c.visual, transform: { ...c.visual.transform, x: c.visual.transform.x * kx, y: c.visual.transform.y * ky } } } : c;
+  }
+  const guides = timeline.guides.map((g) => ({ ...g, position: g.position * (g.axis === "x" ? kx : ky) }));
+  return { ...timeline, composition, clips, guides };
+}
+
+/** One clip's combined edit: content (text/style/shape) and/or visual. */
+export interface ClipEdit {
+  content?: AuthoredContentPatch;
+  visual?: ClipVisualPatch;
+}
+
+/**
+ * Content + visual edits to one or more clips as ONE atomic operation (one
+ * undo step). Needed whenever a single gesture changes both — e.g. resizing a
+ * text box changes its width (content) AND its position (visual, to keep the
+ * opposite edge pinned). All-or-nothing, like setClipVisuals.
+ */
+export function editClips(timeline: TimelineModel, edits: Readonly<Record<string, ClipEdit>>): TimelineModel {
+  let tl = timeline;
+  for (const [clipId, edit] of Object.entries(edits)) {
+    if (edit.content) tl = updateAuthoredContent(tl, clipId, edit.content);
+    if (edit.visual) tl = setClipVisual(tl, clipId, edit.visual);
+  }
+  return tl;
+}
+
+/**
+ * ADD TEXT: a new text layer on its own new text track at the FRONT of the
+ * stack, starting at `atFrame`. One atomic op / one undo step (track + clip).
+ * Text tracks are cheap; giving every new text its own track means it can
+ * never be rejected for overlapping existing text.
+ */
+export function addTextLayer(
+  timeline: TimelineModel,
+  opts: { text: string; atFrame: number; durationFrames: number; style?: TextStylePatch; visual?: ClipVisualPatch; name?: string },
+): { timeline: TimelineModel; clip: Clip; track: Track } {
+  const added = addTrack(timeline, "text", opts.name ?? "Text");
+  const tl = reorderTrack(added.timeline, added.track.id, 0);
+  const content: ClipContent = { kind: "text", text: opts.text, textStyle: patchTextStyle(undefined, opts.style ?? {}), durationFrames: Math.max(1, Math.round(opts.durationFrames)) };
+  const r = insertClip(tl, added.track.id, content, Math.max(0, Math.round(opts.atFrame)), opts.visual);
+  return { timeline: r.timeline, clip: r.clip, track: r.timeline.tracks[added.track.id] };
+}
+
+// ---------------------------------------------------------------------------
+// GUIDES
+// ---------------------------------------------------------------------------
+
+function requireFinitePosition(position: number): void {
+  if (!Number.isFinite(position)) throw new TimelineEditError("out-of-range", `Guide position must be finite, got ${position}.`);
+}
+
+export function addGuide(timeline: TimelineModel, axis: Guide["axis"], position: number): { timeline: TimelineModel; guide: Guide } {
+  requireFinitePosition(position);
+  const guide: Guide = { id: createId("guide"), axis, position };
+  return { timeline: { ...timeline, guides: [...timeline.guides, guide] }, guide };
+}
+
+export function moveGuide(timeline: TimelineModel, guideId: string, position: number): TimelineModel {
+  requireFinitePosition(position);
+  if (!timeline.guides.some((g) => g.id === guideId)) throw new TimelineEditError("guide-not-found", `No guide with id "${guideId}".`);
+  return { ...timeline, guides: timeline.guides.map((g) => (g.id === guideId ? { ...g, position } : g)) };
+}
+
+export function removeGuide(timeline: TimelineModel, guideId: string): TimelineModel {
+  if (!timeline.guides.some((g) => g.id === guideId)) throw new TimelineEditError("guide-not-found", `No guide with id "${guideId}".`);
+  return { ...timeline, guides: timeline.guides.filter((g) => g.id !== guideId) };
 }
 
 // ---------------------------------------------------------------------------

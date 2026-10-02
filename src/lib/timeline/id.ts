@@ -17,6 +17,22 @@ export function createId(prefix: string): string {
   return `${prefix}-${next}`;
 }
 
+/**
+ * Advances counters past every id in `ids` that follows the "<prefix>-<n>"
+ * convention. MUST run whenever a saved project is loaded: counters live in
+ * module memory, so in a fresh session they restart at 0 and the next
+ * createId("clip") would collide with a loaded "clip-1" — silently
+ * overwriting a clip in the clips map.
+ */
+export function reserveIds(ids: Iterable<string>): void {
+  for (const id of ids) {
+    const m = /^(.*)-(\d+)$/.exec(id);
+    if (!m) continue;
+    const n = Number(m[2]);
+    if (n > (counters.get(m[1]) ?? 0)) counters.set(m[1], n);
+  }
+}
+
 /** Test-only: resets every counter back to 0 so test output is reproducible across files/runs. */
 export function resetIdCountersForTests(): void {
   counters.clear();
