@@ -16,6 +16,7 @@ import { createTrack, withTrack, type Track, type TrackKind } from "./track";
 import { findOverlap, getClip, getTrack, getTrackClips, validateCompositionSize, type CompositionSettings, type Guide, type TimelineModel } from "./model";
 import { applyVisualPatch, defaultClipVisual, InvalidVisualError, type ClipVisual, type ClipVisualPatch, type ShapeSpec } from "./visual";
 import { patchTextStyle, type TextStylePatch } from "./text-style";
+import { normalizeShapeSpec, normalizeSvgSpec, patchShapeSpec, patchSvgSpec, type ShapePatch, type SvgPatch, type SvgSpec } from "./shape-style";
 
 const MIN_CLIP_DURATION_FRAMES = 1;
 
@@ -418,7 +419,8 @@ export function duplicateClipsAsLayers(
 export interface AuthoredContentPatch {
   text?: string;
   textStyle?: TextStylePatch;
-  shape?: Partial<ShapeSpec>;
+  shape?: ShapePatch;
+  svg?: SvgPatch;
 }
 
 /** Text/text-style/shape edits on timeline-authored content. Duration and source are deliberately not patchable here — those are trim/replace operations with their own invariants. */
@@ -439,10 +441,14 @@ export function updateAuthoredContent(
   if (patch.shape && !(content.kind === "graphic" && content.shape)) {
     throw new TimelineEditError("kind-mismatch", "shape only applies to shape graphic clips.");
   }
+  if (patch.svg && !(content.kind === "graphic" && content.svg)) {
+    throw new TimelineEditError("kind-mismatch", "svg only applies to SVG graphic clips.");
+  }
   const next: ClipContent = { ...content };
   if (patch.text !== undefined) next.text = patch.text;
   if (patch.textStyle) next.textStyle = patchTextStyle(content.textStyle, patch.textStyle);
-  if (patch.shape && content.shape) next.shape = { ...content.shape, ...patch.shape };
+  if (patch.shape && content.shape) next.shape = patchShapeSpec(content.shape, patch.shape);
+  if (patch.svg && content.svg) next.svg = patchSvgSpec(normalizeSvgSpec(content.svg) ?? content.svg, patch.svg);
   return withPatchedClip(timeline, clipId, (c) => withContent(c, next));
 }
 
@@ -499,6 +505,30 @@ export function editClips(timeline: TimelineModel, edits: Readonly<Record<string
     if (edit.visual) tl = setClipVisual(tl, clipId, edit.visual);
   }
   return tl;
+}
+
+/**
+ * ADD GRAPHIC: a new shape or SVG graphic on its own new graphic track at the
+ * FRONT, starting at `atFrame`. One atomic op / one undo step. The spec is
+ * normalized on the way in, like every other entry point.
+ */
+export function addGraphicLayer(
+  timeline: TimelineModel,
+  opts: { graphic: { shape: ShapeSpec } | { svg: SvgSpec }; atFrame: number; durationFrames: number; visual?: ClipVisualPatch; name?: string },
+): { timeline: TimelineModel; clip: Clip; track: Track } {
+  let graphic: { shape: ShapeSpec } | { svg: SvgSpec };
+  if ("shape" in opts.graphic) graphic = { shape: normalizeShapeSpec(opts.graphic.shape) };
+  else {
+    const svg = normalizeSvgSpec(opts.graphic.svg);
+    if (!svg) throw new TimelineEditError("invalid-visual", "That SVG couldn't be read.");
+    graphic = { svg };
+  }
+  const name = opts.name ?? ("shape" in graphic ? graphic.shape.type[0].toUpperCase() + graphic.shape.type.slice(1) : "SVG graphic");
+  const added = addTrack(timeline, "graphic", name);
+  const tl = reorderTrack(added.timeline, added.track.id, 0);
+  const content: ClipContent = { kind: "graphic", ...graphic, durationFrames: Math.max(1, Math.round(opts.durationFrames)) };
+  const r = insertClip(tl, added.track.id, content, Math.max(0, Math.round(opts.atFrame)), opts.visual);
+  return { timeline: r.timeline, clip: r.clip, track: r.timeline.tracks[added.track.id] };
 }
 
 /**

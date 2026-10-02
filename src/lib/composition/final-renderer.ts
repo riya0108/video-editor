@@ -1,10 +1,11 @@
 import type { TimelineModel } from "../timeline/model";
 import { createCanvas, ensureSize, get2d, type AnyCanvas } from "./canvas";
-import { drawResolvedFrame, type Ctx2D, type LayerPixels } from "./draw";
+import { drawResolvedFrame, svgRasterSizeFor, type Ctx2D, type LayerPixels } from "./draw";
 import type { FrameProvider } from "./frame-provider";
 import { FINAL_PROFILE } from "./render-profile";
 import { resolveFrame, type ResolvedFrame } from "./resolve";
 import { cssFont, type TextMeasurer } from "./text-layout";
+import { sharedSvgRasterizer, type SvgRasterizer } from "./svg-raster";
 
 export class FinalRenderError extends Error {
   constructor(
@@ -41,6 +42,7 @@ export class FinalRenderer {
   constructor(
     private readonly provider: FrameProvider,
     private readonly measurer: TextMeasurer,
+    private readonly svg: SvgRasterizer = sharedSvgRasterizer(),
   ) {
     this.canvas = createCanvas(2, 2);
     this.ctx = get2d(this.canvas);
@@ -66,6 +68,10 @@ export class FinalRenderer {
           const px: LayerPixels = {};
           if (layer.content.type === "media") {
             px.image = await this.provider.getExactFrame({ sourceId: layer.content.sourceId, sourceFrame: layer.content.sourceFrame, slotKey: layer.clipId });
+          } else if (layer.content.type === "svg") {
+            // Rasterized at exactly the output pixel size — vector-sharp in the export.
+            const { width: rw, height: rh } = svgRasterSizeFor(layer, profile.scale, "final");
+            px.image = await this.svg.get(layer.content.svg, rw, rh);
           }
           if (layer.matte) {
             px.matte = await this.provider.getExactFrame({ sourceId: layer.matte.sourceId, sourceFrame: layer.matte.sourceFrame, slotKey: `${layer.clipId}#matte` });
@@ -74,7 +80,7 @@ export class FinalRenderer {
         }),
       );
     } catch (e) {
-      throw new FinalRenderError(`Frame ${frame}: could not decode an exact source frame — ${(e as Error).message}`, frame);
+      throw new FinalRenderError(`Frame ${frame}: could not produce a layer's pixels (media frame or SVG) — ${(e as Error).message}`, frame);
     }
 
     // Exactly composition size — never a preview scale.

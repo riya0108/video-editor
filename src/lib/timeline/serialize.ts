@@ -2,6 +2,7 @@ import { reserveIds } from "./id";
 import { DEFAULT_COMPOSITION, validateCompositionSize, type Guide, type TimelineModel } from "./model";
 import { applyVisualPatch, defaultClipVisual } from "./visual";
 import { normalizeTextStyle } from "./text-style";
+import { normalizeShapeSpec, normalizeSvgSpec } from "./shape-style";
 import { clipTimelineEnd, hasVisual, isTrimmableContent, type Clip } from "./clip";
 import type { Track } from "./track";
 
@@ -17,14 +18,15 @@ import type { Track } from "./track";
  * a ProjectFormatError — a corrupt or hand-edited file never loads as a
  * half-valid project. Older files are upgraded: v1 (before guides/
  * composition) gets defaults; v2 text styles (italic/align, implicit
- * background/stroke) migrate to the v3 TextStyle via normalizeTextStyle.
+ * background/stroke) migrate to the v3 TextStyle via normalizeTextStyle; v3
+ * shapes (fill/stroke as optional color strings) migrate to v4 ShapeSpec.
  *
  * Loading also reserves every loaded id so new ids can't collide (see
  * id.ts reserveIds).
  */
 
 export const PROJECT_FORMAT = "clipbench-timeline";
-export const PROJECT_VERSION = 3;
+export const PROJECT_VERSION = 4;
 
 export class ProjectFormatError extends Error {
   constructor(message: string) {
@@ -100,6 +102,24 @@ export function deserializeTimeline(json: string): TimelineModel {
         if (typeof c.content.text !== "string") fail(`Text clip "${clipId}" has no text.`);
         // v2 -> v3: legacy style names (italic/align/...) migrate; any invalid value is normalized rather than trusted.
         c.content.textStyle = normalizeTextStyle(c.content.textStyle);
+      }
+      if (c.content.kind === "graphic") {
+        // v3 -> v4: shapes migrate (fill/stroke color strings -> toggle + color) and are normalized; embedded SVG must still be valid.
+        if (c.content.shape !== undefined) {
+          const raw = { ...(c.content.shape as unknown as Record<string, unknown>) };
+          // Pre-v4 files: an absent fill/stroke meant "off" (they were optional color strings). Only safe to apply here, where the file's version is known.
+          if ((parsed as { version: number }).version < 4) {
+            if (!("fill" in raw)) raw.fill = false;
+            if (!("stroke" in raw)) raw.stroke = false;
+          }
+          c.content.shape = normalizeShapeSpec(raw);
+        }
+        if (c.content.svg !== undefined) {
+          const svg = normalizeSvgSpec(c.content.svg);
+          if (!svg) fail(`Graphic clip "${clipId}" has an invalid embedded SVG.`);
+          c.content.svg = svg;
+        }
+        if (!c.content.shape && !c.content.svg && !c.content.source) fail(`Graphic clip "${clipId}" has no shape, SVG or source.`);
       }
       if (c.timelineStart < prevEnd) fail(`Clips overlap on track "${trackId}".`);
       prevEnd = clipTimelineEnd(c);

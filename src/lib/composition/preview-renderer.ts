@@ -1,11 +1,12 @@
 import type { TimelineModel } from "../timeline/model";
 import type { ClipVisual } from "../timeline/visual";
 import { createCanvas, ensureSize, get2d, type AnyCanvas } from "./canvas";
-import { drawResolvedFrame, type Ctx2D, type DrawStats, type LayerPixels } from "./draw";
+import { drawResolvedFrame, svgRasterSizeFor, type Ctx2D, type DrawStats, type LayerPixels } from "./draw";
 import type { FrameProvider } from "./frame-provider";
 import { renderSize, type RenderProfile } from "./render-profile";
 import { resolveFrame, type ResolvedFrame } from "./resolve";
 import type { TextMeasurer } from "./text-layout";
+import { sharedSvgRasterizer, type SvgRasterizer } from "./svg-raster";
 
 export interface PreviewRenderResult {
   resolved: ResolvedFrame;
@@ -31,6 +32,7 @@ export class PreviewRenderer {
   constructor(
     private readonly provider: FrameProvider,
     private readonly measurer: TextMeasurer,
+    private readonly svg: SvgRasterizer = sharedSvgRasterizer(),
   ) {}
 
   /** The most recently rendered preview raster (composition-shaped, preview-resolution). */
@@ -58,6 +60,9 @@ export class PreviewRenderer {
       const px: LayerPixels = {};
       if (layer.content.type === "media") {
         px.image = this.provider.peekFrame({ sourceId: layer.content.sourceId, sourceFrame: layer.content.sourceFrame, slotKey: layer.clipId }) ?? undefined;
+      } else if (layer.content.type === "svg") {
+        const { width: rw, height: rh } = svgRasterSizeFor(layer, renderScale, "preview");
+        px.image = this.svg.peek(layer.content.svg, rw, rh) ?? undefined;
       }
       if (layer.matte) {
         px.matte = this.provider.peekFrame({ sourceId: layer.matte.sourceId, sourceFrame: layer.matte.sourceFrame, slotKey: `${layer.clipId}#matte` }) ?? undefined;

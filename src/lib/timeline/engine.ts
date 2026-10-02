@@ -204,6 +204,13 @@ export class TimelineEngine {
     return this.runVoid(() => ops.editClips(this.timeline, edits));
   }
 
+  /** Adds a shape/SVG graphic at the front (own track) and selects it. One undo step. */
+  addGraphicLayer(opts: Parameters<typeof ops.addGraphicLayer>[1]): EditResult<{ clip: Clip; track: Track }> {
+    const r = this.run(() => ops.addGraphicLayer(this.timeline, opts));
+    if (r.ok) this.select(r.clip.id);
+    return r;
+  }
+
   /** Adds a text layer at the front (own track) and selects it. One undo step. */
   addTextLayer(opts: Parameters<typeof ops.addTextLayer>[1]): EditResult<{ clip: Clip; track: Track }> {
     const r = this.run(() => ops.addTextLayer(this.timeline, opts));

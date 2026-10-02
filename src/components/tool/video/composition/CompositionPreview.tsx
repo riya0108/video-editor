@@ -5,6 +5,8 @@ import type { ClipVisual, ClipVisualPatch } from "../../../../lib/timeline/visua
 import { applyVisualPatch, type TextStyle } from "../../../../lib/timeline/visual";
 import { editClips, type AuthoredContentPatch, type ClipEdit } from "../../../../lib/timeline/operations";
 import { textResize } from "../../../../lib/text/text-transform";
+import { graphicResize, type GraphicSpec } from "../../../../lib/graphics/graphic-transform";
+import { sharedSvgRasterizer } from "../../../../lib/composition/svg-raster";
 import TextEditOverlay from "./TextEditOverlay";
 import {
   buildSnapTargets,
@@ -144,7 +146,7 @@ type Drag =
   | { type: "pan"; lastX: number; lastY: number }
   | { type: "move"; members: { clipId: string; start: ClipVisual; box: BoxSize }[]; targets: SnapTargets | null; moved: boolean; startX: number; startY: number }
   | { type: "marquee"; from: Point; additive: boolean; base: string[]; moved: boolean }
-  | (ClipDrag & { type: "resize"; handle: HandleId; text?: { text: string; style: TextStyle } })
+  | (ClipDrag & { type: "resize"; handle: HandleId; text?: { text: string; style: TextStyle }; graphic?: GraphicSpec })
   | (ClipDrag & { type: "crop"; handle: HandleId })
   | (ClipDrag & { type: "rotate"; startComp: Point })
   | (ClipDrag & { type: "anchor" })
@@ -206,7 +208,7 @@ export default function CompositionPreview({
   const [snapLines, setSnapLines] = useState<SnapLine[]>([]);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [marquee, setMarquee] = useState<Rect | null>(null);
-  /** Live text-box resize (content + position), rendered through a draft timeline until release. */
+  /** Live text/graphic resize (content size + position), rendered through a draft timeline until release. */
   const [textDraft, setTextDraft] = useState<Record<string, ClipEdit> | null>(null);
   const [cursor, setCursor] = useState("default");
   const [stats, setStats] = useState<PreviewRenderResult | null>(null);
@@ -309,6 +311,8 @@ export default function CompositionPreview({
     dirtyRef.current = true;
   });
   useEffect(() => provider.onFrameReady?.(() => (dirtyRef.current = true)), [provider]);
+  // An SVG raster finishing at a new size (after zoom/resize) must trigger a redraw.
+  useEffect(() => sharedSvgRasterizer().onReady(() => (dirtyRef.current = true)), []);
   useEffect(() => {
     if (typeof document === "undefined" || !document.fonts) return;
     const onFonts = () => {
@@ -449,7 +453,9 @@ export default function CompositionPreview({
         const base: ClipDrag = { clipId: sel.clipId, start: sel.visual, box: sel.box, targets: targetsFor(sel.clipId), moved: false };
         const clipContent = timeline.clips[sel.clipId]?.content;
         const text = sel.content.type === "text" && clipContent?.kind === "text" ? { text: clipContent.text ?? "", style: sel.content.style } : undefined;
-        if (hit.type === "handle") dragRef.current = mode === "crop" ? { ...base, type: "crop", handle: hit.handle } : { ...base, type: "resize", handle: hit.handle, text };
+        // Shapes/SVG resize their OWN size (strokes, radii, arrowheads keep their authored size; SVG re-rasterizes sharp) — see lib/graphics/graphic-transform.ts.
+        const graphic: GraphicSpec | undefined = sel.content.type === "shape" ? { kind: "shape", shape: sel.content.shape } : sel.content.type === "svg" ? { kind: "svg", svg: sel.content.svg } : undefined;
+        if (hit.type === "handle") dragRef.current = mode === "crop" ? { ...base, type: "crop", handle: hit.handle } : { ...base, type: "resize", handle: hit.handle, text, graphic };
         else if (hit.type === "anchor") dragRef.current = { ...base, type: "anchor" };
         else dragRef.current = { ...base, type: "rotate", startComp: cp };
         return capture();
@@ -599,6 +605,11 @@ export default function CompositionPreview({
           setTextDraft({ [d.clipId]: r.edit });
           return;
         }
+        if (d.type === "resize" && d.graphic) {
+          const r = graphicResize({ graphic: d.graphic, visual: d.start, box: d.box, handle: d.handle, pointer: p, freeAspect: e.shiftKey, fromAnchor: e.altKey });
+          setTextDraft({ [d.clipId]: r.edit });
+          return;
+        }
         const next =
           d.type === "crop"
             ? cropFromHandle(d.start, d.box, d.handle, p)
@@ -656,7 +667,7 @@ export default function CompositionPreview({
     }
     if (d.type === "move") {
       if (d.moved) commitDrafts(Object.fromEntries(d.members.map((m) => [m.clipId, m.start])), draft);
-    } else if (d.type === "resize" && d.text) {
+    } else if (d.type === "resize" && (d.text || d.graphic)) {
       if (d.moved && textDraft?.[d.clipId]) onCommitEdits?.({ [d.clipId]: textDraft[d.clipId] });
       setTextDraft(null);
     } else if (d.moved) commitDrafts({ [d.clipId]: d.start }, draft);

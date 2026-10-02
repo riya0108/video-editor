@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeShapeSpec } from "../timeline/shape-style";
 import { createTimeline, type TimelineModel } from "../timeline/model";
 import { addTrack, insertClip, setClipVisual, setTrackVisible, splitClip } from "../timeline/operations";
 import type { ClipContent } from "../timeline/clip";
@@ -33,7 +34,7 @@ function build(): { tl: TimelineModel; ids: Record<string, string> } {
   };
   ids.mainClip = put("main", video("hd", 10, 110));
   ids.overlayClip = put("overlay", { kind: "overlay", source: { sourceId: "sq" }, sourceInFrame: 0, sourceOutFrame: 50 }, 20);
-  ids.shapeClip = put("shape", { kind: "graphic", shape: { type: "rect", width: 200, height: 100, fill: "#f00", strokeWidth: 0, cornerRadius: 0 }, durationFrames: 100 });
+  ids.shapeClip = put("shape", { kind: "graphic", shape: normalizeShapeSpec({ type: "rect", width: 200, height: 100, fill: "#f00", strokeWidth: 0, cornerRadius: 0 }), durationFrames: 100 });
   ids.textClip = put("text", { kind: "text", text: "Hello", durationFrames: 100 });
   ids.musicClip = put("music", { kind: "audio", source: { sourceId: "aud" }, sourceInFrame: 0, sourceOutFrame: 100 });
   return { tl, ids };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeShapeSpec } from "../timeline/shape-style";
 import { createTimeline } from "../timeline/model";
 import { addTrack, insertClip, setClipVisual } from "../timeline/operations";
 import { resolveFrame } from "./resolve";
@@ -47,9 +48,9 @@ describe("viewport", () => {
     const back = addTrack(tl, "graphic", "back");
     tl = back.timeline;
     const shape = { type: "rect" as const, width: 400, height: 100, fill: "#fff", strokeWidth: 0, cornerRadius: 0 };
-    const a = insertClip(tl, front.track.id, { kind: "graphic", shape, durationFrames: 10 }, 0);
+    const a = insertClip(tl, front.track.id, { kind: "graphic", shape: normalizeShapeSpec(shape), durationFrames: 10 }, 0);
     tl = a.timeline;
-    const b = insertClip(tl, back.track.id, { kind: "graphic", shape: { ...shape, width: 1920, height: 1080 }, durationFrames: 10 }, 0);
+    const b = insertClip(tl, back.track.id, { kind: "graphic", shape: normalizeShapeSpec({ ...shape, width: 1920, height: 1080 }), durationFrames: 10 }, 0);
     tl = b.timeline;
     // Rotate the front bar 90°: it becomes a 100x400 vertical bar centered at (960,540).
     tl = setClipVisual(tl, a.clip.id, { transform: { rotation: 90 } });
@@ -106,7 +107,7 @@ describe("handle picking", () => {
     let tl = createTimeline(30);
     const t = addTrack(tl, "graphic", "g");
     tl = t.timeline;
-    const c = insertClip(tl, t.track.id, { kind: "graphic", shape: { type: "rect", width: 600, height: 12, fill: "#fff", strokeWidth: 0, cornerRadius: 0 }, durationFrames: 5 }, 0);
+    const c = insertClip(tl, t.track.id, { kind: "graphic", shape: normalizeShapeSpec({ type: "rect", width: 600, height: 12, fill: "#fff", strokeWidth: 0, cornerRadius: 0 }), durationFrames: 5 }, 0);
     tl = c.timeline;
     const layer = resolveFrame(tl, 0, fakeContext({})).layers[0];
     const lay = selectionLayout(layer, { zoom: 1, panX: 0, panY: 0 }, "transform");

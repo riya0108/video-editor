@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { normalizeShapeSpec } from "../timeline/shape-style";
 import { TimelineEngine } from "../timeline/engine";
 import { createTimeline, type TimelineModel } from "../timeline/model";
 import { addTrack, insertClip, setClipVisual, setClipVisuals, duplicateClipsAsLayers, setTrackLocked } from "../timeline/operations";
@@ -56,7 +57,7 @@ function build(comp = { width: 1920, height: 1080 }) {
   };
   const video = (sourceId: string): ClipContent => ({ kind: "video", source: { sourceId }, sourceInFrame: 0, sourceOutFrame: 60 });
   add("text", "text", { kind: "text", text: "Title", durationFrames: 60 });
-  add("shape", "graphic", { kind: "graphic", shape: { type: "rect", width: 300, height: 120, fill: "#f00", strokeWidth: 0, cornerRadius: 0 }, durationFrames: 60 });
+  add("shape", "graphic", { kind: "graphic", shape: normalizeShapeSpec({ type: "rect", width: 300, height: 120, fill: "#f00", strokeWidth: 0, cornerRadius: 0 }), durationFrames: 60 });
   add("cutout", "image", { kind: "image", source: { sourceId: "cutout" }, durationFrames: 60 });
   add("png", "image", { kind: "image", source: { sourceId: "transparentPng" }, durationFrames: 60 });
   add("square", "image", { kind: "image", source: { sourceId: "square" }, durationFrames: 60 });

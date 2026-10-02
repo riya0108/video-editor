@@ -8,13 +8,18 @@ import { deserializeTimeline, serializeTimeline } from "../../../../lib/timeline
 import { isTrimmableContent } from "../../../../lib/timeline/clip";
 import { clipTimelineEnd, type Clip } from "../../../../lib/timeline/clip";
 import { defaultClipVisual, type ClipVisual, type ClipVisualPatch } from "../../../../lib/timeline/visual";
-import { normalizeTextStyle, type TextStyle, type TextStylePatch } from "../../../../lib/timeline/text-style";
+import { normalizeTextStyle, type TextStyle } from "../../../../lib/timeline/text-style";
 import TextPanel, { type TextPanelProps } from "./TextPanel";
+import GraphicsPanel from "./GraphicsPanel";
+import { normalizeShapeSpec, normalizeSvgSpec, shapePreset, type ShapePreset } from "../../../../lib/timeline/shape-style";
+import { GRAPHICS_LIBRARY } from "../../../../lib/graphics/library";
+import { svgSpecFromMarkup } from "../../../../lib/graphics/svg";
+import type { AuthoredContentPatch } from "../../../../lib/timeline/operations";
 import TimelinePanel from "./TimelinePanel";
+import { classifyImport, describeDecodeFailure, dragHasFiles, filesFromDataTransfer } from "../../../../lib/composition/media-import";
 import { createCanvasTextMeasurer, FinalRenderer, MediaFrameProvider, FinalRenderError, resolveClipLayer, safeZones, type BoxSize, type ResolvedLayer, type TextLayout, type SafeZone, type SafeZonePreset } from "../../../../lib/composition";
 import TransformPanel from "./TransformPanel";
 import MultiSelectionPanel from "./MultiSelectionPanel";
-import { validateUploadedMediaFile } from "../../../../lib/media/upload-validation";
 
 /**
  * COMPOSITION PLAYGROUND — internal page that drives the composition &
@@ -91,6 +96,8 @@ export default function CompositionPlaygroundPanel() {
   const [, bump] = useReducer((x: number) => x + 1, 0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [dragDepth, setDragDepth] = useState(0);
 
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -98,7 +105,8 @@ export default function CompositionPlaygroundPanel() {
   const [safeZonePreset, setSafeZonePreset] = useState<SafeZonePreset>("off");
   const [notice, setNotice] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
-  const [textDraft, setTextDraft] = useState<{ clipId: string; patch: TextStylePatch } | null>(null);
+  /** Uncommitted inspector edit (text style / shape / SVG) — rendered live, committed as one undo step. */
+  const [contentDraft, setContentDraft] = useState<{ clipId: string; patch: AuthoredContentPatch } | null>(null);
   const [styleClipboard, setStyleClipboard] = useState<TextStyle | null>(null);
 
   // --- build the demo project once ---
@@ -125,7 +133,7 @@ export default function CompositionPlaygroundPanel() {
         const main = must(engine.addTrack("video", "Main video")).track;
         const backdrop = must(engine.addTrack("graphic", "Backdrop")).track;
 
-        must(engine.insertClip(backdrop.id, { kind: "graphic", shape: { type: "rect", width: 1920, height: 1080, fill: "#312e81", strokeWidth: 0, cornerRadius: 0 }, durationFrames }, 0));
+        must(engine.insertClip(backdrop.id, { kind: "graphic", shape: normalizeShapeSpec({ type: "rect", width: 1920, height: 1080, fill: "#312e81", strokeWidth: 0, cornerRadius: 0 }), durationFrames }, 0));
         must(engine.insertClip(main.id, { kind: "video", source: { sourceId: "demo-video", sourceDurationFrames: durationFrames }, sourceInFrame: 0, sourceOutFrame: durationFrames }, 0));
         must(
           engine.insertClip(pip.id, { kind: "overlay", source: { sourceId: "demo-video", sourceDurationFrames: durationFrames }, sourceInFrame: 0, sourceOutFrame: durationFrames }, 0, {
@@ -136,7 +144,7 @@ export default function CompositionPlaygroundPanel() {
         );
         must(engine.insertClip(logo.id, { kind: "image", source: { sourceId: "logo" }, durationFrames }, 0, { fit: "none", transform: { x: 200, y: 200, scaleX: 0.5, scaleY: 0.5 }, opacity: 0.9 }));
         must(
-          engine.insertClip(badge.id, { kind: "graphic", shape: { type: "rect", width: 260, height: 84, fill: "#dc2626", stroke: "#ffffff", strokeWidth: 6, cornerRadius: 42 }, durationFrames }, 0, {
+          engine.insertClip(badge.id, { kind: "graphic", shape: normalizeShapeSpec({ type: "rect", width: 260, height: 84, fill: "#dc2626", stroke: "#ffffff", strokeWidth: 6, cornerRadius: 42 }), durationFrames }, 0, {
             transform: { x: 1700, y: 120, rotation: 4 },
           }),
         );
@@ -218,6 +226,62 @@ export default function CompositionPlaygroundPanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, [engine]);
 
+  /**
+   * Adds picked/dropped files as layers: each on its own new track at the
+   * FRONT, starting at the PLAYHEAD (so it's visible right away — adding at
+   * 0:00 made a short clip invisible whenever the playhead was past its end),
+   * selected, with a confirmation. Every rejection or decode failure is
+   * reported by file name with a concrete fix; one bad file doesn't stop the rest.
+   */
+  const addMediaFiles = async (files: File[]) => {
+    if (!engine || !provider) return;
+    const errors: string[] = [];
+    const added: string[] = [];
+    const at = frame;
+    for (const file of files) {
+      const c = classifyImport(file);
+      if (!c.ok) {
+        errors.push(c.message);
+        continue;
+      }
+      const id = `upload-${Date.now()}-${added.length}-${Math.random().toString(36).slice(2, 7)}`;
+      const url = URL.createObjectURL(file);
+      try {
+        let r: EditResult<{ clip: Clip }>;
+        if (c.kind === "svg") {
+          URL.revokeObjectURL(url);
+          const { width, height } = engine.timeline.composition;
+          const svg = svgSpecFromMarkup(await file.text(), Math.min(width, height) * 0.5);
+          r = engine.addGraphicLayer({ graphic: { svg }, atFrame: at, durationFrames: 5 * FPS, name: file.name });
+        } else if (c.kind === "video") {
+          const { durationSec } = await provider.addVideo(id, url, FPS);
+          const n = Math.max(1, secondsToFrames(durationSec, FPS, "floor"));
+          const t = engine.addTrack("overlay", file.name);
+          if (!t.ok) throw t.error;
+          engine.reorderTrack(t.track.id, 0);
+          r = engine.insertClip(t.track.id, { kind: "overlay", source: { sourceId: id, label: file.name, sourceDurationFrames: n }, sourceInFrame: 0, sourceOutFrame: n }, at, { transform: { scaleX: 0.5, scaleY: 0.5 } });
+        } else {
+          await provider.addImage(id, file);
+          URL.revokeObjectURL(url); // images are decoded to a bitmap; the URL isn't needed
+          const t = engine.addTrack("image", file.name);
+          if (!t.ok) throw t.error;
+          engine.reorderTrack(t.track.id, 0);
+          r = engine.insertClip(t.track.id, { kind: "image", source: { sourceId: id, label: file.name }, durationFrames: 5 * FPS }, at, { transform: { scaleX: 0.5, scaleY: 0.5 } });
+        }
+        if (!r.ok) throw r.error;
+        engine.select(r.clip.id);
+        added.push(file.name);
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        provider.remove(id);
+        errors.push(describeDecodeFailure(file, c.kind, e));
+      }
+    }
+    setImportErrors(errors);
+    if (added.length > 0) setNotice(`Added ${added.join(", ")} at ${formatTimecode(at, FPS)} — selected and on top.`);
+    bump();
+  };
+
   if (loadError) return <p className="rounded-lg border border-danger-500/40 bg-danger-500/10 p-4 text-body-sm">Could not load the demo project: {loadError}</p>;
   if (!engine || !timeline || !provider || !measurer || !finalRenderer) {
     return (
@@ -234,7 +298,35 @@ export default function CompositionPlaygroundPanel() {
   const selectedLayer = selectedClip ? resolveClipLayer(timeline, selectedClip.id, frame, { getSourceInfo: (id) => provider.getSourceInfo(id), measurer }) : null;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      className="relative flex flex-col gap-4"
+      onDragEnter={(e) => {
+        if (!dragHasFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        setDragDepth((d) => d + 1);
+      }}
+      onDragOver={(e) => {
+        if (!dragHasFiles(e.dataTransfer)) return;
+        e.preventDefault(); // required, or the browser opens the file instead of dropping it here
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!dragHasFiles(e.dataTransfer)) return;
+        setDragDepth((d) => Math.max(0, d - 1));
+      }}
+      onDrop={(e) => {
+        const files = filesFromDataTransfer(e.dataTransfer);
+        if (files.length === 0) return;
+        e.preventDefault();
+        setDragDepth(0);
+        void addMediaFiles(files);
+      }}
+    >
+      {dragDepth > 0 && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-primary-500 bg-primary-500/10 text-body font-semibold text-primary-700 dark:text-primary-200" data-testid="drop-overlay">
+          Drop images or videos to add them at the playhead
+        </div>
+      )}
       <ProjectBar
         composition={timeline.composition}
         canUndo={engine.canUndo}
@@ -242,6 +334,14 @@ export default function CompositionPlaygroundPanel() {
         onUndo={() => (engine.undo(), bump())}
         onRedo={() => (engine.redo(), bump())}
         onChange={(patch) => apply(engine.setCompositionSettings(patch))}
+        onAddShape={(choice) => {
+          const { width, height } = engine.timeline.composition;
+          const lib = GRAPHICS_LIBRARY.find((g) => g.id === choice);
+          const graphic = lib ? { svg: svgSpecFromMarkup(lib.markup, Math.min(width, height) * 0.25) } : { shape: shapePreset(choice as ShapePreset, width, height) };
+          const r = engine.addGraphicLayer({ graphic, atFrame: frame, durationFrames: 5 * FPS, name: lib?.label });
+          apply(r);
+          if (r.ok) setNotice(`Added ${lib?.label ?? choice} at ${formatTimecode(frame, FPS)} — selected and on top.`);
+        }}
         onAddText={() => {
           const { width, height } = engine.timeline.composition;
           const r = engine.addTextLayer({
@@ -284,37 +384,22 @@ export default function CompositionPlaygroundPanel() {
             setNotice(`Load failed: ${(e as Error).message}`);
           }
         }}
-        onAddMedia={async (file) => {
-          const validation = validateUploadedMediaFile(file);
-          if (!validation.ok) return setEditError(validation.message ?? "Unsupported file.");
-          const id = `upload-${Date.now()}`;
-          const url = URL.createObjectURL(file);
-          try {
-            if (file.type.startsWith("video/")) {
-              const { durationSec } = await provider.addVideo(id, url, FPS);
-              const n = Math.max(1, secondsToFrames(durationSec, FPS, "floor"));
-              const t = engine.addTrack("overlay", file.name);
-              if (!t.ok) return apply(t);
-              engine.reorderTrack(t.track.id, 0);
-              const r = engine.insertClip(t.track.id, { kind: "overlay", source: { sourceId: id, label: file.name, sourceDurationFrames: n }, sourceInFrame: 0, sourceOutFrame: n }, 0, { transform: { scaleX: 0.5, scaleY: 0.5 } });
-              if (r.ok) engine.select(r.clip.id);
-              apply(r);
-            } else {
-              await provider.addImage(id, file);
-              const t = engine.addTrack("image", file.name);
-              if (!t.ok) return apply(t);
-              engine.reorderTrack(t.track.id, 0);
-              const r = engine.insertClip(t.track.id, { kind: "image", source: { sourceId: id, label: file.name }, durationFrames: duration }, 0, { transform: { scaleX: 0.5, scaleY: 0.5 } });
-              if (r.ok) engine.select(r.clip.id);
-              apply(r);
-            }
-          } catch (e) {
-            setEditError((e as Error).message);
-          }
-        }}
+        onAddMedia={addMediaFiles}
       />
       {notice && <p className="rounded-md bg-(--color-bg-subtle) px-3 py-2 text-caption" role="status">{notice}</p>}
       {editError && <p className="rounded-md bg-warning-500/10 px-3 py-2 text-caption text-warning-700 dark:text-warning-300">Edit rejected: {editError}</p>}
+      {importErrors.length > 0 && (
+        <div role="alert" className="flex items-start gap-2 rounded-md border border-danger-500/30 bg-danger-500/10 px-3 py-2 text-caption" data-testid="import-errors">
+          <ul className="flex-1 list-disc space-y-0.5 pl-4">
+            {importErrors.map((m, i) => (
+              <li key={i}>{m}</li>
+            ))}
+          </ul>
+          <button type="button" onClick={() => setImportErrors([])} className="rounded px-1.5 hover:bg-danger-500/10" aria-label="Dismiss upload errors">
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-2">
@@ -340,7 +425,7 @@ export default function CompositionPlaygroundPanel() {
               else if (text !== c.text) apply(engine.updateAuthoredContent(clipId, { text }));
             }}
             onCommitEdits={(edits) => apply(engine.editClips(edits))}
-            contentDrafts={textDraft ? { [textDraft.clipId]: { textStyle: textDraft.patch } } : undefined}
+            contentDrafts={contentDraft ? { [contentDraft.clipId]: contentDraft.patch } : undefined}
             onAddGuide={(axis, position) => apply(engine.addGuide(axis, position))}
             onMoveGuide={(id, position) => apply(engine.moveGuide(id, position))}
             onRemoveGuide={(id) => apply(engine.removeGuide(id))}
@@ -383,9 +468,9 @@ export default function CompositionPlaygroundPanel() {
                 selectedClip.content.kind === "text"
                   ? {
                       canPasteStyle: styleClipboard !== null,
-                      onDraft: (patch) => setTextDraft(patch ? { clipId: selectedClip.id, patch } : null),
+                      onDraft: (patch) => setContentDraft(patch ? { clipId: selectedClip.id, patch: { textStyle: patch } } : null),
                       onCommit: (patch) => {
-                        setTextDraft(null);
+                        setContentDraft(null);
                         apply(engine.updateAuthoredContent(selectedClip.id, { textStyle: patch }));
                       },
                       onEditText: () => setEditingTextId(selectedClip.id),
@@ -395,6 +480,17 @@ export default function CompositionPlaygroundPanel() {
                         setNotice("Text style copied.");
                       },
                       onPasteStyle: () => styleClipboard && apply(engine.updateAuthoredContent(selectedClip.id, { textStyle: styleClipboard })),
+                    }
+                  : undefined
+              }
+              graphic={
+                selectedClip.content.kind === "graphic" && (selectedClip.content.shape || selectedClip.content.svg)
+                  ? {
+                      onDraft: (patch) => setContentDraft(patch ? { clipId: selectedClip.id, patch } : null),
+                      onCommit: (patch) => {
+                        setContentDraft(null);
+                        apply(engine.updateAuthoredContent(selectedClip.id, patch));
+                      },
                     }
                   : undefined
               }
@@ -433,6 +529,7 @@ function ProjectBar({
   onSave,
   onLoad,
   onAddText,
+  onAddShape,
 }: {
   composition: CompositionSettings;
   canUndo: boolean;
@@ -440,10 +537,11 @@ function ProjectBar({
   onUndo: () => void;
   onRedo: () => void;
   onChange: (patch: Partial<CompositionSettings>) => void;
-  onAddMedia: (file: File) => void;
+  onAddMedia: (files: File[]) => void;
   onSave: () => void;
   onLoad: () => void;
   onAddText: () => void;
+  onAddShape: (choice: string) => void;
 }) {
   const presetIndex = COMPOSITION_PRESETS.findIndex((p) => p.width === composition.width && p.height === composition.height);
   return (
@@ -476,19 +574,48 @@ function ProjectBar({
           ))}
         </select>
       </label>
+      <select
+        aria-label="Add shape or graphic"
+        value=""
+        onChange={(e) => {
+          if (e.target.value) onAddShape(e.target.value);
+          e.target.value = "";
+        }}
+        className="rounded-md border border-(--color-border) bg-(--color-surface) px-2 py-1 font-medium"
+      >
+        <option value="">＋ Add shape…</option>
+        <optgroup label="Shapes">
+          <option value="rect">Rectangle</option>
+          <option value="rounded-rect">Rounded rectangle</option>
+          <option value="circle">Circle</option>
+          <option value="ellipse">Ellipse</option>
+          <option value="polygon">Polygon</option>
+          <option value="line">Line</option>
+          <option value="arrow">Arrow</option>
+        </optgroup>
+        <optgroup label="Graphics (SVG)">
+          {GRAPHICS_LIBRARY.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.label}
+            </option>
+          ))}
+        </optgroup>
+      </select>
       <button type="button" onClick={onAddText} className="flex items-center gap-1.5 rounded-md border border-(--color-border) px-2 py-1 font-medium hover:bg-(--color-bg-subtle)" title="Add a text layer at the playhead">
         <Type className="h-4 w-4" /> Add text
       </button>
       <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-(--color-border) px-2 py-1 hover:bg-(--color-bg-subtle)">
-        <ImagePlus className="h-4 w-4" /> Add media
+        <ImagePlus className="h-4 w-4" /> Add media <span className="text-(--color-text-faint)">(or drop files)</span>
         <input
           type="file"
-          accept="image/*,video/*"
+          multiple
+          // Audio/HEIC are selectable on purpose: picking one shows WHY it can't be added, instead of the file being silently greyed out in the picker.
+          accept="image/*,video/*,.mov,.heic,.heif,audio/*"
           className="sr-only"
           onChange={(e) => {
-            const file = e.target.files?.[0];
+            const files = Array.from(e.target.files ?? []);
             e.target.value = "";
-            if (file) onAddMedia(file);
+            if (files.length) onAddMedia(files);
           }}
         />
       </label>
@@ -587,6 +714,7 @@ function PropertiesPanel({
   onDraft,
   onCommit,
   text,
+  graphic,
 }: {
   clip: Clip;
   layerBox: BoxSize | null;
@@ -598,13 +726,14 @@ function PropertiesPanel({
   onDraft: (v: ClipVisual | null) => void;
   onCommit: (patch: ClipVisualPatch) => void;
   text?: Omit<TextPanelProps, "text" | "style" | "layout" | "opacity" | "locked" | "onCommitOpacity">;
+  graphic?: { onDraft: (patch: AuthoredContentPatch | null) => void; onCommit: (patch: AuthoredContentPatch) => void };
 }) {
   const stored = clip.visual ?? defaultClipVisual(composition.width, composition.height);
   const c = clip.content;
   return (
     <section className="rounded-xl border border-(--color-border) bg-(--color-surface)">
       <h2 className="flex items-center justify-between border-b border-(--color-border) px-3 py-2 text-body-sm font-semibold">
-        {c.kind === "text" ? "Text" : "Transform"} <span className="font-normal text-(--color-text-muted)">{c.kind}{locked ? " · locked" : ""}{draft ? " · editing" : ""}</span>
+        {c.kind === "text" ? "Text" : c.kind === "graphic" && (c.shape || c.svg) ? "Graphic" : "Transform"} <span className="font-normal text-(--color-text-muted)">{c.kind}{locked ? " · locked" : ""}{draft ? " · editing" : ""}</span>
       </h2>
       <div className="flex flex-col gap-3 p-3">
         {c.kind === "text" && text && (
@@ -613,10 +742,22 @@ function PropertiesPanel({
             <h3 className="border-t border-(--color-border) pt-3 text-body-sm font-semibold">Transform</h3>
           </>
         )}
+        {c.kind === "graphic" && graphic && c.shape && (
+          <>
+            <GraphicsPanel kind="shape" spec={normalizeShapeSpec(c.shape)} locked={locked} onDraft={(p) => graphic.onDraft(p ? { shape: p } : null)} onCommit={(p) => graphic.onCommit({ shape: p })} />
+            <h3 className="border-t border-(--color-border) pt-3 text-body-sm font-semibold">Transform</h3>
+          </>
+        )}
+        {c.kind === "graphic" && graphic && c.svg && (
+          <>
+            <GraphicsPanel kind="svg" spec={normalizeSvgSpec(c.svg) ?? c.svg} locked={locked} onDraft={(p) => graphic.onDraft(p ? { svg: p } : null)} onCommit={(p) => graphic.onCommit({ svg: p })} />
+            <h3 className="border-t border-(--color-border) pt-3 text-body-sm font-semibold">Transform</h3>
+          </>
+        )}
         <TransformPanel
           visual={stored}
           box={layerBox}
-          fitLocked={c.kind === "text" || (c.kind === "graphic" && !!c.shape)}
+          fitLocked={c.kind === "text" || (c.kind === "graphic" && (!!c.shape || !!c.svg))}
           composition={composition}
           safeZones={zones}
           locked={locked}

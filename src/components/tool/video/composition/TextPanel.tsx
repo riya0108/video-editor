@@ -32,7 +32,7 @@ export interface TextPanelProps {
 }
 
 /** Color input that previews while the native picker is open (input events) and commits once when it closes (change event). */
-function ColorField({ label, value, disabled, onDraft, onCommit }: { label: string; value: string; disabled?: boolean; onDraft: (c: string | null) => void; onCommit: (c: string) => void }) {
+export function ColorField({ label, value, disabled, onDraft, onCommit }: { label: string; value: string; disabled?: boolean; onDraft: (c: string | null) => void; onCommit: (c: string) => void }) {
   const ref = useRef<HTMLInputElement>(null);
   const latest = useRef({ onDraft, onCommit });
   latest.current = { onDraft, onCommit };
@@ -61,7 +61,7 @@ function ColorField({ label, value, disabled, onDraft, onCommit }: { label: stri
   );
 }
 
-function Toggle({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
+export function Toggle({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
   return (
     <label className="flex items-center gap-1.5 font-medium">
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
@@ -70,7 +70,7 @@ function Toggle({ label, checked, disabled, onChange }: { label: string; checked
   );
 }
 
-function Seg<T extends string>({ value, options, disabled, onChange, label }: { value: T; options: { v: T; label: string; Icon?: typeof AlignLeft }[]; disabled?: boolean; onChange: (v: T) => void; label: string }) {
+export function Seg<T extends string>({ value, options, disabled, onChange, label }: { value: T; options: { v: T; label: string; Icon?: typeof AlignLeft }[]; disabled?: boolean; onChange: (v: T) => void; label: string }) {
   return (
     <div role="radiogroup" aria-label={label} className="flex rounded-md border border-(--color-border) p-0.5">
       {options.map((o) => (

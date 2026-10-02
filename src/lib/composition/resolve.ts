@@ -1,5 +1,6 @@
 import { clipTimelineEnd, isTrimmableContent, type Clip, type ClipKind } from "../timeline/clip";
 import { allTracks, type TimelineModel } from "../timeline/model";
+import { normalizeShapeSpec, normalizeSvgSpec, type SvgSpec } from "../timeline/shape-style";
 import { defaultClipVisual, normalizeTextStyle, type BlendMode, type ClipVisual, type FitMode, type ShapeSpec, type TextStyle } from "../timeline/visual";
 import { compose, rectsIntersect, rotateDegrees, scale, transformedBounds, translate, type Matrix2D, type Rect } from "./matrix";
 import { layoutText, type TextLayout, type TextMeasurer } from "./text-layout";
@@ -35,7 +36,9 @@ export interface ResolveContext {
 export type LayerContent =
   | { type: "media"; sourceId: string; sourceFrame: number; still: boolean }
   | { type: "text"; layout: TextLayout; style: TextStyle }
-  | { type: "shape"; shape: ShapeSpec };
+  | { type: "shape"; shape: ShapeSpec }
+  /** Embedded SVG: rasterized by the renderer at the exact pixel size it's drawn at (lib/composition/svg-raster.ts). */
+  | { type: "svg"; svg: SvgSpec };
 
 export interface ResolvedLayer {
   clipId: string;
@@ -172,6 +175,13 @@ export function resolveClipLayer(timeline: TimelineModel, clipId: string, frame:
  * when that clip's text/style actually changes, or when the measurer's
  * generation bumps (a web font finished loading) — not every frame.
  */
+const shapeCache = new WeakMap<object, ShapeSpec>();
+function cachedShape(raw: object): ShapeSpec {
+  let s = shapeCache.get(raw);
+  if (!s) shapeCache.set(raw, (s = normalizeShapeSpec(raw)));
+  return s;
+}
+
 const layoutCache = new WeakMap<object, { measurer: TextMeasurer; generation: number; result: { layout: TextLayout; style: TextStyle } }>();
 
 export function cachedTextLayout(content: { text?: string; textStyle?: unknown }, measurer: TextMeasurer): { layout: TextLayout; style: TextStyle } {
@@ -212,9 +222,18 @@ function resolveClip(timeline: TimelineModel, clip: Clip, frame: number, ctx: Re
     ({ width, height } = layout);
     fit = "none";
   } else if (c.kind === "graphic" && c.shape) {
-    content = { type: "shape", shape: c.shape };
-    width = c.shape.width;
-    height = c.shape.height;
+    // Normalized defensively (old projects, hand-edited files): a bad shape renders with valid values instead of throwing mid-frame.
+    const shape = cachedShape(c.shape);
+    content = { type: "shape", shape };
+    width = shape.width;
+    height = shape.height;
+    fit = "none";
+  } else if (c.kind === "graphic" && c.svg) {
+    const svg = normalizeSvgSpec(c.svg);
+    if (!svg) return null;
+    content = { type: "svg", svg };
+    width = svg.width;
+    height = svg.height;
     fit = "none";
   } else if (c.source) {
     const info = ctx.getSourceInfo(c.source.sourceId);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizeShapeSpec } from "./shape-style";
 import { applyVisualPatch, defaultClipVisual, InvalidVisualError, normalizeCrop } from "./visual";
 import { createTimeline } from "./model";
 import { addTrack, duplicateClip, insertClip, setClipVisual, setCompositionSettings, setTrackLocked, splitClip, updateAuthoredContent } from "./operations";
@@ -101,7 +102,7 @@ describe("visual operations", () => {
     const engine = new TimelineEngine(30, { width: 640, height: 360 });
     const track = engine.addTrack("graphic", "G");
     if (!track.ok) throw track.error;
-    const ins = engine.insertClip(track.track.id, { kind: "graphic", shape: { type: "ellipse", width: 10, height: 10, strokeWidth: 0, cornerRadius: 0 }, durationFrames: 5 }, 0);
+    const ins = engine.insertClip(track.track.id, { kind: "graphic", shape: normalizeShapeSpec({ type: "ellipse", width: 10, height: 10, strokeWidth: 0, cornerRadius: 0 }), durationFrames: 5 }, 0);
     if (!ins.ok) throw ins.error;
     expect(engine.setClipVisual(ins.clip.id, { transform: { x: 1 } }).ok).toBe(true);
     expect(engine.setClipVisual(ins.clip.id, { transform: { x: 2 } }).ok).toBe(true);

@@ -171,14 +171,5 @@ export function normalizeCrop(crop: CropInsets): CropInsets {
 // Text typography lives in its own module (Phase 6); re-exported here so existing imports keep working.
 export { DEFAULT_TEXT_STYLE, normalizeTextStyle, patchTextStyle, scaleTypography, TEXT_LIMITS, type TextStyle, type TextStylePatch } from "./text-style";
 
-export interface ShapeSpec {
-  type: "rect" | "ellipse";
-  /** Composition pixels. */
-  width: number;
-  height: number;
-  fill?: string;
-  stroke?: string;
-  strokeWidth: number;
-  /** rect only, composition pixels. */
-  cornerRadius: number;
-}
+// Shapes/SVG graphics live in their own module (Phase 7); re-exported here so existing imports keep working.
+export { DEFAULT_SHAPE, normalizeShapeSpec, normalizeSvgSpec, patchShapeSpec, type ShapeSpec, type SvgSpec } from "./shape-style";

@@ -6,6 +6,7 @@ export * from "./time-model";
 export * from "./clip";
 export * from "./visual";
 export * from "./text-style";
+export * from "./shape-style";
 export * from "./track";
 export * from "./model";
 export * from "./selection";

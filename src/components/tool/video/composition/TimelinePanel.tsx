@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Type } from "lucide-react";
+import { Shapes, Type } from "lucide-react";
 import type { TimelineModel } from "../../../../lib/timeline/model";
 import { clipDurationFrames, clipTimelineEnd, type Clip } from "../../../../lib/timeline/clip";
 import { collectSnapPoints, snapToNearest } from "../../../../lib/timeline/snapping";
@@ -148,6 +148,7 @@ export default function TimelinePanel({ timeline, frame, selectedClipIds, onSeek
             <div key={trackId} className="flex border-b border-(--color-border) last:border-b-0" style={{ height: ROW_H }}>
               <div style={{ width: HEADER_W }} className={`flex shrink-0 items-center gap-1 truncate px-2 ${track.visible ? "" : "text-(--color-text-faint) line-through"}`} title={track.name}>
                 {track.kind === "text" && <Type className="h-3 w-3 shrink-0" />}
+                {track.kind === "graphic" && <Shapes className="h-3 w-3 shrink-0" />}
                 <span className="truncate">{track.name}</span>
               </div>
               <div
@@ -164,7 +165,8 @@ export default function TimelinePanel({ timeline, frame, selectedClipIds, onSeek
                   const start = live?.clipId === id ? live.start : clip.timelineStart;
                   const end = live?.clipId === id ? live.end : clipTimelineEnd(clip);
                   const selected = selectedClipIds.includes(id);
-                  const label = clip.content.kind === "text" ? clip.content.text || "(empty)" : clip.content.source?.label ?? track.name;
+                  const c = clip.content;
+                  const label = c.kind === "text" ? c.text || "(empty)" : c.kind === "graphic" && c.shape ? `${track.name} · ${c.shape.type}` : c.kind === "graphic" && c.svg ? `${track.name} · SVG` : c.source?.label ?? track.name;
                   return (
                     <div
                       key={id}

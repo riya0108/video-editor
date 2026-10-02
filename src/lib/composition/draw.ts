@@ -3,7 +3,8 @@ import { imageSourceSize } from "./frame-provider";
 import { multiply, scale as scaleMatrix, type Matrix2D, type Rect } from "./matrix";
 import type { ResolvedFrame, ResolvedLayer } from "./resolve";
 import { cssFont, graphemes, lineBaseline, lineX, supportsLetterSpacing } from "./text-layout";
-import type { TextStyle } from "../timeline/text-style";
+import type { ShadowFields } from "../timeline/shape-style";
+import { svgRasterSize } from "../graphics/svg";
 
 /**
  * DRAW CORE — rasterizes a ResolvedFrame with Canvas 2D. Shared verbatim by
@@ -49,6 +50,12 @@ const BLEND_TO_COMPOSITE: Record<BlendMode, GlobalCompositeOperation> = {
   add: "lighter",
 };
 
+/** Device-pixel raster size for an SVG layer drawn at `renderScale` (layer matrix x render scale, per axis). */
+export function svgRasterSizeFor(layer: ResolvedLayer, renderScale: number, mode: "preview" | "final"): { width: number; height: number } {
+  const fm = multiply(scaleMatrix(renderScale), layer.matrix);
+  return svgRasterSize(layer.width, layer.height, Math.hypot(fm.a, fm.b), Math.hypot(fm.c, fm.d), mode);
+}
+
 export function compositeOperationFor(mode: BlendMode): GlobalCompositeOperation {
   return BLEND_TO_COMPOSITE[mode];
 }
@@ -76,7 +83,7 @@ export function drawResolvedFrame(ctx: Ctx2D, frame: ResolvedFrame, pixels: Read
   const stats: DrawStats = { drawn: 0, skipped: [] };
   for (const layer of frame.layers) {
     const px = pixels.get(layer.clipId) ?? {};
-    if (layer.content.type === "media" && !px.image) {
+    if ((layer.content.type === "media" || layer.content.type === "svg") && !px.image) {
       stats.skipped.push(layer.clipId);
       continue;
     }
@@ -132,7 +139,13 @@ function drawLayerContent(ctx: Ctx2D, layer: ResolvedLayer, image: CanvasImageSo
       withClip(ctx, layer.crop, () => drawText(ctx, layer, m));
       return;
     case "shape":
-      withClip(ctx, layer.crop, () => drawShape(ctx, content.shape));
+      withClip(ctx, layer.crop, () => drawShape(ctx, content.shape, m));
+      return;
+    case "svg":
+      if (!image) return;
+      if (content.svg.shadow) applyShadow(ctx, content.svg, m);
+      drawMediaCropped(ctx, image, layer);
+      clearShadow(ctx);
       return;
   }
 }
@@ -230,7 +243,7 @@ function drawLines(ctx: Ctx2D, layer: ResolvedLayer, mode: "fill" | "stroke") {
  * scales with the text — and is proportionally identical in a half-resolution
  * preview and the full-resolution export.
  */
-function applyShadow(ctx: Ctx2D, style: TextStyle, m: Matrix2D) {
+function applyShadow(ctx: Ctx2D, style: ShadowFields, m: Matrix2D) {
   ctx.shadowColor = style.shadowColor;
   ctx.shadowOffsetX = m.a * style.shadowOffsetX + m.c * style.shadowOffsetY;
   ctx.shadowOffsetY = m.b * style.shadowOffsetX + m.d * style.shadowOffsetY;
@@ -284,26 +297,86 @@ function drawText(ctx: Ctx2D, layer: ResolvedLayer, m: Matrix2D) {
   clearShadow(ctx);
 }
 
-function drawShape(ctx: Ctx2D, shape: ShapeSpec) {
-  // Inset by half the stroke so the whole stroke sits inside the shape's box (otherwise its outer half is clipped by the crop rect).
-  const inset = shape.stroke ? shape.strokeWidth / 2 : 0;
-  const w = Math.max(0, shape.width - inset * 2);
-  const h = Math.max(0, shape.height - inset * 2);
+/** Regular polygon inscribed in the box's ellipse, first vertex at the top. */
+function polygonPath(ctx: Ctx2D, w: number, h: number, inset: number, sides: number) {
+  const rx = Math.max(0, w / 2 - inset);
+  const ry = Math.max(0, h / 2 - inset);
+  for (let k = 0; k < sides; k++) {
+    const a = -Math.PI / 2 + (2 * Math.PI * k) / sides;
+    const x = w / 2 + rx * Math.cos(a);
+    const y = h / 2 + ry * Math.sin(a);
+    if (k === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+/** Filled arrowhead triangle with its tip at (tipX, y), pointing in `dir` (+1 right, -1 left). */
+function arrowHeadPath(ctx: Ctx2D, tipX: number, y: number, dir: 1 | -1, length: number, width: number) {
+  ctx.moveTo(tipX, y);
+  ctx.lineTo(tipX - dir * length, y - width / 2);
+  ctx.lineTo(tipX - dir * length, y + width / 2);
+  ctx.closePath();
+}
+
+/**
+ * Vector shapes in content space (layer matrix already set; `m` is that full
+ * matrix, for shadow mapping). Closed shapes keep their stroke INSIDE the box
+ * (inset by half the stroke) so it's never clipped. Line/arrow run along the
+ * box's center line; the shaft stops at each arrowhead's base so head and
+ * shaft never overlap (no double shadow). Exactly one pass casts the shadow.
+ */
+function drawShape(ctx: Ctx2D, shape: ShapeSpec, m: Matrix2D) {
+  const { width: w, height: h } = shape;
+  const sw = shape.stroke ? shape.strokeWidth : 0;
+  if (shape.shadow) applyShadow(ctx, shape, m);
+
+  if (shape.type === "line" || shape.type === "arrow") {
+    if (sw <= 0) return clearShadow(ctx);
+    const y = h / 2;
+    const headLen = shape.type === "arrow" ? Math.min(shape.headSize, w / 2) : 0;
+    const startHead = shape.type === "arrow" && (shape.arrowHead === "start" || shape.arrowHead === "both");
+    const endHead = shape.type === "arrow" && (shape.arrowHead === "end" || shape.arrowHead === "both");
+    ctx.lineCap = "butt";
+    ctx.lineWidth = sw;
+    ctx.strokeStyle = shape.strokeColor;
+    ctx.beginPath();
+    ctx.moveTo(startHead ? headLen : 0, y);
+    ctx.lineTo(endHead ? w - headLen : w, y);
+    ctx.stroke();
+    if (startHead || endHead) {
+      ctx.fillStyle = shape.strokeColor;
+      ctx.beginPath();
+      if (endHead) arrowHeadPath(ctx, w, y, 1, headLen, shape.headSize);
+      if (startHead) arrowHeadPath(ctx, 0, y, -1, headLen, shape.headSize);
+      ctx.fill();
+    }
+    return clearShadow(ctx);
+  }
+
+  const inset = sw / 2;
   ctx.beginPath();
   if (shape.type === "ellipse") {
-    ctx.ellipse(shape.width / 2, shape.height / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-  } else if (shape.cornerRadius > 0) {
-    ctx.roundRect(inset, inset, w, h, Math.min(shape.cornerRadius, w / 2, h / 2));
+    ctx.ellipse(w / 2, h / 2, Math.max(0, w / 2 - inset), Math.max(0, h / 2 - inset), 0, 0, Math.PI * 2);
+  } else if (shape.type === "polygon") {
+    polygonPath(ctx, w, h, inset, shape.sides);
   } else {
-    ctx.rect(inset, inset, w, h);
+    const rw = Math.max(0, w - inset * 2);
+    const rh = Math.max(0, h - inset * 2);
+    const r = Math.min(shape.cornerRadius, rw / 2, rh / 2);
+    if (r > 0) ctx.roundRect(inset, inset, rw, rh, r);
+    else ctx.rect(inset, inset, rw, rh);
   }
   if (shape.fill) {
-    ctx.fillStyle = shape.fill;
+    ctx.fillStyle = shape.fillColor;
     ctx.fill();
+    clearShadow(ctx); // the fill cast it; the stroke must not cast a second one
   }
-  if (shape.stroke && shape.strokeWidth > 0) {
-    ctx.strokeStyle = shape.stroke;
-    ctx.lineWidth = shape.strokeWidth;
+  if (sw > 0) {
+    ctx.strokeStyle = shape.strokeColor;
+    ctx.lineWidth = sw;
+    ctx.lineJoin = "miter";
     ctx.stroke();
   }
+  clearShadow(ctx);
 }

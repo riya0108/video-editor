@@ -1,5 +1,5 @@
 import { createId } from "./id";
-import type { ClipVisual, ShapeSpec, TextStyle } from "./visual";
+import type { ClipVisual, ShapeSpec, SvgSpec, TextStyle } from "./visual";
 
 /** Opaque reference to source media — never bytes, never a File/Blob/URL. Resolving sourceId to real media is a different layer's job; see TIMELINE_ARCHITECTURE.md §2. */
 export interface MediaSourceRef {
@@ -28,8 +28,10 @@ export interface AuthoredClipContent {
   text?: string; // present for text only
   /** text only — undefined means DEFAULT_TEXT_STYLE. */
   textStyle?: TextStyle;
-  /** graphic only — a vector shape drawn by the compositor instead of a sourced image (a graphic clip has a source OR a shape). */
+  /** graphic only — a vector shape drawn by the compositor. A graphic clip has exactly one of source / shape / svg. */
   shape?: ShapeSpec;
+  /** graphic only — an embedded (sanitized) SVG, rasterized at draw size by the compositor. */
+  svg?: SvgSpec;
   durationFrames: number;
 }
 

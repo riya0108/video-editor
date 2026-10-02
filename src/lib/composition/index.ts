@@ -19,3 +19,5 @@ export * from "./safe-zones";
 export * from "./align";
 export * from "./overlay";
 export * from "./multi-select";
+export * from "./media-import";
+export * from "./svg-raster";
