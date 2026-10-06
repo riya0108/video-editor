@@ -1,5 +1,6 @@
 import { createId } from "./id";
 import type { ClipKind } from "./clip";
+import type { CaptionTrackSettings } from "../captions/caption-model";
 
 export type TrackKind = ClipKind;
 
@@ -13,6 +14,8 @@ export interface Track {
   visible: boolean;
   muted: boolean;
   solo: boolean;
+  /** caption tracks only (Phase 12): the shared caption look. Undefined = defaults. */
+  caption?: CaptionTrackSettings;
 }
 
 export function createTrack(kind: TrackKind, name: string): Track {

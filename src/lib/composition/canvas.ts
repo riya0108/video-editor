@@ -11,9 +11,10 @@ export function createCanvas(width: number, height: number): AnyCanvas {
   return c;
 }
 
-export function get2d(canvas: AnyCanvas): Ctx2D {
+export function get2d(canvas: AnyCanvas, opts: { willReadFrequently?: boolean } = {}): Ctx2D {
   // alpha: true is required — a transparent composition background must survive into the output.
-  const ctx = canvas.getContext("2d", { alpha: true }) as Ctx2D | null;
+  // willReadFrequently: for scratch canvases that effects read back with getImageData (keeps them CPU-backed, avoiding GPU readback stalls).
+  const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: !!opts.willReadFrequently }) as Ctx2D | null;
   if (!ctx) throw new Error("2D canvas context unavailable.");
   return ctx;
 }

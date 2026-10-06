@@ -27,7 +27,7 @@ export interface PreviewRenderResult {
 export class PreviewRenderer {
   private readonly canvas: AnyCanvas = createCanvas(2, 2);
   private readonly ctx: Ctx2D = get2d(this.canvas);
-  private scratch: { canvas: AnyCanvas; ctx: Ctx2D } | null = null;
+  private readonly scratch = new Map<number, { canvas: AnyCanvas; ctx: Ctx2D }>();
 
   constructor(
     private readonly provider: FrameProvider,
@@ -74,17 +74,20 @@ export class PreviewRenderer {
     const stats = drawResolvedFrame(this.ctx, resolved, pixels, {
       renderScale,
       smoothing: profile.smoothing,
-      getScratch: () => this.getScratch(width, height),
+      getScratch: (slot = 0) => this.getScratch(slot, width, height),
     });
     return { resolved, stats, renderMs: performance.now() - t0, width, height, scale: renderScale };
   }
 
-  private getScratch(width: number, height: number): Ctx2D {
-    if (!this.scratch) {
+  /** One canvas per slot (0 = layer isolation, 1-3 = transitions), allocated on first use. */
+  private getScratch(slot: number, width: number, height: number): Ctx2D {
+    let s = this.scratch.get(slot);
+    if (!s) {
       const canvas = createCanvas(width, height);
-      this.scratch = { canvas, ctx: get2d(canvas) };
+      s = { canvas, ctx: get2d(canvas, { willReadFrequently: true }) };
+      this.scratch.set(slot, s);
     }
-    ensureSize(this.scratch.canvas, width, height);
-    return this.scratch.ctx;
+    ensureSize(s.canvas, width, height);
+    return s.ctx;
   }
 }

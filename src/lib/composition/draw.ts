@@ -5,6 +5,9 @@ import type { ResolvedFrame, ResolvedLayer } from "./resolve";
 import { cssFont, graphemes, lineBaseline, lineX, supportsLetterSpacing } from "./text-layout";
 import type { ShadowFields } from "../timeline/shape-style";
 import { svgRasterSize } from "../graphics/svg";
+import { applyEffects, bytesToFloat, effectsSpill, floatToBytes } from "../effects/process";
+import { getTransitionDefinition } from "../transitions/registry";
+import { CanvasTransitionPainter } from "./transition-painter";
 
 /**
  * DRAW CORE — rasterizes a ResolvedFrame with Canvas 2D. Shared verbatim by
@@ -30,8 +33,11 @@ export interface LayerPixels {
 export interface DrawOptions {
   renderScale: number;
   smoothing: ImageSmoothingQuality;
-  /** Same-size scratch context for isolating matted layers. Created lazily by the caller. */
-  getScratch: () => Ctx2D;
+  /**
+   * Same-size scratch contexts, created lazily by the caller. Slot 0 isolates matted / effected layers; transitions use
+   * slots 1 (outgoing side), 2 (incoming side) and 3 (the transition's mix). Each slot is a distinct canvas.
+   */
+  getScratch: (slot?: number) => Ctx2D;
 }
 
 export interface DrawStats {
@@ -81,31 +87,32 @@ export function drawResolvedFrame(ctx: Ctx2D, frame: ResolvedFrame, pixels: Read
   }
 
   const stats: DrawStats = { drawn: 0, skipped: [] };
-  for (const layer of frame.layers) {
+  const layers = frame.layers;
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    if (layer.transition) {
+      // Both sides of a pair are adjacent (from, then to) — consume them together.
+      const partner = layer.transition.role === "from" && layers[i + 1]?.transition?.id === layer.transition.id ? layers[++i] : null;
+      drawTransition(ctx, layer.transition.role === "from" ? layer : null, layer.transition.role === "to" ? layer : partner, pixels, opts, frame.frame, stats);
+      continue;
+    }
     const px = pixels.get(layer.clipId) ?? {};
-    if ((layer.content.type === "media" || layer.content.type === "svg") && !px.image) {
+    if (needsPixels(layer) && !px.image) {
       stats.skipped.push(layer.clipId);
       continue;
     }
     const m = multiply(base, layer.matrix);
 
-    if (layer.matte) {
-      if (!px.matte) {
+    if (layer.matte || layer.effects.length > 0) {
+      // ISOLATED-LAYER PATH: matte and/or effects. The layer is drawn alone on a scratch canvas, matted, processed by its
+      // effect stack, and only then composited with opacity + blend — so neither the matte nor any effect can touch the
+      // layers underneath. Same path for every layer kind (EFFECTS_ENGINE_ARCHITECTURE.md §1).
+      if (layer.matte && !px.matte) {
         stats.skipped.push(layer.clipId);
         continue;
       }
-      const scratch = opts.getScratch();
-      scratch.setTransform(1, 0, 0, 1, 0, 0);
-      scratch.globalAlpha = 1;
-      scratch.globalCompositeOperation = "source-over";
-      scratch.clearRect(0, 0, scratch.canvas.width, scratch.canvas.height);
-      applySmoothing(scratch, opts.smoothing);
-      setMatrix(scratch, m);
-      drawLayerContent(scratch, layer, px.image, m);
-      // destination-in keeps content only where the matte has alpha (subject); destination-out removes it there instead (keeps background). Drawn over the same cropped content rect, so it aligns pixel-for-pixel regardless of matte resolution.
-      scratch.globalCompositeOperation = layer.matte.invert ? "destination-out" : "destination-in";
-      drawMediaCropped(scratch, px.matte, layer);
-
+      const scratch = opts.getScratch(0);
+      renderLayerIsolated(scratch, layer, px, opts, frame.frame);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = layer.opacity;
       ctx.globalCompositeOperation = compositeOperationFor(layer.blendMode);
@@ -121,6 +128,112 @@ export function drawResolvedFrame(ctx: Ctx2D, frame: ResolvedFrame, pixels: Read
   }
   ctx.restore();
   return stats;
+}
+
+function needsPixels(layer: ResolvedLayer): boolean {
+  return layer.content.type === "media" || layer.content.type === "svg";
+}
+
+function clearSurface(c: Ctx2D) {
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalAlpha = 1;
+  c.globalCompositeOperation = "source-over";
+  c.clearRect(0, 0, c.canvas.width, c.canvas.height);
+}
+
+/** Draws ONE layer alone onto a cleared, frame-sized surface: content -> matte -> effect stack (render-pixel space). Opacity/blend are left to the caller. */
+function renderLayerIsolated(scratch: Ctx2D, layer: ResolvedLayer, px: LayerPixels, opts: DrawOptions, absFrame: number) {
+  const m = multiply(scaleMatrix(opts.renderScale), layer.matrix);
+  clearSurface(scratch);
+  applySmoothing(scratch, opts.smoothing);
+  setMatrix(scratch, m);
+  drawLayerContent(scratch, layer, px.image, m);
+  if (layer.matte && px.matte) {
+    // destination-in keeps content only where the matte has alpha (subject); destination-out removes it there instead (keeps background). Drawn over the same cropped content rect, so it aligns pixel-for-pixel regardless of matte resolution.
+    scratch.globalCompositeOperation = layer.matte.invert ? "destination-out" : "destination-in";
+    drawMediaCropped(scratch, px.matte, layer);
+  }
+  if (layer.effects.length > 0) processLayerEffects(scratch, layer, opts.renderScale, absFrame);
+  scratch.setTransform(1, 0, 0, 1, 0, 0);
+  scratch.globalAlpha = 1;
+  scratch.globalCompositeOperation = "source-over";
+}
+
+/**
+ * TRANSITION PATH (TRANSITIONS_ARCHITECTURE.md §4). Each side is rendered in isolation exactly as it would be on its
+ * own (matte, effects, and its opacity baked in), then the transition's registered compositor mixes the two through a
+ * TransitionPainter, and the mix is composited at the track's z-position. Nothing here is specific to any transition
+ * type — an unknown type falls back to a cut. A side with no pixels yet (preview still decoding) counts as skipped
+ * and is treated as absent rather than drawn wrong.
+ */
+function drawTransition(ctx: Ctx2D, from: ResolvedLayer | null, to: ResolvedLayer | null, pixels: ReadonlyMap<string, LayerPixels>, opts: DrawOptions, absFrame: number, stats: DrawStats) {
+  const info = (from ?? to)!.transition!;
+  const side = (layer: ResolvedLayer | null, slot: number): Ctx2D | null => {
+    if (!layer) return null;
+    const px = pixels.get(layer.clipId) ?? {};
+    if ((needsPixels(layer) && !px.image) || (layer.matte && !px.matte)) {
+      stats.skipped.push(layer.clipId);
+      return null;
+    }
+    const surface = opts.getScratch(slot);
+    renderLayerIsolated(surface, layer, px, opts, absFrame);
+    if (layer.opacity < 1) {
+      // Bake the layer's own opacity into its surface (exact: scales every premultiplied channel).
+      surface.globalCompositeOperation = "destination-in";
+      surface.fillStyle = `rgba(0,0,0,${layer.opacity})`;
+      surface.fillRect(0, 0, surface.canvas.width, surface.canvas.height);
+      surface.globalCompositeOperation = "source-over";
+    }
+    stats.drawn++;
+    return surface;
+  };
+  const a = side(from, 1);
+  const b = side(to, 2);
+  if (!a && !b) return;
+
+  const mix = opts.getScratch(3);
+  clearSurface(mix);
+  applySmoothing(mix, opts.smoothing);
+  const painter = new CanvasTransitionPainter(mix, a, b, opts.renderScale);
+  const def = getTransitionDefinition(info.type);
+  if (def) def.render(painter, { progress: info.progress, params: info.params, direction: info.direction, paired: info.paired, seed: info.seed });
+  else painter.draw(info.progress < 0.5 ? "from" : "to");
+
+  // Blend modes apply to the mix as a whole; when the two sides disagree the result composites normally.
+  const blend = from && to ? (from.blendMode === to.blendMode ? from.blendMode : "normal") : (from ?? to)!.blendMode;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = compositeOperationFor(blend);
+  ctx.drawImage(mix.canvas, 0, 0);
+}
+
+/**
+ * Runs a layer's effect stack over its region of the scratch canvas: the layer's render-space bounds, expanded by the
+ * stack's spill (blur/glow/sharpen radius) and clamped to the canvas. Small layers stay cheap.
+ */
+function processLayerEffects(scratch: Ctx2D, layer: ResolvedLayer, renderScale: number, absFrame: number) {
+  const spill = Math.ceil(effectsSpill(layer.effects) * renderScale) + 1;
+  const b = layer.bounds;
+  const x0 = Math.max(0, Math.floor(b.x * renderScale) - spill);
+  const y0 = Math.max(0, Math.floor(b.y * renderScale) - spill);
+  const x1 = Math.min(scratch.canvas.width, Math.ceil((b.x + b.width) * renderScale) + spill);
+  const y1 = Math.min(scratch.canvas.height, Math.ceil((b.y + b.height) * renderScale) + spill);
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w <= 0 || h <= 0) return;
+  scratch.setTransform(1, 0, 0, 1, 0, 0);
+  const img = scratch.getImageData(x0, y0, w, h);
+  const out = applyEffects(bytesToFloat(img.data), layer.effects, {
+    width: w,
+    height: h,
+    renderScale,
+    frame: absFrame,
+    originX: x0,
+    originY: y0,
+    layerRect: { x: b.x * renderScale - x0, y: b.y * renderScale - y0, width: b.width * renderScale, height: b.height * renderScale },
+  });
+  floatToBytes(out, img.data);
+  scratch.putImageData(img, x0, y0);
 }
 
 function applySmoothing(ctx: Ctx2D, quality: ImageSmoothingQuality) {

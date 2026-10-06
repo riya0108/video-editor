@@ -1,6 +1,11 @@
 import { createHistory, pushHistory, undo as historyUndo, redo as historyRedo, canUndo as historyCanUndo, canRedo as historyCanRedo, type History } from "./history";
 import { createTimeline, type CompositionSettings, type Guide, type TimelineModel } from "./model";
 import type { ClipVisualPatch } from "./visual";
+import type { EasingSpec } from "../animation/easing";
+import type { Effect } from "../effects/model";
+import type { Transition } from "../transitions/model";
+import type { SubtitleCue } from "../captions/subtitle-io";
+import type { CaptionTrackSettings, CaptionWordTiming } from "../captions/caption-model";
 import {
   createSelection,
   select as selectOp,
@@ -112,8 +117,10 @@ export class TimelineEngine {
   private run<TExtra extends Record<string, unknown>>(fn: () => { timeline: TimelineModel } & TExtra): EditResult<TExtra> {
     try {
       const result = fn();
-      this.commit(result.timeline);
-      return { ok: true, ...result } as EditResult<TExtra>;
+      // Every edit leaves transitions consistent with the clips (dropped if their clips no longer meet, shortened if they shrank).
+      const timeline = ops.reconcileTransitions(result.timeline);
+      this.commit(timeline);
+      return { ok: true, ...result, timeline } as EditResult<TExtra>;
     } catch (e) {
       if (e instanceof TimelineEditError) return { ok: false, error: e };
       throw e;
@@ -122,7 +129,7 @@ export class TimelineEngine {
 
   private runVoid(fn: () => TimelineModel): EditResult {
     try {
-      const next = fn();
+      const next = ops.reconcileTransitions(fn());
       this.commit(next);
       return { ok: true, timeline: next };
     } catch (e) {
@@ -163,6 +170,113 @@ export class TimelineEngine {
     return this.run(() => ops.insertClip(this.timeline, trackId, content, timelineStart, visual));
   }
 
+  /** Keyframe-aware visual edit at the playhead (auto-key for animated properties). One undo step. */
+  setClipVisualsAtFrame(patches: Readonly<Record<string, ClipVisualPatch>>, frame: number): EditResult {
+    return this.runVoid(() => ops.setClipVisualsAtFrame(this.timeline, patches, frame));
+  }
+
+  addKeyframe(clipId: string, path: string, frame: number, value?: number, easing?: EasingSpec): EditResult {
+    return this.runVoid(() => ops.addKeyframe(this.timeline, clipId, path, frame, value, easing));
+  }
+
+  removeKeyframe(clipId: string, path: string, keyframeId: string): EditResult {
+    return this.runVoid(() => ops.removeKeyframe(this.timeline, clipId, path, keyframeId));
+  }
+
+  moveKeyframe(clipId: string, path: string, keyframeId: string, newFrame: number): EditResult {
+    return this.runVoid(() => ops.moveKeyframe(this.timeline, clipId, path, keyframeId, newFrame));
+  }
+
+  updateKeyframe(clipId: string, path: string, keyframeId: string, patch: { value?: number; easing?: EasingSpec }): EditResult {
+    return this.runVoid(() => ops.updateKeyframe(this.timeline, clipId, path, keyframeId, patch));
+  }
+
+  setPropertyAnimated(clipId: string, path: string, animated: boolean, frame: number): EditResult {
+    return this.runVoid(() => ops.setPropertyAnimated(this.timeline, clipId, path, animated, frame));
+  }
+
+  addEffect(clipId: string, type: string, params?: Record<string, number>, index?: number): EditResult<{ effect: Effect }> {
+    return this.run(() => ops.addEffect(this.timeline, clipId, type, params, index));
+  }
+
+  removeEffect(clipId: string, effectId: string): EditResult {
+    return this.runVoid(() => ops.removeEffect(this.timeline, clipId, effectId));
+  }
+
+  moveEffect(clipId: string, effectId: string, newIndex: number): EditResult {
+    return this.runVoid(() => ops.moveEffect(this.timeline, clipId, effectId, newIndex));
+  }
+
+  setEffectEnabled(clipId: string, effectId: string, enabled: boolean): EditResult {
+    return this.runVoid(() => ops.setEffectEnabled(this.timeline, clipId, effectId, enabled));
+  }
+
+  updateEffectParams(clipId: string, effectId: string, patch: Record<string, number>, frame?: number): EditResult {
+    return this.runVoid(() => ops.updateEffectParams(this.timeline, clipId, effectId, patch, frame));
+  }
+
+  /** Adds a transition at an edit point (between adjacent clips, or a clip's start/end). One undo step. */
+  addTransition(opts: ops.AddTransitionOptions): EditResult<{ transition: Transition }> {
+    return this.run(() => ops.addTransition(this.timeline, opts));
+  }
+
+  updateTransition(transitionId: string, patch: ops.TransitionPatch): EditResult {
+    return this.runVoid(() => ops.updateTransition(this.timeline, transitionId, patch));
+  }
+
+  removeTransition(transitionId: string): EditResult {
+    return this.runVoid(() => ops.removeTransition(this.timeline, transitionId));
+  }
+
+  /** Audio settings edit (volume/gain auto-key at `frame` when animated). One undo step. */
+  setClipAudio(clipId: string, patch: ops.ClipAudioPatch, frame?: number): EditResult {
+    return this.runVoid(() => ops.setClipAudio(this.timeline, clipId, patch, frame));
+  }
+
+  /** Peak-normalizes a clip to `targetDb` from its measured peak. One undo step. */
+  normalizeClipAudio(clipId: string, peakDb: number, targetDb?: number): EditResult {
+    return this.runVoid(() => ops.normalizeClipAudioOp(this.timeline, clipId, peakDb, targetDb));
+  }
+
+  // --- captions (Phase 12) ---
+
+  addCaptionTrack(opts?: { name?: string; settings?: Partial<CaptionTrackSettings> }): EditResult<{ track: Track }> {
+    return this.run(() => ops.addCaptionTrack(this.timeline, opts));
+  }
+
+  /** Places cues (speech-to-text / SRT / VTT) as captions on a new track, or replacing a track's captions. One undo step. */
+  importCaptionCues(cues: readonly SubtitleCue[], opts?: Parameters<typeof ops.importCaptionCues>[2]): EditResult<{ trackId: string; clips: Clip[]; adjusted: number }> {
+    return this.run(() => ops.importCaptionCues(this.timeline, cues, opts));
+  }
+
+  updateCaptionText(clipId: string, text: string): EditResult {
+    return this.runVoid(() => ops.updateCaptionText(this.timeline, clipId, text));
+  }
+
+  setCaptionSpeaker(clipId: string, speaker: string | null): EditResult {
+    return this.runVoid(() => ops.setCaptionSpeaker(this.timeline, clipId, speaker));
+  }
+
+  setCaptionWords(clipId: string, words: readonly CaptionWordTiming[] | null): EditResult {
+    return this.runVoid(() => ops.setCaptionWords(this.timeline, clipId, words));
+  }
+
+  setCaptionTrackSettings(trackId: string, patch: ops.CaptionTrackPatch): EditResult {
+    return this.runVoid(() => ops.setCaptionTrackSettings(this.timeline, trackId, patch));
+  }
+
+  applyCaptionPreset(trackId: string, presetId: string): EditResult {
+    return this.runVoid(() => ops.applyCaptionPreset(this.timeline, trackId, presetId));
+  }
+
+  setCaptionTiming(clipId: string, startFrame: number, endFrame: number): EditResult {
+    return this.runVoid(() => ops.setCaptionTiming(this.timeline, clipId, startFrame, endFrame));
+  }
+
+  mergeCaptionWithNext(clipId: string): EditResult {
+    return this.runVoid(() => ops.mergeCaptionWithNext(this.timeline, clipId));
+  }
+
   /** Multi-object visual edit — one undo step for the whole batch. */
   setClipVisuals(patches: Readonly<Record<string, ClipVisualPatch>>): EditResult {
     return this.runVoid(() => ops.setClipVisuals(this.timeline, patches));
@@ -200,8 +314,12 @@ export class TimelineEngine {
   }
 
   /** Content and/or visual edits to several clips, one undo step. */
-  editClips(edits: Readonly<Record<string, ops.ClipEdit>>): EditResult {
-    return this.runVoid(() => ops.editClips(this.timeline, edits));
+  editClips(edits: Readonly<Record<string, ops.ClipEdit>>, frame?: number): EditResult {
+    return this.runVoid(() => ops.editClips(this.timeline, edits, frame));
+  }
+
+  moveKeyframesAtFrame(clipId: string, fromFrame: number, toFrame: number): EditResult {
+    return this.runVoid(() => ops.moveKeyframesAtFrame(this.timeline, clipId, fromFrame, toFrame));
   }
 
   /** Adds a shape/SVG graphic at the front (own track) and selects it. One undo step. */

@@ -6,7 +6,6 @@ import {
   alignDelta,
   ANCHOR_PRESETS,
   layerSize,
-  normalizeAngle,
   setAnchorNormalized,
   setLayerSize,
   translateVisual,
@@ -50,9 +49,42 @@ export interface TransformPanelProps {
   locked: boolean;
   onDraft: (visual: ClipVisual | null) => void;
   onCommit: (patch: ClipVisualPatch) => void;
+  /** Phase 8: per-property keyframe controls (property path -> control). Omitted = no animation UI. */
+  keyframes?: (path: string) => KeyframeControl;
 }
 
 const fmt = (n: number, precision: number) => String(Number(n.toFixed(precision)));
+
+export type KeyframeState = "static" | "animated" | "key";
+export interface KeyframeControl {
+  state: KeyframeState;
+  /** static -> start animating (key at playhead); animated -> add key at playhead; key -> remove that key. */
+  onToggle: () => void;
+}
+
+/** ◆ toggle shown before an animatable field's label. Filled = keyframe at the playhead; outlined = animated; faded = static. */
+export function KeyframeDiamond({ label, control, disabled }: { label: string; control: KeyframeControl; disabled?: boolean }) {
+  const title = control.state === "static" ? `Animate ${label} (add first keyframe at the playhead)` : control.state === "key" ? `Remove ${label} keyframe at the playhead` : `Add ${label} keyframe at the playhead`;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={(e) => {
+        e.preventDefault(); // inside a <label>: don't focus the input
+        control.onToggle();
+      }}
+      aria-label={title}
+      title={title}
+      aria-pressed={control.state === "key"}
+      data-keyframe-state={control.state}
+      className="grid h-4 w-4 place-items-center disabled:opacity-40"
+    >
+      <svg viewBox="0 0 10 10" className={`h-2.5 w-2.5 ${control.state === "static" ? "text-(--color-text-faint)" : "text-amber-500"}`}>
+        <path d="M5 0.8 L9.2 5 L5 9.2 L0.8 5 Z" fill={control.state === "key" ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.3" />
+      </svg>
+    </button>
+  );
+}
 
 export function NumberField({
   label,
@@ -65,6 +97,7 @@ export function NumberField({
   max,
   onScrub,
   onCommit,
+  keyframe,
 }: {
   label: string;
   value: number;
@@ -76,6 +109,8 @@ export function NumberField({
   max?: number;
   onScrub: (n: number | null) => void;
   onCommit: (n: number) => void;
+  /** Keyframe toggle (Phase 8): static = hollow, animated = outlined, key at the playhead = filled. */
+  keyframe?: KeyframeControl;
 }) {
   const [text, setText] = useState<string | null>(null);
   const scrub = useRef<{ x: number; start: number; last: number } | null>(null);
@@ -89,6 +124,8 @@ export function NumberField({
 
   return (
     <label className="flex min-w-0 flex-col gap-0.5">
+      <span className="flex items-center gap-1">
+      {keyframe && <KeyframeDiamond label={label} control={keyframe} disabled={disabled} />}
       <span
         className={`select-none text-(--color-text-muted) ${disabled ? "" : "cursor-ew-resize"}`}
         title={disabled ? undefined : "Drag to scrub (Shift = faster)"}
@@ -114,6 +151,7 @@ export function NumberField({
         }}
       >
         {label}
+      </span>
       </span>
       <span className="flex items-center rounded border border-(--color-border) bg-(--color-surface) focus-within:border-primary-500">
         <input
@@ -150,7 +188,8 @@ export function NumberField({
   );
 }
 
-export default function TransformPanel({ visual, box, fitLocked, composition, safeZones, locked, onDraft, onCommit }: TransformPanelProps) {
+export default function TransformPanel({ visual, box, fitLocked, composition, safeZones, locked, onDraft, onCommit, keyframes }: TransformPanelProps) {
+  const kf = (path: string) => (keyframes ? { keyframe: keyframes(path) } : {});
   const [linkSize, setLinkSize] = useState(true);
   const [alignTarget, setAlignTarget] = useState<string>("canvas");
   const t = visual.transform;
@@ -190,8 +229,8 @@ export default function TransformPanel({ visual, box, fitLocked, composition, sa
   return (
     <div className="flex flex-col gap-3 text-caption">
       <div className="grid grid-cols-2 gap-2">
-        <NumberField label="X" value={t.x} suffix="px" disabled={locked} {...field((n) => applyVisualPatch(visual, { transform: { x: n } }))} />
-        <NumberField label="Y" value={t.y} suffix="px" disabled={locked} {...field((n) => applyVisualPatch(visual, { transform: { y: n } }))} />
+        <NumberField label="X" value={t.x} suffix="px" disabled={locked} {...kf("visual.transform.x")} {...field((n) => applyVisualPatch(visual, { transform: { x: n } }))} />
+        <NumberField label="Y" value={t.y} suffix="px" disabled={locked} {...kf("visual.transform.y")} {...field((n) => applyVisualPatch(visual, { transform: { y: n } }))} />
       </div>
 
       <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
@@ -207,13 +246,13 @@ export default function TransformPanel({ visual, box, fitLocked, composition, sa
         >
           {linkSize ? <Link2 className="h-3.5 w-3.5" /> : <Link2Off className="h-3.5 w-3.5 text-(--color-text-faint)" />}
         </button>
-        <NumberField label="Scale X" value={t.scaleX * 100} suffix="%" min={1} disabled={locked} {...field((n) => setScale("x", n))} />
-        <NumberField label="Scale Y" value={t.scaleY * 100} suffix="%" min={1} disabled={locked} {...field((n) => setScale("y", n))} />
+        <NumberField label="Scale X" value={t.scaleX * 100} suffix="%" min={1} disabled={locked} {...kf("visual.transform.scaleX")} {...field((n) => setScale("x", n))} />
+        <NumberField label="Scale Y" value={t.scaleY * 100} suffix="%" min={1} disabled={locked} {...kf("visual.transform.scaleY")} {...field((n) => setScale("y", n))} />
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <NumberField label="Rotation" value={t.rotation} suffix="°" step={1} disabled={locked} {...field((n) => applyVisualPatch(visual, { transform: { rotation: normalizeAngle(n) } }))} />
-        <NumberField label="Opacity" value={visual.opacity * 100} suffix="%" min={0} max={100} precision={0} disabled={locked} {...field((n) => applyVisualPatch(visual, { opacity: n / 100 }))} />
+        <NumberField label="Rotation" value={t.rotation} suffix="°" step={1} disabled={locked} {...kf("visual.transform.rotation")} {...field((n) => applyVisualPatch(visual, { transform: { rotation: n } }))} />
+        <NumberField label="Opacity" value={visual.opacity * 100} suffix="%" min={0} max={100} precision={0} disabled={locked} {...kf("visual.opacity")} {...field((n) => applyVisualPatch(visual, { opacity: n / 100 }))} />
       </div>
 
       <fieldset className="flex items-end gap-3">
@@ -251,6 +290,7 @@ export default function TransformPanel({ visual, box, fitLocked, composition, sa
             precision={1}
             step={0.5}
             disabled={locked}
+            {...kf(`visual.crop.${side}`)}
             {...field((n) => applyVisualPatch(visual, { crop: { [side]: n / 100 } }))}
           />
         ))}

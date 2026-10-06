@@ -10,11 +10,12 @@ describe("classifyImport", () => {
     // Some systems hand over .mov with an empty type — must still be a VIDEO, not decoded as an image.
     expect(classifyImport(file("clip.mov", ""))).toEqual({ ok: true, kind: "video" });
   });
-  it("explains audio instead of failing silently", () => {
-    const r = classifyImport(file("song.mp3", "audio/mpeg"));
-    expect(r.ok).toBe(false);
-    expect(!r.ok && r.message).toMatch(/audio/i);
-    expect(classifyImport(file("voice.m4a", "")).ok).toBe(false);
+  it("accepts audio (Phase 11), by MIME type or extension; rejects browser-undecodable formats with a conversion hint", () => {
+    expect(classifyImport(file("song.mp3", "audio/mpeg"))).toEqual({ ok: true, kind: "audio" });
+    expect(classifyImport(file("voice.m4a", ""))).toEqual({ ok: true, kind: "audio" });
+    const r = classifyImport(file("old.wma", "audio/x-ms-wma"));
+    expect(!r.ok && r.message).toMatch(/^old\.wma:.*MP3/);
+    expect(classifyImport(file("empty.wav", "audio/wav", 0)).ok).toBe(false);
   });
   it("explains HEIC with a concrete fix", () => {
     const r = classifyImport(file("IMG_0001.HEIC", ""));

@@ -1,4 +1,5 @@
 import { validateUploadedMediaFile } from "../media/upload-validation";
+import { checkAudioFile, isAudioFileName } from "../audio/safety";
 
 /**
  * MEDIA IMPORT for the composition editor: decides whether a picked/dropped
@@ -8,14 +9,14 @@ import { validateUploadedMediaFile } from "../media/upload-validation";
  * Pure apart from reading File metadata — unit-testable in Node.
  */
 
-export type ImportClassification = { ok: true; kind: "image" | "video" | "svg" } | { ok: false; message: string };
-
-const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|oga|flac|opus|aiff?|wma)$/i;
+export type ImportClassification = { ok: true; kind: "image" | "video" | "svg" | "audio" } | { ok: false; message: string };
 const HEIC_EXT = /\.(heic|heif)$/i;
 
 export function classifyImport(file: File): ImportClassification {
-  if (file.type.startsWith("audio/") || AUDIO_EXT.test(file.name)) {
-    return { ok: false, message: `${file.name}: audio files can't be added in this editor yet (audio arrives in a later phase). Add images or videos here — or use the Add Audio tool.` };
+  // Audio (Phase 11): music, voiceover, SFX, ambient — checked for format and size before anything is read.
+  if (isAudioFileName(file.name, file.type)) {
+    const a = checkAudioFile(file);
+    return a.ok ? { ok: true, kind: "audio" } : { ok: false, message: a.message };
   }
   if (/image\/hei[cf]/i.test(file.type) || HEIC_EXT.test(file.name)) {
     return { ok: false, message: `${file.name}: HEIC/HEIF photos (the iPhone default) can't be decoded by this browser. Export it as JPG or PNG (on iPhone: Settings › Camera › Formats › Most Compatible) and add that instead.` };
@@ -31,7 +32,7 @@ export function classifyImport(file: File): ImportClassification {
 }
 
 /** A decode failure (file passed validation but the browser couldn't open it), phrased for the user. */
-export function describeDecodeFailure(file: File, kind: "image" | "video" | "svg", error: unknown): string {
+export function describeDecodeFailure(file: File, kind: "image" | "video" | "svg" | "audio", error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   if (kind === "svg") return `${file.name}: ${error instanceof Error ? error.message : "this SVG couldn't be read."}`;
   if (kind === "video") {

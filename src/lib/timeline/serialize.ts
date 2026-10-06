@@ -3,8 +3,14 @@ import { DEFAULT_COMPOSITION, validateCompositionSize, type Guide, type Timeline
 import { applyVisualPatch, defaultClipVisual } from "./visual";
 import { normalizeTextStyle } from "./text-style";
 import { normalizeShapeSpec, normalizeSvgSpec } from "./shape-style";
+import { validateAnimation } from "../animation/keyframes";
+import { isAnimatablePath, isAudioPath } from "../animation/properties";
+import { isAudibleKind, normalizeClipAudio } from "../audio/model";
+import { normalizeCaptionTrackSettings, normalizeWords } from "../captions/caption-model";
+import { normalizeEffect, parseEffectPath, type Effect } from "../effects/model";
 import { clipTimelineEnd, hasVisual, isTrimmableContent, type Clip } from "./clip";
 import type { Track } from "./track";
+import { maxTransitionDuration, normalizeTransition, transitionWindow, type Transition } from "../transitions/model";
 
 /**
  * SAVE / RELOAD. A project is plain JSON: the TimelineModel inside a small
@@ -26,7 +32,7 @@ import type { Track } from "./track";
  */
 
 export const PROJECT_FORMAT = "clipbench-timeline";
-export const PROJECT_VERSION = 4;
+export const PROJECT_VERSION = 9;
 
 export class ProjectFormatError extends Error {
   constructor(message: string) {
@@ -86,6 +92,8 @@ export function deserializeTimeline(json: string): TimelineModel {
     if (typeof trackId !== "string" || !isObj(tracks[trackId])) fail(`trackIds references missing track "${String(trackId)}".`);
     const t = tracks[trackId];
     if (t.id !== trackId || !Array.isArray(t.clipIds)) fail(`Track "${trackId}" is malformed.`);
+    if (t.kind === "caption") t.caption = normalizeCaptionTrackSettings(t.caption);
+    else if (t.caption !== undefined) fail(`Track "${trackId}" isn't a caption track but has caption settings.`);
     let prevEnd = -Infinity;
     for (const clipId of t.clipIds) {
       const c = clips[clipId];
@@ -102,6 +110,16 @@ export function deserializeTimeline(json: string): TimelineModel {
         if (typeof c.content.text !== "string") fail(`Text clip "${clipId}" has no text.`);
         // v2 -> v3: legacy style names (italic/align/...) migrate; any invalid value is normalized rather than trusted.
         c.content.textStyle = normalizeTextStyle(c.content.textStyle);
+      }
+      if (c.content.kind === "caption") {
+        // v9: caption segments — text required, words validated (clip-relative, finite, ordered), speaker a string.
+        if (typeof c.content.text !== "string") fail(`Caption "${clipId}" has no text.`);
+        if (c.content.words !== undefined) {
+          const w = normalizeWords(c.content.words);
+          if (!w) fail(`Caption "${clipId}" has invalid word timings.`);
+          c.content.words = w;
+        }
+        if (c.content.speaker !== undefined && typeof c.content.speaker !== "string") fail(`Caption "${clipId}" has an invalid speaker.`);
       }
       if (c.content.kind === "graphic") {
         // v3 -> v4: shapes migrate (fill/stroke color strings -> toggle + color) and are normalized; embedded SVG must still be valid.
@@ -120,6 +138,40 @@ export function deserializeTimeline(json: string): TimelineModel {
           c.content.svg = svg;
         }
         if (!c.content.shape && !c.content.svg && !c.content.source) fail(`Graphic clip "${clipId}" has no shape, SVG or source.`);
+      }
+      if (c.effects !== undefined) {
+        // v6: effect stacks. Known types only, params clamped to their definitions, ids unique within the clip.
+        if (!hasVisual(c.content.kind)) fail(`Audio clip "${clipId}" can't have visual effects.`);
+        if (!Array.isArray(c.effects)) fail(`Clip "${clipId}" has an invalid effects list.`);
+        const effects = (c.effects as unknown[]).map(normalizeEffect);
+        if (effects.some((e) => e === null)) fail(`Clip "${clipId}" has an invalid or unknown effect.`);
+        if (new Set(effects.map((e) => e!.id)).size !== effects.length) fail(`Clip "${clipId}" has duplicate effect ids.`);
+        c.effects = effects as Effect[];
+      }
+      if (c.audio !== undefined) {
+        // v8: per-clip audio (volume, gain, fades, mute, role, normalization) — only on clips that carry sound.
+        if (!isAudibleKind(c.content.kind)) fail(`Clip "${clipId}" (${c.content.kind}) can't have audio settings.`);
+        const a = normalizeClipAudio(c.audio);
+        if (!a) fail(`Clip "${clipId}" has invalid audio settings.`);
+        c.audio = a;
+      }
+      if (c.animation !== undefined) {
+        // v5: keyframes. Validated, never trusted: known properties only, integer frames, finite values, valid easing, sorted/unique.
+        // v8: audio.* paths (volume/gain automation) are valid on clips that carry sound; picture paths only on visual clips.
+        const kind = c.content.kind;
+        // Effect-param tracks must point at an effect that exists on THIS clip and at one of its real params.
+        const clipEffects = c.effects ?? [];
+        const isKnown = (p: string) => {
+          if (isAudioPath(p)) return isAudibleKind(kind) && isAnimatablePath(p);
+          if (!hasVisual(kind)) return false;
+          const fx = parseEffectPath(p);
+          if (!fx) return isAnimatablePath(p);
+          const e = clipEffects.find((x) => x.id === fx.effectId);
+          return !!e && fx.param in e.params;
+        };
+        const v = validateAnimation(c.animation, isKnown);
+        if (!v.ok) fail(`Clip "${clipId}" has invalid animation: ${v.error}.`);
+        c.animation = v.animation;
       }
       if (c.timelineStart < prevEnd) fail(`Clips overlap on track "${trackId}".`);
       prevEnd = clipTimelineEnd(c);
@@ -146,6 +198,37 @@ export function deserializeTimeline(json: string): TimelineModel {
     tracks,
     clips,
   };
-  reserveIds([timeline.id, ...timeline.trackIds, ...Object.keys(clips), ...guides.map((g) => g.id)]);
+
+  // v7: transitions at edit points. Shape validated, then PLACEMENT: clips exist on the stated track and still meet,
+  // each clip edge hosts at most one transition, and the duration fits the clips (a saved project always satisfies all
+  // of this — anything else is a corrupt or hand-edited file).
+  if (raw.transitions !== undefined) {
+    if (!isObj(raw.transitions)) fail("timeline.transitions must be an object.");
+    const transitions: Record<string, Transition> = {};
+    const usedEdges = new Set<string>();
+    for (const [key, rawT] of Object.entries(raw.transitions)) {
+      const t = normalizeTransition(rawT);
+      if (!t || t.id !== key) fail(`Transition "${key}" is invalid or of an unknown type.`);
+      for (const edge of [t.fromClipId && `${t.fromClipId}:end`, t.toClipId && `${t.toClipId}:start`]) {
+        if (!edge) continue;
+        if (usedEdges.has(edge)) fail(`Two transitions share the clip edge "${edge}".`);
+        usedEdges.add(edge);
+      }
+      transitions[key] = t;
+    }
+    timeline.transitions = transitions;
+    for (const t of Object.values(transitions)) {
+      if (!transitionWindow(timeline, t)) fail(`Transition "${t.id}" doesn't sit on an edit point of its track (missing or non-adjacent clips).`);
+      if (t.duration > maxTransitionDuration(timeline, t)) fail(`Transition "${t.id}" is longer than its clips allow.`);
+    }
+  }
+  reserveIds([
+    timeline.id,
+    ...timeline.trackIds,
+    ...Object.keys(clips),
+    ...guides.map((g) => g.id),
+    ...Object.values(clips).flatMap((c) => (c.effects ?? []).map((e) => e.id)),
+    ...Object.keys(timeline.transitions ?? {}),
+  ]);
   return timeline;
 }

@@ -32,7 +32,7 @@ export function rectFromPoints(a: { x: number; y: number }, b: { x: number; y: n
 /** Layers whose visible bounds touch the marquee, front-most first. */
 export function marqueeHits(frame: ResolvedFrame, marquee: Rect): string[] {
   return frame.layers
-    .filter((l) => rectsIntersect(l.bounds, marquee))
+    .filter((l) => !l.transition?.outsideClip && rectsIntersect(l.bounds, marquee))
     .map((l) => l.clipId)
     .reverse();
 }

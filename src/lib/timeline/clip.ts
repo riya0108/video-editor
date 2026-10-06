@@ -1,5 +1,9 @@
 import { createId } from "./id";
 import type { ClipVisual, ShapeSpec, SvgSpec, TextStyle } from "./visual";
+import type { ClipAnimation } from "../animation/keyframes";
+import type { Effect } from "../effects/model";
+import type { ClipAudio } from "../audio/model";
+import type { CaptionWordTiming } from "../captions/caption-model";
 
 /** Opaque reference to source media — never bytes, never a File/Blob/URL. Resolving sourceId to real media is a different layer's job; see TIMELINE_ARCHITECTURE.md §2. */
 export interface MediaSourceRef {
@@ -9,7 +13,7 @@ export interface MediaSourceRef {
   sourceDurationFrames?: number;
 }
 
-export type ClipKind = "video" | "image" | "audio" | "text" | "graphic" | "overlay";
+export type ClipKind = "video" | "image" | "audio" | "text" | "graphic" | "overlay" | "caption";
 
 /** Trim-capable: duration is DERIVED (sourceOutFrame - sourceInFrame) — never stored separately, so it can't drift. See TIMELINE_ARCHITECTURE.md §4. */
 export interface TrimmableClipContent {
@@ -23,15 +27,19 @@ export interface TrimmableClipContent {
 
 /** Timeline-authored: no source in/out concept (a still image or text block has no inherent duration) — durationFrames IS the trim target. */
 export interface AuthoredClipContent {
-  kind: "image" | "graphic" | "text";
-  source?: MediaSourceRef; // present for image/graphic, absent for text
-  text?: string; // present for text only
+  kind: "image" | "graphic" | "text" | "caption";
+  source?: MediaSourceRef; // present for image/graphic, absent for text/caption
+  text?: string; // present for text and caption
   /** text only — undefined means DEFAULT_TEXT_STYLE. */
   textStyle?: TextStyle;
   /** graphic only — a vector shape drawn by the compositor. A graphic clip has exactly one of source / shape / svg. */
   shape?: ShapeSpec;
   /** graphic only — an embedded (sanitized) SVG, rasterized at draw size by the compositor. */
   svg?: SvgSpec;
+  /** caption only (Phase 12): per-word timing, seconds relative to the clip start (word highlighting / kinetic captions). */
+  words?: CaptionWordTiming[];
+  /** caption only: speaker label (VTT voice, speaker colors). */
+  speaker?: string;
   durationFrames: number;
 }
 
@@ -45,6 +53,16 @@ export interface Clip {
   content: ClipContent;
   /** Placement on the canvas (transform/crop/opacity/blend/matte). Undefined = defaultClipVisual() for the timeline's composition — so changing the composition size re-centers untouched clips automatically. Never present on audio clips. See visual.ts. */
   visual?: ClipVisual;
+  /**
+   * Keyframe animation (Phase 8): per-property keyframes, clip-relative. Undefined = static (exactly the pre-animation
+   * behavior). Evaluated by lib/animation/properties.ts applyAnimation; never mutates `visual`, which stays each
+   * property's base value. See KEYFRAME_ENGINE_ARCHITECTURE.md.
+   */
+  animation?: ClipAnimation;
+  /** Effect stack (Phase 9): index = order, top runs first. Params animate through `animation` at effects.<id>.<param>. See EFFECTS_ENGINE_ARCHITECTURE.md. */
+  effects?: Effect[];
+  /** Audio settings (Phase 11) for clips that carry sound (audio, video, overlay). Undefined = DEFAULT_CLIP_AUDIO. See AUDIO_ENGINE_ARCHITECTURE.md. */
+  audio?: ClipAudio;
 }
 
 export function isTrimmableContent(content: ClipContent): content is TrimmableClipContent {
@@ -90,6 +108,10 @@ export function createGraphicClip(trackId: string, timelineStart: number, source
 
 export function createTextClip(trackId: string, timelineStart: number, text: string, durationFrames: number, textStyle?: TextStyle): Clip {
   return createClip(trackId, timelineStart, textStyle ? { kind: "text", text, textStyle, durationFrames } : { kind: "text", text, durationFrames });
+}
+
+export function createCaptionClip(trackId: string, timelineStart: number, text: string, durationFrames: number, extra: { words?: CaptionWordTiming[]; speaker?: string } = {}): Clip {
+  return createClip(trackId, timelineStart, { kind: "caption", text, durationFrames, ...(extra.words ? { words: extra.words } : {}), ...(extra.speaker ? { speaker: extra.speaker } : {}) });
 }
 
 export function createShapeClip(trackId: string, timelineStart: number, shape: ShapeSpec, durationFrames: number): Clip {

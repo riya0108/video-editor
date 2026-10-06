@@ -1,6 +1,7 @@
 import { createId } from "./id";
 import type { Track } from "./track";
 import { clipTimelineEnd, type Clip } from "./clip";
+import type { Transition } from "../transitions/model";
 
 /** Output canvas of the project — the coordinate space every ClipVisual is authored in. See COMPOSITION_ARCHITECTURE.md §1. */
 export interface CompositionSettings {
@@ -29,6 +30,8 @@ export interface TimelineModel {
   trackIds: string[];
   tracks: Record<string, Track>;
   clips: Record<string, Clip>;
+  /** Transitions at edit points (Phase 10), keyed by id. Undefined = none. See TRANSITIONS_ARCHITECTURE.md. */
+  transitions?: Record<string, Transition>;
 }
 
 export function createTimeline(frameRate: number, composition: Partial<CompositionSettings> = {}): TimelineModel {

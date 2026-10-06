@@ -105,6 +105,9 @@ import {
  * selection.
  */
 
+/** Layers edited as text in place: text layers and caption segments (both render through the Text Engine). */
+const isTextLike = (kind: string | undefined) => kind === "text" || kind === "caption";
+
 export interface CompositionPreviewProps {
   timeline: TimelineModel;
   frame: number;
@@ -129,6 +132,8 @@ export interface CompositionPreviewProps {
   onCommitEdits?: (edits: Record<string, ClipEdit>) => void;
   /** Transient content drafts from the parent (e.g. typography inspector mid-scrub) — rendered, never committed. */
   contentDrafts?: Readonly<Record<string, AuthoredContentPatch>>;
+  /** A whole uncommitted timeline to render instead of `timeline` (e.g. an effect param mid-scrub, built by the same pure op that commits). */
+  draftTimeline?: TimelineModel | null;
   onAddGuide: (axis: Guide["axis"], position: number) => void;
   onMoveGuide: (guideId: string, position: number) => void;
   onRemoveGuide: (guideId: string) => void;
@@ -181,6 +186,7 @@ export default function CompositionPreview({
   onCommitText,
   onCommitEdits,
   contentDrafts,
+  draftTimeline,
   onAddGuide,
   onMoveGuide,
   onRemoveGuide,
@@ -275,13 +281,14 @@ export default function CompositionPreview({
     const edits: Record<string, ClipEdit> = {};
     for (const [id, c] of Object.entries(contentDrafts ?? {})) edits[id] = { content: c };
     for (const [id, e] of Object.entries(textDraft ?? {})) edits[id] = { ...edits[id], ...e, content: { ...edits[id]?.content, ...e.content } };
-    if (Object.keys(edits).length === 0) return timeline;
+    const base = draftTimeline ?? timeline;
+    if (Object.keys(edits).length === 0) return base;
     try {
-      return editClips(timeline, edits);
+      return editClips(base, edits);
     } catch {
-      return timeline;
+      return base;
     }
-  }, [timeline, contentDrafts, textDraft]);
+  }, [timeline, draftTimeline, contentDrafts, textDraft]);
   const resolveCtx = useMemo(() => ({ getSourceInfo: (id: string) => provider.getSourceInfo(id), measurer }), [provider, measurer]);
   const editingLayerFor = useCallback(
     (text: string) => {
@@ -722,7 +729,7 @@ export default function CompositionPreview({
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (editingTextClipId) return; // the text editor owns the keyboard
-    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && selectedClipIds.length === 1 && timeline.clips[selectedClipIds[0]]?.content.kind === "text") {
+    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && selectedClipIds.length === 1 && isTextLike(timeline.clips[selectedClipIds[0]]?.content.kind)) {
       const layer = selectedLayer();
       if (layer && !isLocked(layer)) {
         e.preventDefault();
@@ -797,9 +804,9 @@ export default function CompositionPreview({
         onPointerLeave={() => !dragRef.current && setHoverId(null)}
         onKeyDown={onKeyDown}
         onDoubleClick={(e) => {
-          // Double-click a text layer -> TEXT EDIT MODE (object mode otherwise).
+          // Double-click a text layer (or a caption — manual correction in place) -> TEXT EDIT MODE (object mode otherwise).
           const hit = resolvedRef.current ? hitTest(resolvedRef.current, toComp(screenPoint(e))) : null;
-          if (hit && timeline.clips[hit.clipId]?.content.kind === "text" && !isLocked(hit)) {
+          if (hit && isTextLike(timeline.clips[hit.clipId]?.content.kind) && !isLocked(hit)) {
             onSelectionChange([hit.clipId]);
             setMode("transform");
             onEditingTextClipIdChange?.(hit.clipId);
@@ -814,7 +821,7 @@ export default function CompositionPreview({
         className="relative min-h-0 flex-1 touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/60"
       >
         <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-        {editingTextClipId && timeline.clips[editingTextClipId]?.content.kind === "text" && (
+        {editingTextClipId && isTextLike(timeline.clips[editingTextClipId]?.content.kind) && (
           <TextEditOverlay
             key={editingTextClipId}
             layoutFor={editingLayerFor}

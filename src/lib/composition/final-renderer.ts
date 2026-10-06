@@ -36,7 +36,7 @@ export interface FinalFrame {
 export class FinalRenderer {
   private readonly canvas: AnyCanvas;
   private readonly ctx: Ctx2D;
-  private scratch: { canvas: AnyCanvas; ctx: Ctx2D } | null = null;
+  private readonly scratch = new Map<number, { canvas: AnyCanvas; ctx: Ctx2D }>();
   private readonly loadedFonts = new Set<string>();
 
   constructor(
@@ -88,7 +88,7 @@ export class FinalRenderer {
     const stats = drawResolvedFrame(this.ctx, resolved, pixels, {
       renderScale: profile.scale,
       smoothing: profile.smoothing,
-      getScratch: () => this.getScratch(resolved.width, resolved.height),
+      getScratch: (slot = 0) => this.getScratch(slot, resolved.width, resolved.height),
     });
     if (stats.skipped.length > 0) {
       throw new FinalRenderError(`Frame ${frame}: ${stats.skipped.length} layer(s) had no pixels.`, frame, stats.skipped);
@@ -122,12 +122,15 @@ export class FinalRenderer {
     return true;
   }
 
-  private getScratch(width: number, height: number): Ctx2D {
-    if (!this.scratch) {
+  /** One canvas per slot (0 = layer isolation, 1-3 = transitions), allocated on first use. */
+  private getScratch(slot: number, width: number, height: number): Ctx2D {
+    let s = this.scratch.get(slot);
+    if (!s) {
       const canvas = createCanvas(width, height);
-      this.scratch = { canvas, ctx: get2d(canvas) };
+      s = { canvas, ctx: get2d(canvas, { willReadFrequently: true }) };
+      this.scratch.set(slot, s);
     }
-    ensureSize(this.scratch.canvas, width, height);
-    return this.scratch.ctx;
+    ensureSize(s.canvas, width, height);
+    return s.ctx;
   }
 }

@@ -8,7 +8,12 @@ export type TimelineEditErrorReason =
   | "invalid-split-point"
   | "invalid-track-index"
   | "invalid-visual"
-  | "guide-not-found";
+  | "guide-not-found"
+  | "invalid-keyframe"
+  | "keyframe-conflict"
+  | "effect-not-found"
+  | "transition-not-found"
+  | "invalid-transition";
 
 /**
  * Thrown by every mutating function in operations.ts. Deliberately a single

@@ -1,7 +1,13 @@
 import { clipTimelineEnd, isTrimmableContent, type Clip, type ClipKind } from "../timeline/clip";
 import { allTracks, type TimelineModel } from "../timeline/model";
 import { normalizeShapeSpec, normalizeSvgSpec, type SvgSpec } from "../timeline/shape-style";
-import { defaultClipVisual, normalizeTextStyle, type BlendMode, type ClipVisual, type FitMode, type ShapeSpec, type TextStyle } from "../timeline/visual";
+import { applyAnimation } from "../animation/properties";
+import type { EvaluatedEffect } from "../effects/process";
+import { activeTransitionAt, transitionSeed, transitionsByTrack } from "../transitions/model";
+import type { TransitionDirection, TransitionParams } from "../transitions/registry";
+import { clipBaseVisual, captionSettingsOf, withConcreteVisual } from "../captions/timeline-bridge";
+import { captionDisplayText, captionTextStyle, type CaptionTrackSettings } from "../captions/caption-model";
+import { normalizeTextStyle, type BlendMode, type ClipVisual, type FitMode, type ShapeSpec, type TextStyle } from "../timeline/visual";
 import { compose, rectsIntersect, rotateDegrees, scale, transformedBounds, translate, type Matrix2D, type Rect } from "./matrix";
 import { layoutText, type TextLayout, type TextMeasurer } from "./text-layout";
 
@@ -40,6 +46,22 @@ export type LayerContent =
   /** Embedded SVG: rasterized by the renderer at the exact pixel size it's drawn at (lib/composition/svg-raster.ts). */
   | { type: "svg"; svg: SvgSpec };
 
+/** A layer taking part in a transition (Phase 10). Both sides of a pair are adjacent in `layers`, from then to. */
+export interface ResolvedTransition {
+  id: string;
+  type: string;
+  /** Eased progress 0..1. */
+  progress: number;
+  params: TransitionParams;
+  direction?: TransitionDirection;
+  role: "from" | "to";
+  /** Between two clips (false = clip/timeline boundary, one side only). */
+  paired: boolean;
+  seed: number;
+  /** This layer is shown outside its own clip span (source handle or held edge frame) — not hit-testable. */
+  outsideClip: boolean;
+}
+
 export interface ResolvedLayer {
   clipId: string;
   trackId: string;
@@ -59,7 +81,11 @@ export interface ResolvedLayer {
   matte?: { sourceId: string; sourceFrame: number; invert: boolean };
   /** Axis-aligned composition-pixel bounds of the visible (cropped) region. */
   bounds: Rect;
+  /** Enabled effects in stack order, params already keyframe-evaluated (Phase 9). Empty = the unchanged draw path. */
+  effects: EvaluatedEffect[];
   visual: ClipVisual;
+  /** Present while the layer is part of an active transition. */
+  transition?: ResolvedTransition;
 }
 
 export interface ResolvedFrame {
@@ -121,12 +147,23 @@ export function cropRect(contentW: number, contentH: number, visual: ClipVisual)
   };
 }
 
+/**
+ * Source frame shown at clip-relative `local`. Inside the clip it's the usual in + local. Outside (a transition showing
+ * the clip past its out point / before its in point) it uses the source's handle frames when they exist and holds the
+ * edge frame otherwise — never a frame the source doesn't have.
+ */
+export function sourceFrameAt(c: { sourceInFrame: number; sourceOutFrame: number; source: { sourceDurationFrames?: number } }, local: number): number {
+  const f = c.sourceInFrame + local;
+  const last = c.source.sourceDurationFrames !== undefined ? c.source.sourceDurationFrames - 1 : c.sourceOutFrame - 1;
+  return Math.max(0, Math.min(Math.max(last, c.sourceOutFrame - 1), f));
+}
+
 export function isClipActiveAt(clip: Clip, frame: number): boolean {
   return frame >= clip.timelineStart && frame < clipTimelineEnd(clip);
 }
 
 export function effectiveVisual(timeline: TimelineModel, clip: Clip, overrides?: Readonly<Record<string, ClipVisual>>): ClipVisual {
-  return overrides?.[clip.id] ?? clip.visual ?? defaultClipVisual(timeline.composition.width, timeline.composition.height);
+  return overrides?.[clip.id] ?? clipBaseVisual(timeline, clip);
 }
 
 export function resolveFrame(timeline: TimelineModel, frame: number, ctx: ResolveContext): ResolvedFrame {
@@ -137,8 +174,36 @@ export function resolveFrame(timeline: TimelineModel, frame: number, ctx: Resolv
 
   // trackIds[0] is frontmost (model.ts) -> paint back-to-front by walking the list in reverse.
   const tracks = allTracks(timeline).reverse();
+  const transitions = timeline.transitions ? transitionsByTrack(timeline) : undefined;
   for (const track of tracks) {
     if (!track.visible || track.kind === "audio") continue;
+    // TRANSITIONS (TRANSITIONS_ARCHITECTURE.md §4): inside a transition window the track contributes BOTH sides — the
+    // outgoing clip (continuing past its out point) and the incoming one (starting before its in point) — tagged so
+    // the draw core composites them through the transition's compositor at this track's z-position.
+    const active = transitions && activeTransitionAt(timeline, transitions.get(track.id), frame);
+    if (active) {
+      const { transition: t, window: w } = active;
+      const paired = w.from !== null && w.to !== null;
+      for (const [clip, role] of [[w.from, "from"], [w.to, "to"]] as const) {
+        if (!clip) continue;
+        const layer = resolveClip(timeline, clip, frame, ctx, missing);
+        // Opacity culling only: a layer parked off-canvas may slide/push INTO view during the transition.
+        if (!layer || layer.opacity <= 0) continue;
+        layer.transition = {
+          id: t.id,
+          type: t.type,
+          progress: active.progress,
+          params: t.params,
+          direction: t.direction,
+          role,
+          paired,
+          seed: transitionSeed(t.id),
+          outsideClip: !isClipActiveAt(clip, frame),
+        };
+        layers.push(layer);
+      }
+      continue;
+    }
     // A track holds non-overlapping clips, so at most one is active per track per frame.
     const clipId = track.clipIds.find((id) => {
       const c = timeline.clips[id];
@@ -182,6 +247,17 @@ function cachedShape(raw: object): ShapeSpec {
   return s;
 }
 
+/** The {text, textStyle} a caption renders as — cached per (content, track settings, composition width) object identity so layout caching still hits. */
+const captionTextCache = new WeakMap<object, { settings: CaptionTrackSettings; compW: number; value: { text: string; textStyle: unknown } }>();
+function captionTextContent(c: { text?: string; speaker?: string }, settings: CaptionTrackSettings, comp: { width: number }) {
+  const hit = captionTextCache.get(c);
+  if (hit && hit.settings === settings && hit.compW === comp.width) return hit.value;
+  const speakerColor = c.speaker ? settings.speakerColors?.[c.speaker] : undefined;
+  const value = { text: captionDisplayText(c.text ?? "", settings.style), textStyle: captionTextStyle(settings.style, comp, speakerColor) };
+  captionTextCache.set(c, { settings, compW: comp.width, value });
+  return value;
+}
+
 const layoutCache = new WeakMap<object, { measurer: TextMeasurer; generation: number; result: { layout: TextLayout; style: TextStyle } }>();
 
 export function cachedTextLayout(content: { text?: string; textStyle?: unknown }, measurer: TextMeasurer): { layout: TextLayout; style: TextStyle } {
@@ -195,7 +271,12 @@ export function cachedTextLayout(content: { text?: string; textStyle?: unknown }
   return result;
 }
 
-function resolveClip(timeline: TimelineModel, clip: Clip, frame: number, ctx: ResolveContext, missing: Set<string>): ResolvedLayer | null {
+function resolveClip(timeline: TimelineModel, rawClip: Clip, frame: number, ctx: ResolveContext, missing: Set<string>): ResolvedLayer | null {
+  // KEYFRAME EVALUATION (KEYFRAME_ENGINE_ARCHITECTURE.md §1): the one place animation enters rendering, for every layer
+  // kind. A static clip comes back as the same object (unchanged path). A live drag override already carries the
+  // evaluated values being edited, so it takes precedence over the keyframes.
+  // Animated captions evaluate against their concrete placement (their track's, until individually placed).
+  const clip = ctx.visualOverrides?.[rawClip.id] ? rawClip : applyAnimation(rawClip.animation ? withConcreteVisual(timeline, rawClip) : rawClip, frame - rawClip.timelineStart, timeline.composition);
   const visual = effectiveVisual(timeline, clip, ctx.visualOverrides);
   const { width: compW, height: compH } = timeline.composition;
   const c = clip.content;
@@ -212,9 +293,18 @@ function resolveClip(timeline: TimelineModel, clip: Clip, frame: number, ctx: Re
       missing.add(c.source.sourceId);
       return null;
     }
-    sourceFrame = c.sourceInFrame + (frame - clip.timelineStart);
+    sourceFrame = sourceFrameAt(c, frame - clip.timelineStart);
     content = { type: "media", sourceId: c.source.sourceId, sourceFrame, still: false };
     ({ width, height } = info);
+  } else if (c.kind === "caption") {
+    // CAPTION -> TEXT LAYER (CAPTIONS_ARCHITECTURE.md §4): the Text Engine lays it out and draws it; only the style
+    // comes from the caption track (plus a speaker color), so captions can never render differently from text.
+    if (!c.text) return null;
+    const settings = captionSettingsOf(timeline, clip.trackId);
+    const { layout, style } = cachedTextLayout(captionTextContent(c, settings, timeline.composition), ctx.measurer);
+    content = { type: "text", layout, style };
+    ({ width, height } = layout);
+    fit = "none";
   } else if (c.kind === "text") {
     if (!c.text) return null;
     const { layout, style } = cachedTextLayout(c, ctx.measurer);
@@ -276,5 +366,6 @@ function resolveClip(timeline: TimelineModel, clip: Clip, frame: number, ctx: Re
     matte,
     bounds: transformedBounds(matrix, crop),
     visual,
+    effects: (clip.effects ?? []).filter((e) => e.enabled).map((e) => ({ id: e.id, type: e.type, params: e.params })),
   };
 }

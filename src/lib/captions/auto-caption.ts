@@ -162,6 +162,17 @@ export async function transcribeWords(
     URL.revokeObjectURL(objectUrl);
   }
 
+  return transcribeAudio16k(audio, { modelTier, language, onProgress });
+}
+
+/**
+ * The speech-to-text core on already-decoded 16 kHz mono PCM — shared by transcribeWords (a video/audio file) and the
+ * composition editor's captions (which transcribe the timeline's own audio mix, so word times are timeline times).
+ */
+export async function transcribeAudio16k(
+  audio: Float32Array,
+  { modelTier, language, onProgress }: GenerateCaptionsOptions,
+): Promise<TranscribeWordsResult> {
   const transcriber = (await loadTranscriber(modelTier, onProgress)) as (
     audio: Float32Array,
     options: Record<string, unknown>,

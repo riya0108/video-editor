@@ -79,6 +79,8 @@ export function constrainViewport(viewport: ViewportState, comp: Size, view: Siz
 export function hitTest(frame: ResolvedFrame, compPoint: Point): ResolvedLayer | null {
   for (let i = frame.layers.length - 1; i >= 0; i--) {
     const layer = frame.layers[i];
+    // A clip shown past its own span by a transition (handle/held frame) isn't "there" to click.
+    if (layer.transition?.outsideClip) continue;
     const inv = invert(layer.matrix);
     if (!inv) continue;
     if (rectContains(layer.crop, applyToPoint(inv, compPoint))) return layer;

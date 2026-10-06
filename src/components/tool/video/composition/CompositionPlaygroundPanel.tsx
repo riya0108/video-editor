@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, Pause, Play, Redo2, SkipBack, SkipForward, Undo2, Download, Loader2, ImagePlus, Type } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, EyeOff, Lock, Volume2, VolumeX, FileAudio, Pause, Play, Redo2, SkipBack, SkipForward, Undo2, Download, Loader2, ImagePlus, Type } from "lucide-react";
 import CompositionPreview from "./CompositionPreview";
 import { TimelineEngine, type EditResult } from "../../../../lib/timeline/engine";
 import { formatTimecode, secondsToFrames } from "../../../../lib/timeline/time-model";
@@ -18,8 +18,24 @@ import type { AuthoredContentPatch } from "../../../../lib/timeline/operations";
 import TimelinePanel from "./TimelinePanel";
 import { classifyImport, describeDecodeFailure, dragHasFiles, filesFromDataTransfer } from "../../../../lib/composition/media-import";
 import { createCanvasTextMeasurer, FinalRenderer, MediaFrameProvider, FinalRenderError, resolveClipLayer, safeZones, type BoxSize, type ResolvedLayer, type TextLayout, type SafeZone, type SafeZonePreset } from "../../../../lib/composition";
-import TransformPanel from "./TransformPanel";
+import TransformPanel, { type KeyframeControl } from "./TransformPanel";
+import KeyframesPanel from "./KeyframesPanel";
+import EffectsPanel from "./EffectsPanel";
+import TransitionsPanel from "./TransitionsPanel";
+import { transitionWindow } from "../../../../lib/transitions/model";
+import { updateEffectParams } from "../../../../lib/timeline/operations";
 import MultiSelectionPanel from "./MultiSelectionPanel";
+import AudioPanel from "./AudioPanel";
+import CaptionsPanel, { type GenerateOptions } from "./CaptionsPanel";
+import { parseSubtitles, toSrt, toVtt } from "../../../../lib/captions/subtitle-io";
+import { segmentWords, SEGMENT_PROFILES, toMono16k } from "../../../../lib/captions/segmenter";
+import { captionCuesOf } from "../../../../lib/timeline/operations";
+import type { CaptionProgress } from "../../../../lib/captions/auto-caption";
+import { AudioSourceStore } from "../../../../lib/audio/source-store";
+import { AudioPlaybackEngine } from "../../../../lib/audio/playback";
+import { clipPeakDb, encodeWav16, mixTimeline } from "../../../../lib/audio/engine-core";
+import { AUDIO_ROLES, guessAudioRole, isAudibleKind } from "../../../../lib/audio/model";
+import { valueAt } from "../../../../lib/animation/properties";
 
 /**
  * COMPOSITION PLAYGROUND — internal page that drives the composition &
@@ -92,6 +108,9 @@ export default function CompositionPlaygroundPanel() {
   const provider = useMemo(() => (typeof window === "undefined" ? null : new MediaFrameProvider()), []);
   const measurer = useMemo(() => (typeof window === "undefined" ? null : createCanvasTextMeasurer()), []);
   const finalRenderer = useMemo(() => (provider && measurer ? new FinalRenderer(provider, measurer) : null), [provider, measurer]);
+  // AUDIO (Phase 11): decoded sources + waveform peaks, and the Web Audio player whose clock drives playback.
+  const audioStore = useMemo(() => (typeof window === "undefined" ? null : new AudioSourceStore()), []);
+  const player = useMemo(() => (audioStore ? new AudioPlaybackEngine((id) => audioStore.buffer(id)) : null), [audioStore]);
   const engineRef = useRef<TimelineEngine | null>(null);
   const [, bump] = useReducer((x: number) => x + 1, 0);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -106,8 +125,17 @@ export default function CompositionPlaygroundPanel() {
   const [notice, setNotice] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   /** Uncommitted inspector edit (text style / shape / SVG) — rendered live, committed as one undo step. */
+  /** Effect param mid-scrub: rendered through a draft timeline made by the same pure op that will commit. */
+  const [effectDraft, setEffectDraft] = useState<{ clipId: string; effectId: string; params: Record<string, number> } | null>(null);
   const [contentDraft, setContentDraft] = useState<{ clipId: string; patch: AuthoredContentPatch } | null>(null);
   const [styleClipboard, setStyleClipboard] = useState<TextStyle | null>(null);
+  /** Selected transition (UI state, like clip selection — never in undo history). */
+  const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null);
+  /** Transition preview: playback runs over this range once, then stops. */
+  const [playRange, setPlayRange] = useState<{ start: number; end: number } | null>(null);
+  /** Captions (Phase 12): which caption track the panel edits, and speech-to-text progress. */
+  const [captionTrackId, setCaptionTrackId] = useState<string | null>(null);
+  const [captionProgress, setCaptionProgress] = useState<CaptionProgress | null>(null);
 
   // --- build the demo project once ---
   useEffect(() => {
@@ -116,6 +144,8 @@ export default function CompositionPlaygroundPanel() {
     (async () => {
       try {
         const { durationSec } = await provider.addVideo("demo-video", DEMO_VIDEO_URL, FPS);
+        // The video's own soundtrack (decoded in the background; a video without one is simply silent).
+        void audioStore?.add("demo-video", DEMO_VIDEO_URL, "Demo video", { video: true });
         provider.addStill("logo", makeLogoAsset());
         provider.addStill("matte", makeMatteAsset());
         if (cancelled) return;
@@ -134,7 +164,8 @@ export default function CompositionPlaygroundPanel() {
         const backdrop = must(engine.addTrack("graphic", "Backdrop")).track;
 
         must(engine.insertClip(backdrop.id, { kind: "graphic", shape: normalizeShapeSpec({ type: "rect", width: 1920, height: 1080, fill: "#312e81", strokeWidth: 0, cornerRadius: 0 }), durationFrames }, 0));
-        must(engine.insertClip(main.id, { kind: "video", source: { sourceId: "demo-video", sourceDurationFrames: durationFrames }, sourceInFrame: 0, sourceOutFrame: durationFrames }, 0));
+        const mainClip = must(engine.insertClip(main.id, { kind: "video", source: { sourceId: "demo-video", sourceDurationFrames: durationFrames }, sourceInFrame: 0, sourceOutFrame: durationFrames }, 0)).clip;
+        must(engine.setClipAudio(mainClip.id, { role: "original" }));
         must(
           engine.insertClip(pip.id, { kind: "overlay", source: { sourceId: "demo-video", sourceDurationFrames: durationFrames }, sourceInFrame: 0, sourceOutFrame: durationFrames }, 0, {
             transform: { x: 1560, y: 700, scaleX: 0.42, scaleY: 0.42, rotation: -6 },
@@ -153,6 +184,9 @@ export default function CompositionPlaygroundPanel() {
             transform: { x: 960, y: 940 },
           }),
         );
+        // The PiP shows the same video as the main layer — its copy of the soundtrack is muted so the voice isn't doubled.
+        const pipClip = engine.timeline.tracks[pip.id].clipIds[0];
+        must(engine.setClipAudio(pipClip, { muted: true }));
         engine.resetHistory();
         engineRef.current = engine;
         bump();
@@ -166,38 +200,83 @@ export default function CompositionPlaygroundPanel() {
   }, [provider]);
 
   useEffect(() => () => provider?.dispose(), [provider]);
+  useEffect(() => () => player?.dispose(), [player]);
+  // Waveforms / decode status arriving re-render the timeline and inspector.
+  useEffect(() => audioStore?.onChange(() => bump()), [audioStore]);
 
   const engine = engineRef.current;
   const timeline = engine?.timeline ?? null;
   const duration = timeline ? Math.max(1, timelineDurationFrames(timeline)) : 1;
 
   // --- playback clock: wall-clock based, so dropped render frames don't slow playback down ---
+  // SYNC (AUDIO_ENGINE_ARCHITECTURE.md §4): while playing, the AudioContext clock is the master — the frame shown is
+  // whatever the listener is hearing, so picture follows sound and dropped render frames never cause drift.
   useEffect(() => {
     provider?.setPlaying(playing);
-    if (!playing) return;
+    if (!playing) {
+      player?.stop();
+      return;
+    }
     let raf = 0;
     const t0 = performance.now();
     const f0 = frame;
+    const tl0 = engineRef.current?.timeline;
+    if (player && tl0) player.play(tl0, f0);
     const tick = () => {
-      const f = f0 + Math.floor(((performance.now() - t0) / 1000) * FPS);
+      // Audio clock when it's running; wall clock otherwise (no audio device / autoplay-blocked context) so the picture never freezes.
+      const f = player?.clockRunning ? Math.floor(player.currentFrameExact()) : f0 + Math.floor(((performance.now() - t0) / 1000) * FPS);
+      if (playRange && f >= playRange.end) {
+        setFrame(Math.min(playRange.end, duration - 1));
+        setPlaying(false);
+        setPlayRange(null);
+        return;
+      }
+      if (f >= duration) {
+        // Loop: restart sound from the top in step with the picture.
+        const tl = engineRef.current?.timeline;
+        if (player && tl) player.play(tl, 0);
+      }
       setFrame(f % duration);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, duration, provider]);
+  }, [playing, duration, provider, playRange]);
 
-  const apply = useCallback((r: EditResult) => {
-    setEditError(r.ok ? null : r.error.message);
-    bump();
-  }, []);
+  const apply = useCallback(
+    (r: EditResult) => {
+      setEditError(r.ok ? null : r.error.message);
+      // Edits while playing (volume, mute, trim, move...) are heard immediately: re-schedule from the current position.
+      if (r.ok) player?.update(r.timeline);
+      bump();
+    },
+    [player],
+  );
 
-  const commitVisuals = useCallback((patches: Record<string, ClipVisualPatch>) => engine && apply(engine.setClipVisuals(patches)), [engine, apply]);
+  // Every visual edit commits AT THE PLAYHEAD: animated properties get a keyframe there (auto-key), static ones change as before.
+  const commitVisuals = useCallback((patches: Record<string, ClipVisualPatch>) => engine && apply(engine.setClipVisualsAtFrame(patches, frame)), [engine, apply, frame]);
   /** Selection lives in TimelineEngine (outside undo history, pruned on delete/undo) — the UI only mirrors it. */
   const setSelection = useCallback(
     (ids: string[]) => {
       engine?.selectMany(ids);
+      setSelectedTransitionId(null);
+      bump();
+    },
+    [engine],
+  );
+  /** Selecting a transition parks the playhead on its cut, so the preview shows it mid-way. */
+  const selectTransition = useCallback(
+    (id: string | null) => {
+      setSelectedTransitionId(id);
+      if (!engine || !id) return;
+      engine.clearSelection();
+      const t = engine.timeline.transitions?.[id];
+      const w = t && transitionWindow(engine.timeline, t);
+      if (w) {
+        setPlaying(false);
+        setFrame(Math.min(Math.max(w.start, w.cut), w.end - 1));
+      }
       bump();
     },
     [engine],
@@ -205,8 +284,8 @@ export default function CompositionPlaygroundPanel() {
 
   // Debug handle for in-browser verification (dev only).
   useEffect(() => {
-    if (import.meta.env.DEV && engine) (window as unknown as Record<string, unknown>).__composition = { engine, provider, finalRenderer, measurer };
-  }, [engine, provider, finalRenderer, measurer]);
+    if (import.meta.env.DEV && engine) (window as unknown as Record<string, unknown>).__composition = { engine, provider, finalRenderer, measurer, audioStore, player };
+  }, [engine, provider, finalRenderer, measurer, audioStore, player]);
 
   // --- keyboard: undo/redo/play ---
   useEffect(() => {
@@ -216,6 +295,7 @@ export default function CompositionPlaygroundPanel() {
         e.preventDefault();
         if (e.shiftKey) engine.redo();
         else engine.undo();
+        player?.update(engine.timeline);
         bump();
       } else if (e.key === "k" || (e.key === " " && !(e.target as HTMLElement)?.closest("[role=application]"))) {
         e.preventDefault();
@@ -237,6 +317,7 @@ export default function CompositionPlaygroundPanel() {
     if (!engine || !provider) return;
     const errors: string[] = [];
     const added: string[] = [];
+    const relinked: string[] = [];
     const at = frame;
     for (const file of files) {
       const c = classifyImport(file);
@@ -248,13 +329,47 @@ export default function CompositionPlaygroundPanel() {
       const url = URL.createObjectURL(file);
       try {
         let r: EditResult<{ clip: Clip }>;
-        if (c.kind === "svg") {
+        if (c.kind === "audio") {
+          URL.revokeObjectURL(url);
+          if (!audioStore) throw new Error("audio unavailable");
+          // RELINK: a project loaded without its audio references sources by id; re-adding a file with the same name
+          // restores that source in place (every clip using it plays again) instead of adding a duplicate clip.
+          const missingIds = new Set<string>();
+          for (const clip of Object.values(engine.timeline.clips)) {
+            const cc = clip.content;
+            if (cc.kind === "audio" && cc.source.label === file.name && audioStore.status(cc.source.sourceId).state !== "ready") missingIds.add(cc.source.sourceId);
+          }
+          if (missingIds.size > 0) {
+            for (const sid of missingIds) {
+              const st = await audioStore.add(sid, file, file.name);
+              if (st.state !== "ready") errors.push(st.state === "error" ? st.message : `${file.name}: no audio could be decoded.`);
+              else if (st.warning) errors.push(st.warning);
+            }
+            relinked.push(file.name);
+            continue;
+          }
+          const st = await audioStore.add(id, file, file.name);
+          if (st.state !== "ready") {
+            audioStore.remove(id);
+            errors.push(st.state === "error" ? st.message : `${file.name}: no audio could be decoded.`);
+            continue;
+          }
+          if (st.warning) errors.push(st.warning);
+          const n = Math.max(1, Math.floor(st.durationSec * FPS));
+          const role = guessAudioRole(file.name);
+          const roleLabel = AUDIO_ROLES.find((x) => x.role === role)?.label ?? "Audio";
+          const t = engine.addTrack("audio", `${roleLabel}: ${file.name}`);
+          if (!t.ok) throw t.error;
+          r = engine.insertClip(t.track.id, { kind: "audio", source: { sourceId: id, label: file.name, sourceDurationFrames: n }, sourceInFrame: 0, sourceOutFrame: n }, at);
+          if (r.ok) engine.setClipAudio(r.clip.id, { role });
+        } else if (c.kind === "svg") {
           URL.revokeObjectURL(url);
           const { width, height } = engine.timeline.composition;
           const svg = svgSpecFromMarkup(await file.text(), Math.min(width, height) * 0.5);
           r = engine.addGraphicLayer({ graphic: { svg }, atFrame: at, durationFrames: 5 * FPS, name: file.name });
         } else if (c.kind === "video") {
           const { durationSec } = await provider.addVideo(id, url, FPS);
+          void audioStore?.add(id, url, file.name, { video: true });
           const n = Math.max(1, secondsToFrames(durationSec, FPS, "floor"));
           const t = engine.addTrack("overlay", file.name);
           if (!t.ok) throw t.error;
@@ -274,11 +389,16 @@ export default function CompositionPlaygroundPanel() {
       } catch (e) {
         URL.revokeObjectURL(url);
         provider.remove(id);
+        audioStore?.remove(id);
         errors.push(describeDecodeFailure(file, c.kind, e));
       }
     }
     setImportErrors(errors);
-    if (added.length > 0) setNotice(`Added ${added.join(", ")} at ${formatTimecode(at, FPS)} — selected and on top.`);
+    if (added.length > 0 || relinked.length > 0) {
+      setNotice(
+        [added.length ? `Added ${added.join(", ")} at ${formatTimecode(at, FPS)}.` : "", relinked.length ? `Relinked missing audio: ${relinked.join(", ")}.` : ""].filter(Boolean).join(" "),
+      );
+    }
     bump();
   };
 
@@ -292,6 +412,82 @@ export default function CompositionPlaygroundPanel() {
   }
 
   const selectedIds = [...engine.selection.selectedClipIds];
+  // A transition dropped by an edit (clips moved apart / deleted) or undone simply stops being selected.
+  const selectedTransition = selectedTransitionId ? (timeline.transitions?.[selectedTransitionId] ?? null) : null;
+  // CAPTIONS PIPELINE (CAPTIONS_ARCHITECTURE.md §3): timeline audio mix (Phase 11 mixer, honoring mute/solo) -> 16 kHz
+  // mono -> speech-to-text (in-browser Whisper) -> word timestamps -> segments -> caption clips. Word times come out in
+  // TIMELINE seconds, so captions land where the speech is no matter how the clips are arranged.
+  const generateCaptions = async (opts: GenerateOptions) => {
+    if (!audioStore) return;
+    // Read the engine's CURRENT state (not this render's snapshot): generation is async and must caption what's there now.
+    const tl = engine.timeline;
+    const selIds = [...engine.selection.selectedClipIds];
+    const selNow = selIds.length === 1 ? tl.clips[selIds[0]] : undefined;
+    const sel = selNow && isAudibleKind(selNow.content.kind) ? selNow : null;
+    const startSec = opts.scope === "selection" && sel ? sel.timelineStart / FPS : 0;
+    const endSec = opts.scope === "selection" && sel ? clipTimelineEnd(sel) / FPS : Math.max(1, timelineDurationFrames(tl)) / FPS;
+    // "Selected clip only" hears ONLY that clip: its track soloed (solo is derived, so this view never touches the project).
+    const source = opts.scope === "selection" && sel ? { ...tl, tracks: Object.fromEntries(Object.entries(tl.tracks).map(([id, t]) => [id, { ...t, solo: id === sel.trackId, muted: false }])) } : tl;
+    const mix = mixTimeline(source, (id) => audioStore.pcm(id), { sampleRate: 16000, startSec, endSec });
+    if (mix.peak === 0) {
+      setNotice("There's no audible audio to caption (check mute/solo, or that the audio has finished loading).");
+      return;
+    }
+    setCaptionProgress({ phase: "downloading", fraction: 0 });
+    try {
+      const { transcribeAudio16k } = await import("../../../../lib/captions/auto-caption");
+      const { words } = await transcribeAudio16k(toMono16k(mix.channels, 16000), { modelTier: opts.tier, language: opts.language || undefined, onProgress: setCaptionProgress });
+      const cues = segmentWords(words.map((w) => ({ text: w.text, start: w.start + startSec, end: w.end + startSec })), SEGMENT_PROFILES[opts.profile]);
+      if (cues.length === 0) {
+        setNotice("No speech was recognized in that audio.");
+        return;
+      }
+      const target = opts.replace && captionTrackId && engine.timeline.tracks[captionTrackId]?.kind === "caption" ? captionTrackId : undefined;
+      const r = engine.importCaptionCues(cues, { target, name: "Captions" });
+      apply(r);
+      if (r.ok) {
+        setCaptionTrackId(r.trackId);
+        setNotice(`Generated ${r.clips.length} captions (${words.length} words) from ${(endSec - startSec).toFixed(1)} s of audio.`);
+      }
+    } catch (e) {
+      setNotice(`Captioning failed: ${(e as Error).message}`);
+    } finally {
+      setCaptionProgress(null);
+    }
+  };
+  const importSubtitleFile = async (file: File) => {
+    if (!/\.(srt|vtt)$/i.test(file.name)) return setNotice(`${file.name}: not an .srt or .vtt file.`);
+    if (file.size > 20 * 1024 * 1024) return setNotice(`${file.name}: subtitle file over 20 MB — that's not a subtitle file.`);
+    const parsed = parseSubtitles(await file.text(), file.name);
+    if (parsed.cues.length === 0) return setNotice(`${file.name}: no captions could be read.${parsed.warnings.length ? ` ${parsed.warnings.slice(0, 3).join(" ")}` : ""}`);
+    const r = engine.importCaptionCues(parsed.cues, { name: file.name.replace(/\.(srt|vtt)$/i, "") });
+    apply(r);
+    if (r.ok) {
+      setCaptionTrackId(r.trackId);
+      const notes = [`Imported ${r.clips.length} captions from ${file.name} (${parsed.format.toUpperCase()}).`];
+      if (r.adjusted) notes.push(`${r.adjusted} overlapping/too-short cue timing(s) adjusted to fit a track.`);
+      if (parsed.warnings.length) notes.push(`Skipped: ${parsed.warnings.length} block(s) — ${parsed.warnings.slice(0, 2).join(" ")}`);
+      setNotice(notes.join(" "));
+    }
+  };
+  const exportSubtitles = (trackId: string, format: "srt" | "vtt" | "vtt-words") => {
+    const tl = engine.timeline;
+    const cues = captionCuesOf(tl, trackId);
+    const text = format === "srt" ? toSrt(cues) : toVtt(cues, { language: tl.tracks[trackId].caption?.language, wordTimings: format === "vtt-words" });
+    const url = URL.createObjectURL(new Blob([text], { type: format === "srt" ? "application/x-subrip" : "text/vtt" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${tl.tracks[trackId].name.replace(/[^\w.-]+/g, "_")}.${format === "srt" ? "srt" : "vtt"}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    setNotice(`Exported ${cues.length} captions as ${format === "srt" ? "SRT" : format === "vtt" ? "WebVTT" : "WebVTT with word timings"}.`);
+    (window as unknown as Record<string, unknown>).__lastSubtitleExport = text; // dev verification hook
+  };
+  const addTransitionAt = (fromClipId: string | null, toClipId: string | null) => {
+    const r = engine.addTransition({ fromClipId, toClipId, type: fromClipId && toClipId ? "cross-dissolve" : "fade" });
+    apply(r);
+    if (r.ok) selectTransition(r.transition.id);
+  };
   const selectedClip = selectedIds.length === 1 ? timeline.clips[selectedIds[0]] : undefined;
   const overrides = sliderDraft ? { [sliderDraft.clipId]: sliderDraft.visual } : undefined;
   const zones = safeZones(safeZonePreset, timeline.composition.width, timeline.composition.height);
@@ -331,8 +527,8 @@ export default function CompositionPlaygroundPanel() {
         composition={timeline.composition}
         canUndo={engine.canUndo}
         canRedo={engine.canRedo}
-        onUndo={() => (engine.undo(), bump())}
-        onRedo={() => (engine.redo(), bump())}
+        onUndo={() => (engine.undo(), player?.update(engine.timeline), bump())}
+        onRedo={() => (engine.redo(), player?.update(engine.timeline), bump())}
         onChange={(patch) => apply(engine.setCompositionSettings(patch))}
         onAddShape={(choice) => {
           const { width, height } = engine.timeline.composition;
@@ -373,7 +569,9 @@ export default function CompositionPlaygroundPanel() {
             const missing = new Set<string>();
             for (const c of Object.values(loaded.clips)) {
               const id = isTrimmableContent(c.content) ? c.content.source.sourceId : c.content.source?.sourceId;
-              if (id && !provider.getSourceInfo(id)) missing.add(c.content.source?.label ?? id);
+              // Audio sources live in the audio store (decoded PCM), pictures in the frame provider.
+              const present = c.content.kind === "audio" ? audioStore?.status(id ?? "").state === "ready" : !!(id && provider.getSourceInfo(id));
+              if (id && !present) missing.add(c.content.source?.label ?? id);
               if (c.visual?.matte && !provider.getSourceInfo(c.visual.matte.sourceId)) missing.add(c.visual.matte.sourceId);
             }
             engine.loadTimeline(loaded);
@@ -419,13 +617,30 @@ export default function CompositionPlaygroundPanel() {
             onEditingTextClipIdChange={setEditingTextId}
             onCommitText={(clipId, text) => {
               const c = engine.timeline.clips[clipId]?.content;
+              if (c?.kind === "caption") {
+                // Manual caption correction on the canvas: empty removes the caption, otherwise word timings are kept/re-spread.
+                if (text.trim() === "") apply(engine.deleteClips([clipId]));
+                else if (text !== c.text) apply(engine.updateCaptionText(clipId, text));
+                return;
+              }
               if (!c || c.kind !== "text") return;
               // Empty text on commit removes the layer (undoable) — an invisible, unselectable empty text layer is never what the user meant.
               if (text.trim() === "") apply(engine.deleteClips([clipId]));
               else if (text !== c.text) apply(engine.updateAuthoredContent(clipId, { text }));
             }}
-            onCommitEdits={(edits) => apply(engine.editClips(edits))}
+            onCommitEdits={(edits) => apply(engine.editClips(edits, frame))}
             contentDrafts={contentDraft ? { [contentDraft.clipId]: contentDraft.patch } : undefined}
+            draftTimeline={
+              effectDraft
+                ? (() => {
+                    try {
+                      return updateEffectParams(timeline, effectDraft.clipId, effectDraft.effectId, effectDraft.params, frame);
+                    } catch {
+                      return null;
+                    }
+                  })()
+                : null
+            }
             onAddGuide={(axis, position) => apply(engine.addGuide(axis, position))}
             onMoveGuide={(id, position) => apply(engine.moveGuide(id, position))}
             onRemoveGuide={(id) => apply(engine.removeGuide(id))}
@@ -443,12 +658,143 @@ export default function CompositionPlaygroundPanel() {
             onMoveClip={(id, start) => apply(engine.moveClip(id, start))}
             onTrimClip={(id, edge, f) => apply(engine.trimClip(id, edge, f))}
             onDelete={(ids) => apply(engine.deleteClips(ids))}
+            onMoveKeyframes={(id, from, to) => apply(engine.moveKeyframesAtFrame(id, from, to))}
+            selectedTransitionId={selectedTransition?.id ?? null}
+            onSelectTransition={selectTransition}
+            onAddTransition={addTransitionAt}
+            onResizeTransition={(id, d) => apply(engine.updateTransition(id, { duration: d }))}
+            onDeleteTransition={(id) => {
+              apply(engine.removeTransition(id));
+              setSelectedTransitionId(null);
+            }}
+            onSplit={(id, f) => apply(engine.splitClip(id, f))}
+            audio={audioStore ? { state: (id) => audioStore.status(id).state, peaks: (id) => audioStore.peaks(id) } : undefined}
+            onToggleTrackMute={(id) => apply(engine.setTrackMuted(id, !engine.timeline.tracks[id].muted))}
+            onToggleTrackSolo={(id) => apply(engine.setTrackSolo(id, !engine.timeline.tracks[id].solo))}
           />
           <FinalRenderBox renderer={finalRenderer} timeline={timeline} frame={frame} />
+          {audioStore && <AudioExportBox store={audioStore} timeline={timeline} />}
         </div>
 
         <div className="flex flex-col gap-4">
           <LayersPanel engine={engine} frame={frame} selectedIds={selectedIds} onSelect={setSelection} apply={apply} />
+          <CaptionsPanel
+            timeline={timeline}
+            frame={frame}
+            activeTrackId={selectedClip?.content.kind === "caption" ? selectedClip.trackId : captionTrackId}
+            selectedClipId={selectedClip?.id ?? null}
+            hasAudioSelection={!!selectedClip && isAudibleKind(selectedClip.content.kind)}
+            generating={captionProgress}
+            onActiveTrack={setCaptionTrackId}
+            onGenerate={(o) => void generateCaptions(o)}
+            onImport={(f) => void importSubtitleFile(f)}
+            onExport={exportSubtitles}
+            onPreset={(id, preset) => apply(engine.applyCaptionPreset(id, preset))}
+            onStyle={(id, style) => apply(engine.setCaptionTrackSettings(id, { style }))}
+            onTrackSettings={(id, patch) => apply(engine.setCaptionTrackSettings(id, patch))}
+            onText={(id, text) => apply(text.trim() ? engine.updateCaptionText(id, text) : engine.deleteClips([id]))}
+            onSpeaker={(id, sp) => apply(engine.setCaptionSpeaker(id, sp))}
+            onTiming={(id, s0, e0) => apply(engine.setCaptionTiming(id, s0, e0))}
+            onSelect={(id) => {
+              setSelection([id]);
+              setPlaying(false);
+              const c = engine.timeline.clips[id];
+              if (c) setFrame(c.timelineStart);
+            }}
+            onDelete={(id) => apply(engine.deleteClips([id]))}
+            onSplit={(id) => apply(engine.splitClip(id, frame))}
+            onMerge={(id) => apply(engine.mergeCaptionWithNext(id))}
+          />
+          {selectedClip && audioStore && isAudibleKind(selectedClip.content.kind) && isTrimmableContent(selectedClip.content) && (
+            <AudioPanel
+              key={`audio-${selectedClip.id}`}
+              clip={selectedClip}
+              frame={frame}
+              fps={FPS}
+              locked={timeline.tracks[selectedClip.trackId]?.locked ?? false}
+              status={audioStore.status(selectedClip.content.source.sourceId)}
+              peakDb={(() => {
+                const src = audioStore.pcm(selectedClip.content.source.sourceId);
+                return src ? clipPeakDb(selectedClip, src, FPS) : null;
+              })()}
+              volumeAtPlayhead={valueAt(selectedClip, "audio.volume", frame - selectedClip.timelineStart, timeline.composition)}
+              gainAtPlayhead={valueAt(selectedClip, "audio.gainDb", frame - selectedClip.timelineStart, timeline.composition)}
+              onChange={(patch) => apply(engine.setClipAudio(selectedClip.id, patch, frame))}
+              onNormalize={(target) => {
+                const c = selectedClip.content;
+                const src = isTrimmableContent(c) ? audioStore.pcm(c.source.sourceId) : undefined;
+                if (src) apply(engine.normalizeClipAudio(selectedClip.id, clipPeakDb(selectedClip, src, FPS), target));
+              }}
+              keyframes={(path) => {
+                const track = selectedClip.animation?.tracks[path];
+                const key = track?.keyframes.find((k) => k.frame === frame - selectedClip.timelineStart);
+                return {
+                  state: !track ? "static" : key ? "key" : "animated",
+                  onToggle: () =>
+                    apply(!track ? engine.setPropertyAnimated(selectedClip.id, path, true, frame) : key ? engine.removeKeyframe(selectedClip.id, path, key.id) : engine.addKeyframe(selectedClip.id, path, frame)),
+                };
+              }}
+            />
+          )}
+          {(selectedTransition || (selectedClip && selectedClip.content.kind !== "audio")) && (
+            <TransitionsPanel
+              timeline={timeline}
+              transition={selectedTransition}
+              clip={selectedTransition ? null : (selectedClip ?? null)}
+              locked={timeline.tracks[selectedTransition?.trackId ?? selectedClip?.trackId ?? ""]?.locked ?? false}
+              onAdd={addTransitionAt}
+              onSelect={selectTransition}
+              onUpdate={(patch) => selectedTransition && apply(engine.updateTransition(selectedTransition.id, patch))}
+              onRemove={() => {
+                if (!selectedTransition) return;
+                apply(engine.removeTransition(selectedTransition.id));
+                setSelectedTransitionId(null);
+              }}
+              onPreview={(start, end) => {
+                setFrame(Math.max(0, start - FPS / 2));
+                setPlayRange({ start, end: Math.min(duration, end + FPS / 2) });
+                setPlaying(true);
+              }}
+            />
+          )}
+          {selectedClip && selectedClip.content.kind !== "audio" && (
+            <EffectsPanel
+              clip={selectedClip}
+              frame={frame}
+              composition={timeline.composition}
+              locked={timeline.tracks[selectedClip.trackId]?.locked ?? false}
+              onAdd={(type) => apply(engine.addEffect(selectedClip.id, type))}
+              onRemove={(id) => apply(engine.removeEffect(selectedClip.id, id))}
+              onMove={(id, i) => apply(engine.moveEffect(selectedClip.id, id, i))}
+              onToggle={(id, on) => apply(engine.setEffectEnabled(selectedClip.id, id, on))}
+              onDraft={(id, params) => setEffectDraft(params ? { clipId: selectedClip.id, effectId: id, params } : null)}
+              onCommit={(id, params) => {
+                setEffectDraft(null);
+                apply(engine.updateEffectParams(selectedClip.id, id, params, frame));
+              }}
+              keyframes={(path) => {
+                const track = selectedClip.animation?.tracks[path];
+                const key = track?.keyframes.find((k) => k.frame === frame - selectedClip.timelineStart);
+                return {
+                  state: !track ? "static" : key ? "key" : "animated",
+                  onToggle: () =>
+                    apply(!track ? engine.setPropertyAnimated(selectedClip.id, path, true, frame) : key ? engine.removeKeyframe(selectedClip.id, path, key.id) : engine.addKeyframe(selectedClip.id, path, frame)),
+                };
+              }}
+            />
+          )}
+          {selectedClip && (
+            <KeyframesPanel
+              clip={selectedClip}
+              frame={frame}
+              fps={FPS}
+              locked={timeline.tracks[selectedClip.trackId]?.locked ?? false}
+              onSeek={(f) => (setPlaying(false), setFrame(f))}
+              onMove={(path, id, f) => apply(engine.moveKeyframe(selectedClip.id, path, id, f))}
+              onUpdate={(path, id, patch) => apply(engine.updateKeyframe(selectedClip.id, path, id, patch))}
+              onRemove={(path, id) => apply(engine.removeKeyframe(selectedClip.id, path, id))}
+            />
+          )}
           {selectedClip && selectedClip.content.kind !== "audio" ? (
             <PropertiesPanel
               key={selectedClip.id}
@@ -464,6 +810,17 @@ export default function CompositionPlaygroundPanel() {
                 commitVisuals({ [selectedClip.id]: patch });
               }}
               textLayout={selectedLayer?.content.type === "text" ? selectedLayer.content.layout : null}
+              visualAtPlayhead={selectedLayer?.visual ?? null}
+              keyframes={(path) => {
+                const track = selectedClip.animation?.tracks[path];
+                const local = frame - selectedClip.timelineStart;
+                const key = track?.keyframes.find((k) => k.frame === local);
+                return {
+                  state: !track ? "static" : key ? "key" : "animated",
+                  onToggle: () =>
+                    apply(!track ? engine.setPropertyAnimated(selectedClip.id, path, true, frame) : key ? engine.removeKeyframe(selectedClip.id, path, key.id) : engine.addKeyframe(selectedClip.id, path, frame)),
+                };
+              }}
               text={
                 selectedClip.content.kind === "text"
                   ? {
@@ -670,9 +1027,16 @@ function LayersPanel({ engine, frame, selectedIds, onSelect, apply }: { engine: 
           const selected = clips.some((c) => selectedIds.includes(c.id));
           return (
             <li key={trackId} className={`flex items-center gap-1 px-2 py-1.5 text-caption ${selected ? "bg-primary-500/10" : ""}`}>
-              <button type="button" onClick={() => apply(engine.setTrackVisible(trackId, !track.visible))} className="rounded p-1 hover:bg-(--color-bg-subtle)" aria-label={track.visible ? "Hide layer" : "Show layer"}>
-                {track.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-(--color-text-faint)" />}
-              </button>
+              {track.kind === "audio" ? (
+                // Audio has nothing to show or hide — its toggle is mute.
+                <button type="button" onClick={() => apply(engine.setTrackMuted(trackId, !track.muted))} className="rounded p-1 hover:bg-(--color-bg-subtle)" aria-label={track.muted ? "Unmute track" : "Mute track"}>
+                  {track.muted ? <VolumeX className="h-3.5 w-3.5 text-(--color-text-faint)" /> : <Volume2 className="h-3.5 w-3.5" />}
+                </button>
+              ) : (
+                <button type="button" onClick={() => apply(engine.setTrackVisible(trackId, !track.visible))} className="rounded p-1 hover:bg-(--color-bg-subtle)" aria-label={track.visible ? "Hide layer" : "Show layer"}>
+                  {track.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-(--color-text-faint)" />}
+                </button>
+              )}
               <button type="button" onClick={() => apply(engine.setTrackLocked(trackId, !track.locked))} className={`rounded p-1 hover:bg-(--color-bg-subtle) ${track.locked ? "" : "text-(--color-text-faint)"}`} aria-label={track.locked ? "Unlock layer" : "Lock layer"}>
                 <Lock className="h-3.5 w-3.5" />
               </button>
@@ -715,6 +1079,8 @@ function PropertiesPanel({
   onCommit,
   text,
   graphic,
+  visualAtPlayhead,
+  keyframes,
 }: {
   clip: Clip;
   layerBox: BoxSize | null;
@@ -727,8 +1093,12 @@ function PropertiesPanel({
   onCommit: (patch: ClipVisualPatch) => void;
   text?: Omit<TextPanelProps, "text" | "style" | "layout" | "opacity" | "locked" | "onCommitOpacity">;
   graphic?: { onDraft: (patch: AuthoredContentPatch | null) => void; onCommit: (patch: AuthoredContentPatch) => void };
+  /** The visual as evaluated at the playhead (animation applied) — what the fields must show. */
+  visualAtPlayhead: ClipVisual | null;
+  keyframes?: (path: string) => KeyframeControl;
 }) {
-  const stored = clip.visual ?? defaultClipVisual(composition.width, composition.height);
+  // Show what's on screen at the playhead (animated values), not the stored base.
+  const stored = visualAtPlayhead ?? clip.visual ?? defaultClipVisual(composition.width, composition.height);
   const c = clip.content;
   return (
     <section className="rounded-xl border border-(--color-border) bg-(--color-surface)">
@@ -763,6 +1133,7 @@ function PropertiesPanel({
           locked={locked}
           onDraft={onDraft}
           onCommit={onCommit}
+          keyframes={keyframes}
         />
       </div>
     </section>
@@ -800,6 +1171,56 @@ function FinalRenderBox({ renderer, timeline, frame }: { renderer: FinalRenderer
         </span>
       )}
       {state.status === "error" && <span className="text-danger-600">{state.message}</span>}
+    </div>
+  );
+}
+
+/**
+ * AUDIO EXPORT (AUDIO_ENGINE_ARCHITECTURE.md §8): renders the whole timeline's mix with the offline mixer — the same
+ * segments and gain envelopes playback schedules — to a 16-bit stereo WAV. Refuses (with the list) when an audio clip's
+ * source is missing or failed to decode, rather than exporting a mix with silent holes; warns when the mix clips.
+ */
+function AudioExportBox({ store, timeline }: { store: AudioSourceStore; timeline: TimelineModel }) {
+  const [state, setState] = useState<{ status: "idle" | "rendering" | "done" | "error"; url?: string; message?: string; info?: string }>({ status: "idle" });
+  useEffect(() => () => void (state.url && URL.revokeObjectURL(state.url)), [state.url]);
+  const run = async () => {
+    setState({ status: "rendering" });
+    await new Promise((r) => setTimeout(r, 0));
+    const problems = Object.values(timeline.clips)
+      .filter((c) => c.content.kind === "audio" && isTrimmableContent(c.content))
+      .map((c) => ({ c, st: store.status((c.content as { source: { sourceId: string } }).source.sourceId) }))
+      .filter((x) => x.st.state !== "ready");
+    if (problems.length > 0) {
+      const names = problems.map((p) => `${(p.c.content as { source: { label?: string; sourceId: string } }).source.label ?? p.c.id} (${p.st.state})`);
+      return setState({ status: "error", message: `Can't export: ${problems.length} audio clip(s) have no playable audio — ${names.join(", ")}. Re-add or remove them first.` });
+    }
+    const t0 = performance.now();
+    const durationSec = Math.max(1, timelineDurationFrames(timeline)) / timeline.frameRate;
+    const mix = mixTimeline(timeline, (id) => store.pcm(id), { sampleRate: store.sampleRate, startSec: 0, endSec: durationSec });
+    const wav = encodeWav16(mix.channels, mix.sampleRate);
+    const url = URL.createObjectURL(new Blob([wav.buffer as ArrayBuffer], { type: "audio/wav" }));
+    const peakDb = mix.peak > 0 ? 20 * Math.log10(mix.peak) : -Infinity;
+    setState({
+      status: "done",
+      url,
+      info: `${durationSec.toFixed(2)} s · ${(mix.sampleRate / 1000).toFixed(1)} kHz stereo · peak ${Number.isFinite(peakDb) ? peakDb.toFixed(1) : "−∞"} dBFS · ${(performance.now() - t0).toFixed(0)} ms${mix.clippedSamples ? ` · ⚠ ${mix.clippedSamples} samples clipped — lower some volumes` : ""}`,
+    });
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-(--color-border) bg-(--color-surface) px-3 py-2 text-caption">
+      <button type="button" onClick={run} disabled={state.status === "rendering"} className="flex items-center gap-1.5 rounded-md bg-(--color-text) px-3 py-1.5 font-medium text-(--color-bg) disabled:opacity-50">
+        {state.status === "rendering" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileAudio className="h-3.5 w-3.5" />}
+        Export audio mix (WAV)
+      </button>
+      <span className="text-(--color-text-muted)">Every audible track mixed with volume, gain, fades, automation, mute/solo — the same mix playback plays.</span>
+      {state.status === "done" && state.url && (
+        <span className="flex items-center gap-2" data-testid="audio-export-result">
+          <audio src={state.url} controls className="h-8" />
+          <span className="tabular-nums">{state.info}</span>
+          <a href={state.url} download="mix.wav" className="underline">Download WAV</a>
+        </span>
+      )}
+      {state.status === "error" && <span className="text-danger-600" role="alert">{state.message}</span>}
     </div>
   );
 }

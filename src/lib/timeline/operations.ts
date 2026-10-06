@@ -9,6 +9,7 @@ import {
   withContent,
   withTimelineStart,
   withTrackId,
+  type AuthoredClipContent,
   type Clip,
   type ClipContent,
 } from "./clip";
@@ -16,6 +17,26 @@ import { createTrack, withTrack, type Track, type TrackKind } from "./track";
 import { findOverlap, getClip, getTrack, getTrackClips, validateCompositionSize, type CompositionSettings, type Guide, type TimelineModel } from "./model";
 import { applyVisualPatch, defaultClipVisual, InvalidVisualError, type ClipVisual, type ClipVisualPatch, type ShapeSpec } from "./visual";
 import { patchTextStyle, type TextStylePatch } from "./text-style";
+import { createKeyframeId, shiftAnimation, sortKeyframes, upsertKeyframe, type KeyframeTrack } from "../animation/keyframes";
+import { applyAnimation, getProperty, isAudioPath, valueAt, type AnimatableProperty } from "../animation/properties";
+import { clampGainDb, clampVolume, clipAudioOf, isAudibleKind, normalizationFor, normalizeClipAudio, type ClipAudio } from "../audio/model";
+import type { EasingSpec } from "../animation/easing";
+import { clampParam, effectParamPath, normalizeParams, parseEffectPath, type Effect } from "../effects/model";
+import { isEffectType } from "../effects/registry";
+import { normalizeEasing } from "../animation/easing";
+import {
+  DEFAULT_TRANSITION_EASING,
+  maxTransitionDuration,
+  normalizeDirection,
+  normalizeTransitionParams,
+  transitionWindow,
+  type Transition,
+  type TransitionAlignment,
+} from "../transitions/model";
+import { getTransitionDefinition, isTransitionType, type TransitionDirection, type TransitionParams } from "../transitions/registry";
+import { clipBaseVisual, withConcreteVisual } from "../captions/timeline-bridge";
+import { ms, getCaptionPreset, normalizeCaptionStyle, normalizeCaptionTrackSettings, normalizeWords, retimeWords, splitCaptionText, type CaptionStyleSettings, type CaptionTrackSettings, type CaptionWordTiming } from "../captions/caption-model";
+import type { SubtitleCue } from "../captions/subtitle-io";
 import { normalizeShapeSpec, normalizeSvgSpec, patchShapeSpec, patchSvgSpec, type ShapePatch, type SvgPatch, type SvgSpec } from "./shape-style";
 
 const MIN_CLIP_DURATION_FRAMES = 1;
@@ -290,7 +311,14 @@ export function trimClip(timeline: TimelineModel, clipId: string, edge: "start" 
   const conflict = findOverlap(timeline, track.id, targetStart, currentEnd, clipId);
   if (conflict) throw new TimelineEditError("overlap", `Trim would overlap existing clip "${conflict.id}".`);
 
-  const updatedClip = withTimelineStart(withContent(clip, content), targetStart);
+  // Caption word timings are clip-relative: shift them so each word stays at the same timeline moment.
+  if (content.kind === "caption" && content.words && targetStart !== clip.timelineStart) {
+    const d = (targetStart - clip.timelineStart) / timeline.frameRate;
+    content = { ...content, words: content.words.filter((w) => w.end > d).map((w) => ({ ...w, start: ms(Math.max(0, w.start - d)), end: ms(w.end - d) })) };
+  }
+  let updatedClip = withTimelineStart(withContent(clip, content), targetStart);
+  // Keyframes are clip-relative: shift them so each stays at the same timeline (and media) moment.
+  if (clip.animation && targetStart !== clip.timelineStart) updatedClip = { ...updatedClip, animation: shiftAnimation(clip.animation, clip.timelineStart - targetStart) };
   const clips = { ...timeline.clips, [clipId]: updatedClip };
   return { ...timeline, clips, tracks: { ...timeline.tracks, [track.id]: withTrack(track, { clipIds: sortedByStart(track.clipIds, clips) }) } };
 }
@@ -317,6 +345,11 @@ export function splitClip(timeline: TimelineModel, clipId: string, atFrame: numb
     const splitSourceFrame = clip.content.sourceInFrame + leftLengthFrames;
     leftContent = { ...clip.content, sourceOutFrame: splitSourceFrame };
     rightContent = { ...clip.content, sourceInFrame: splitSourceFrame };
+  } else if (clip.content.kind === "caption") {
+    // A caption splits its WORDS at the cut (by timing when it has it), not a copy of the whole sentence on both sides.
+    const parts = splitCaptionText(clip.content.text ?? "", clip.content.words, leftLengthFrames / timeline.frameRate, clip.content.durationFrames / timeline.frameRate);
+    leftContent = { ...clip.content, text: parts.left.text, durationFrames: leftLengthFrames, ...(parts.left.words ? { words: parts.left.words } : {}) };
+    rightContent = { ...clip.content, text: parts.right.text, durationFrames: clip.content.durationFrames - leftLengthFrames, ...(parts.right.words ? { words: parts.right.words } : {}) };
   } else {
     leftContent = { ...clip.content, durationFrames: leftLengthFrames };
     rightContent = { ...clip.content, durationFrames: clip.content.durationFrames - leftLengthFrames };
@@ -325,11 +358,25 @@ export function splitClip(timeline: TimelineModel, clipId: string, atFrame: numb
   const left: Clip = withContent(clip, leftContent);
   // Spread from the original so the right piece inherits `visual` (transform/crop/opacity/matte) — a split must never make half the clip jump to a different place on screen.
   const right: Clip = { ...clip, id: createId("clip"), timelineStart: atFrame, content: rightContent };
+  // Both halves keep EVERY keyframe (the right one shifted to its new start), so each half evaluates exactly as the
+  // original did over its range — pruning to the visible range and inserting boundary keys would change eased curves.
+  if (clip.animation) right.animation = shiftAnimation(clip.animation, -leftLengthFrames);
+  // Audio fades belong to the clip's outer edges: the left piece keeps the fade-in, the right piece the fade-out — so
+  // the split is inaudible (no new fade at the cut).
+  if (clip.audio) {
+    left.audio = { ...clip.audio, fadeOutFrames: 0 };
+    right.audio = { ...clip.audio, fadeInFrames: 0 };
+  }
 
   const clips = { ...timeline.clips, [left.id]: left, [right.id]: right };
   const clipIds = sortedByStart([...track.clipIds, right.id], clips); // right.id wasn't in track.clipIds yet; left.id already was
+  // The original clip's END edge now belongs to the right piece: its transition-out (or transition into the next clip) moves with it.
+  let transitions = timeline.transitions;
+  if (transitions && Object.values(transitions).some((t) => t.fromClipId === clipId)) {
+    transitions = Object.fromEntries(Object.entries(transitions).map(([id, t]) => [id, t.fromClipId === clipId ? { ...t, fromClipId: right.id } : t]));
+  }
   return {
-    timeline: { ...timeline, clips, tracks: { ...timeline.tracks, [track.id]: withTrack(track, { clipIds }) } },
+    timeline: { ...timeline, clips, tracks: { ...timeline.tracks, [track.id]: withTrack(track, { clipIds }) }, ...(transitions ? { transitions } : {}) },
     left,
     right,
   };
@@ -343,7 +390,7 @@ function resolvePatchedVisual(timeline: TimelineModel, clip: Clip, patch: ClipVi
   if (!hasVisual(clip.content.kind)) {
     throw new TimelineEditError("kind-mismatch", `"${clip.content.kind}" clips have no visual properties.`);
   }
-  const base = clip.visual ?? defaultClipVisual(timeline.composition.width, timeline.composition.height);
+  const base = clipBaseVisual(timeline, clip);
   try {
     return applyVisualPatch(base, patch);
   } catch (e) {
@@ -406,6 +453,14 @@ export function duplicateClipsAsLayers(
         })
       : undefined;
     const copy: Clip = { ...original, id: createId("clip"), trackId: track.id, ...(visual ? { visual } : {}) };
+    // An animated position must be offset too, or the copy would sit exactly on the original whenever it's animating.
+    if (original.animation && (offset.x || offset.y)) {
+      const tracks = { ...original.animation.tracks };
+      for (const [path, d] of [["visual.transform.x", offset.x], ["visual.transform.y", offset.y]] as const) {
+        if (tracks[path] && d) tracks[path] = { keyframes: tracks[path].keyframes.map((k) => ({ ...k, id: createKeyframeId(), value: k.value + d })) };
+      }
+      copy.animation = { tracks };
+    }
     tl = {
       ...tl,
       clips: { ...tl.clips, [copy.id]: copy },
@@ -498,11 +553,12 @@ export interface ClipEdit {
  * text box changes its width (content) AND its position (visual, to keep the
  * opposite edge pinned). All-or-nothing, like setClipVisuals.
  */
-export function editClips(timeline: TimelineModel, edits: Readonly<Record<string, ClipEdit>>): TimelineModel {
+export function editClips(timeline: TimelineModel, edits: Readonly<Record<string, ClipEdit>>, frame?: number): TimelineModel {
   let tl = timeline;
   for (const [clipId, edit] of Object.entries(edits)) {
     if (edit.content) tl = updateAuthoredContent(tl, clipId, edit.content);
-    if (edit.visual) tl = setClipVisual(tl, clipId, edit.visual);
+    // With a playhead frame, the visual part is keyframe-aware (auto-key on animated properties) like every other edit.
+    if (edit.visual) tl = frame === undefined ? setClipVisual(tl, clipId, edit.visual) : setClipVisualsAtFrame(tl, { [clipId]: edit.visual }, frame);
   }
   return tl;
 }
@@ -549,6 +605,232 @@ export function addTextLayer(
 }
 
 // ---------------------------------------------------------------------------
+// KEYFRAMES (KEYFRAME_ENGINE_ARCHITECTURE.md §5). Frames passed in are ABSOLUTE timeline frames; keyframes are stored
+// clip-relative. All ops are pure, validate everything first, and reject locked tracks.
+// ---------------------------------------------------------------------------
+
+function requireAnimatableClip(timeline: TimelineModel, clipId: string, path: string): { clip: Clip; prop: AnimatableProperty } {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  // Sound properties (audio.*) animate on clips that carry sound; picture properties on visual clips.
+  if (isAudioPath(path) ? !isAudibleKind(clip.content.kind) : !hasVisual(clip.content.kind)) {
+    throw new TimelineEditError("kind-mismatch", `"${clip.content.kind}" clips have no animatable "${path}".`);
+  }
+  const prop = getProperty(path);
+  if (!prop) throw new TimelineEditError("invalid-keyframe", `"${path}" isn't an animatable property.`);
+  // A caption keyframed for the first time gets its on-screen placement made concrete, so nothing jumps.
+  return { clip: isAudioPath(path) ? clip : withConcreteVisual(timeline, clip), prop };
+}
+
+function requireLocalFrame(frame: number, clip: Clip): number {
+  if (!Number.isFinite(frame)) throw new TimelineEditError("invalid-keyframe", "Keyframe frame must be finite.");
+  return Math.round(frame) - clip.timelineStart;
+}
+
+function withTrack_(clip: Clip, path: string, track: KeyframeTrack | null): Clip {
+  const tracks = { ...(clip.animation?.tracks ?? {}) };
+  if (track && track.keyframes.length > 0) tracks[path] = track;
+  else delete tracks[path];
+  const next = { ...clip };
+  if (Object.keys(tracks).length > 0) next.animation = { tracks };
+  else delete next.animation;
+  return next;
+}
+
+/** Adds (or replaces) a keyframe at an absolute frame. `value` defaults to the property's current value there, so "add keyframe" never makes the layer jump. */
+export function addKeyframe(timeline: TimelineModel, clipId: string, path: string, frame: number, value?: number, easing?: EasingSpec): TimelineModel {
+  const { clip } = requireAnimatableClip(timeline, clipId, path);
+  const local = requireLocalFrame(frame, clip);
+  const v = value ?? valueAt(clip, path, local, timeline.composition);
+  if (!Number.isFinite(v)) throw new TimelineEditError("invalid-keyframe", "Keyframe value must be finite.");
+  const track = upsertKeyframe(clip.animation?.tracks[path], local, v, easing);
+  return withPatchedClip(timeline, clipId, () => withTrack_(clip, path, track));
+}
+
+/** Removes a keyframe. Removing a property's LAST keyframe makes it static at that keyframe's value (the layer doesn't jump). */
+export function removeKeyframe(timeline: TimelineModel, clipId: string, path: string, keyframeId: string): TimelineModel {
+  const { clip, prop } = requireAnimatableClip(timeline, clipId, path);
+  const track = clip.animation?.tracks[path];
+  const kf = track?.keyframes.find((k) => k.id === keyframeId);
+  if (!track || !kf) throw new TimelineEditError("invalid-keyframe", `No keyframe "${keyframeId}" on "${path}".`);
+  const rest = track.keyframes.filter((k) => k.id !== keyframeId);
+  let next = withTrack_(clip, path, { keyframes: rest });
+  if (rest.length === 0) next = prop.set(next, kf.value, timeline.composition);
+  return withPatchedClip(timeline, clipId, () => next);
+}
+
+/** Moves a keyframe to another absolute frame. Rejects landing on another keyframe of the same property. */
+export function moveKeyframe(timeline: TimelineModel, clipId: string, path: string, keyframeId: string, newFrame: number): TimelineModel {
+  const { clip } = requireAnimatableClip(timeline, clipId, path);
+  const local = requireLocalFrame(newFrame, clip);
+  const track = clip.animation?.tracks[path];
+  const kf = track?.keyframes.find((k) => k.id === keyframeId);
+  if (!track || !kf) throw new TimelineEditError("invalid-keyframe", `No keyframe "${keyframeId}" on "${path}".`);
+  if (track.keyframes.some((k) => k.id !== keyframeId && k.frame === local)) throw new TimelineEditError("keyframe-conflict", `"${path}" already has a keyframe at that frame.`);
+  const moved = { keyframes: sortKeyframes(track.keyframes.map((k) => (k.id === keyframeId ? { ...k, frame: local } : k))) };
+  return withPatchedClip(timeline, clipId, () => withTrack_(clip, path, moved));
+}
+
+/** Edits a keyframe's value and/or easing. */
+export function updateKeyframe(timeline: TimelineModel, clipId: string, path: string, keyframeId: string, patch: { value?: number; easing?: EasingSpec }): TimelineModel {
+  const { clip } = requireAnimatableClip(timeline, clipId, path);
+  const track = clip.animation?.tracks[path];
+  if (!track?.keyframes.some((k) => k.id === keyframeId)) throw new TimelineEditError("invalid-keyframe", `No keyframe "${keyframeId}" on "${path}".`);
+  if (patch.value !== undefined && !Number.isFinite(patch.value)) throw new TimelineEditError("invalid-keyframe", "Keyframe value must be finite.");
+  const next = { keyframes: track.keyframes.map((k) => (k.id === keyframeId ? { ...k, ...(patch.value !== undefined ? { value: patch.value } : {}), ...(patch.easing ? { easing: patch.easing } : {}) } : k)) };
+  return withPatchedClip(timeline, clipId, () => withTrack_(clip, path, next));
+}
+
+/** Moves EVERY property's keyframe at `fromFrame` to `toFrame` (a timeline diamond drag) — one atomic op. Rejects if any property already has a key at the destination. */
+export function moveKeyframesAtFrame(timeline: TimelineModel, clipId: string, fromFrame: number, toFrame: number): TimelineModel {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  const from = Math.round(fromFrame) - clip.timelineStart;
+  const to = Math.round(toFrame) - clip.timelineStart;
+  if (!clip.animation || from === to) return timeline;
+  const tracks: Record<string, KeyframeTrack> = {};
+  let moved = 0;
+  for (const [path, t] of Object.entries(clip.animation.tracks)) {
+    const k = t.keyframes.find((x) => x.frame === from);
+    if (k && t.keyframes.some((x) => x !== k && x.frame === to)) throw new TimelineEditError("keyframe-conflict", `"${path}" already has a keyframe at that frame.`);
+    tracks[path] = k ? { keyframes: sortKeyframes(t.keyframes.map((x) => (x === k ? { ...x, frame: to } : x))) } : t;
+    if (k) moved++;
+  }
+  if (moved === 0) throw new TimelineEditError("invalid-keyframe", "No keyframes at that frame.");
+  return withPatchedClip(timeline, clipId, () => ({ ...clip, animation: { tracks } }));
+}
+
+/**
+ * The "stopwatch". On: start animating with one keyframe at `frame` holding the current value (no visual change).
+ * Off: drop all keyframes and keep the value showing at `frame` as the static value (no jump at the playhead).
+ */
+export function setPropertyAnimated(timeline: TimelineModel, clipId: string, path: string, animated: boolean, frame: number): TimelineModel {
+  const { clip, prop } = requireAnimatableClip(timeline, clipId, path);
+  const local = requireLocalFrame(frame, clip);
+  const isAnimated = !!clip.animation?.tracks[path]?.keyframes.length;
+  if (animated === isAnimated) return timeline;
+  const current = valueAt(clip, path, local, timeline.composition);
+  if (animated) return withPatchedClip(timeline, clipId, () => withTrack_(clip, path, upsertKeyframe(undefined, local, current)));
+  return withPatchedClip(timeline, clipId, () => prop.set(withTrack_(clip, path, null), current, timeline.composition));
+}
+
+/**
+ * KEYFRAME-AWARE VISUAL EDIT (auto-key) — what every existing editing path (drag, handles, keys, numeric fields,
+ * alignment) commits through. `patches` are relative to what the user SEES at `frame` (the evaluated values). For each
+ * changed registered property: animated -> upsert a keyframe at the playhead; static -> change the base value (exactly
+ * the pre-animation behavior). Non-animatable fields always change the base. One atomic op, one undo step.
+ */
+export function setClipVisualsAtFrame(timeline: TimelineModel, patches: Readonly<Record<string, ClipVisualPatch>>, frame: number): TimelineModel {
+  const comp = timeline.composition;
+  const next: Record<string, Clip> = {};
+  for (const [clipId, patch] of Object.entries(patches)) {
+    const clip = requireClip(timeline, clipId);
+    requireUnlocked(requireTrack(timeline, clip.trackId));
+    if (!clip.animation) {
+      next[clipId] = { ...clip, visual: resolvePatchedVisual(timeline, clip, patch) };
+      continue;
+    }
+    const local = Math.round(frame) - clip.timelineStart;
+    const evaluated = applyAnimation(clip, local, comp);
+    const edited = resolvePatchedVisual(timeline, evaluated, patch); // validated, full visual as seen at the playhead
+    // Base = the edit, except animated properties keep their stored base values (their change goes into keyframes).
+    let out: Clip = { ...clip, visual: edited };
+    for (const path of Object.keys(clip.animation.tracks)) {
+      const prop = getProperty(path);
+      if (!prop) continue;
+      out = prop.set(out, prop.get(clip, comp), comp);
+      const newValue = prop.get({ ...clip, visual: edited }, comp);
+      if (Math.abs(newValue - prop.get(evaluated, comp)) > 1e-9) {
+        out = withTrack_(out, path, upsertKeyframe(out.animation?.tracks[path], local, newValue));
+      }
+    }
+    next[clipId] = out;
+  }
+  return { ...timeline, clips: { ...timeline.clips, ...next } };
+}
+
+// ---------------------------------------------------------------------------
+// EFFECTS (EFFECTS_ENGINE_ARCHITECTURE.md §4) — pure, validated first, locked tracks rejected.
+// ---------------------------------------------------------------------------
+
+function requireEffectClip(timeline: TimelineModel, clipId: string): Clip {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  if (!hasVisual(clip.content.kind)) throw new TimelineEditError("kind-mismatch", `"${clip.content.kind}" clips can't have visual effects.`);
+  return clip;
+}
+
+function requireEffect(clip: Clip, effectId: string): { effect: Effect; index: number } {
+  const index = clip.effects?.findIndex((e) => e.id === effectId) ?? -1;
+  if (index < 0) throw new TimelineEditError("effect-not-found", `No effect "${effectId}" on clip "${clip.id}".`);
+  return { effect: clip.effects![index], index };
+}
+
+/** Adds an effect (default params, overridable) at `index` (default: bottom of the stack = runs last). */
+export function addEffect(timeline: TimelineModel, clipId: string, type: string, params?: Record<string, number>, index?: number): { timeline: TimelineModel; effect: Effect } {
+  const clip = requireEffectClip(timeline, clipId);
+  if (!isEffectType(type)) throw new TimelineEditError("effect-not-found", `Unknown effect type "${type}".`);
+  const effect: Effect = { id: createId("fx"), type, params: normalizeParams(type, params ?? {}), enabled: true };
+  const list = [...(clip.effects ?? [])];
+  list.splice(index === undefined ? list.length : Math.max(0, Math.min(list.length, index)), 0, effect);
+  return { timeline: withPatchedClip(timeline, clipId, () => ({ ...clip, effects: list })), effect };
+}
+
+/** Removes an effect and its keyframe tracks (no orphaned animation). */
+export function removeEffect(timeline: TimelineModel, clipId: string, effectId: string): TimelineModel {
+  const clip = requireEffectClip(timeline, clipId);
+  requireEffect(clip, effectId);
+  const effects = clip.effects!.filter((e) => e.id !== effectId);
+  let next: Clip = { ...clip, effects };
+  if (effects.length === 0) delete next.effects;
+  if (clip.animation) {
+    const tracks = Object.fromEntries(Object.entries(clip.animation.tracks).filter(([p]) => parseEffectPath(p)?.effectId !== effectId));
+    next = { ...next, animation: { tracks } };
+    if (Object.keys(tracks).length === 0) delete next.animation;
+  }
+  return withPatchedClip(timeline, clipId, () => next);
+}
+
+/** Reorders the stack (order = index; top runs first). */
+export function moveEffect(timeline: TimelineModel, clipId: string, effectId: string, newIndex: number): TimelineModel {
+  const clip = requireEffectClip(timeline, clipId);
+  const { effect, index } = requireEffect(clip, effectId);
+  if (!Number.isInteger(newIndex) || newIndex < 0 || newIndex >= clip.effects!.length) throw new TimelineEditError("out-of-range", `Effect index ${newIndex} is out of range.`);
+  if (newIndex === index) return timeline;
+  const list = clip.effects!.filter((e) => e.id !== effectId);
+  list.splice(newIndex, 0, effect);
+  return withPatchedClip(timeline, clipId, () => ({ ...clip, effects: list }));
+}
+
+export function setEffectEnabled(timeline: TimelineModel, clipId: string, effectId: string, enabled: boolean): TimelineModel {
+  const clip = requireEffectClip(timeline, clipId);
+  requireEffect(clip, effectId);
+  return withPatchedClip(timeline, clipId, () => ({ ...clip, effects: clip.effects!.map((e) => (e.id === effectId ? { ...e, enabled } : e)) }));
+}
+
+/**
+ * Edits effect params. With a playhead `frame`, it's keyframe-aware like every other edit (Phase 8 auto-key): an
+ * animated param gets a keyframe at the playhead, a static one changes its value. Values are clamped to the definition.
+ */
+export function updateEffectParams(timeline: TimelineModel, clipId: string, effectId: string, patch: Record<string, number>, frame?: number): TimelineModel {
+  const clip = requireEffectClip(timeline, clipId);
+  const { effect } = requireEffect(clip, effectId);
+  let next: Clip = clip;
+  const staticPatch: Record<string, number> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!(key in effect.params)) throw new TimelineEditError("effect-not-found", `Effect "${effect.type}" has no parameter "${key}".`);
+    if (typeof value !== "number" || !Number.isFinite(value)) throw new TimelineEditError("out-of-range", `"${key}" must be a finite number.`);
+    const v = clampParam(effect.type, key, value);
+    const path = effectParamPath(effectId, key);
+    const track = clip.animation?.tracks[path];
+    if (frame !== undefined && track?.keyframes.length) next = withTrack_(next, path, upsertKeyframe(next.animation?.tracks[path], Math.round(frame) - clip.timelineStart, v));
+    else staticPatch[key] = v;
+  }
+  if (Object.keys(staticPatch).length) next = { ...next, effects: next.effects!.map((e) => (e.id === effectId ? { ...e, params: { ...e.params, ...staticPatch } } : e)) };
+  return withPatchedClip(timeline, clipId, () => next);
+}
+
+// ---------------------------------------------------------------------------
 // GUIDES
 // ---------------------------------------------------------------------------
 
@@ -578,3 +860,430 @@ export function removeGuide(timeline: TimelineModel, guideId: string): TimelineM
 // ---------------------------------------------------------------------------
 
 export { getTrackClips };
+
+// ---------------------------------------------------------------------------
+// TRANSITIONS (Phase 10 — TRANSITIONS_ARCHITECTURE.md §5)
+// ---------------------------------------------------------------------------
+
+function requireTransition(timeline: TimelineModel, transitionId: string): Transition {
+  const t = timeline.transitions?.[transitionId];
+  if (!t) throw new TimelineEditError("transition-not-found", `No transition with id "${transitionId}".`);
+  return t;
+}
+
+function withTransitions(timeline: TimelineModel, transitions: Record<string, Transition>): TimelineModel {
+  return { ...timeline, transitions };
+}
+
+/** Clamps a requested duration to the room the clips have; rejects when there's no room at all. */
+function fitDuration(timeline: TimelineModel, t: Transition, requested: number): number {
+  if (!Number.isFinite(requested)) throw new TimelineEditError("invalid-transition", "Transition duration must be a number.");
+  const max = maxTransitionDuration(timeline, t);
+  if (max < 1) throw new TimelineEditError("out-of-range", "There's no room for a transition here — the clip is fully used by its other transition.");
+  return Math.max(1, Math.min(max, Math.round(requested)));
+}
+
+export interface AddTransitionOptions {
+  /** Outgoing clip, or null for a transition-in at `toClipId`'s start. */
+  fromClipId: string | null;
+  /** Incoming clip, or null for a transition-out at `fromClipId`'s end. */
+  toClipId: string | null;
+  type: string;
+  /** Frames; defaults to the type's default length. Clamped to the room the clips have. */
+  duration?: number;
+  alignment?: TransitionAlignment;
+  params?: TransitionParams;
+  direction?: TransitionDirection;
+  easing?: unknown;
+  enabled?: boolean;
+}
+
+/**
+ * Adds a transition at an edit point: between two ADJACENT clips on the same visual track, or at one clip's start/end.
+ * Each clip edge hosts at most one transition. One undo step.
+ */
+export function addTransition(timeline: TimelineModel, opts: AddTransitionOptions): { timeline: TimelineModel; transition: Transition } {
+  if (!isTransitionType(opts.type)) throw new TimelineEditError("invalid-transition", `Unknown transition type "${String(opts.type)}".`);
+  if (opts.fromClipId === null && opts.toClipId === null) throw new TimelineEditError("invalid-transition", "A transition needs at least one clip.");
+  const from = opts.fromClipId === null ? null : requireClip(timeline, opts.fromClipId);
+  const to = opts.toClipId === null ? null : requireClip(timeline, opts.toClipId);
+  const trackId = (from ?? to)!.trackId;
+  if (from && to && from.trackId !== to.trackId) throw new TimelineEditError("invalid-transition", "A transition's clips must be on the same track.");
+  const track = requireTrack(timeline, trackId);
+  requireUnlocked(track);
+  if (!hasVisual(track.kind)) throw new TimelineEditError("kind-mismatch", "Audio tracks don't have visual transitions.");
+  if (from && to && clipTimelineEnd(from) !== to.timelineStart) {
+    throw new TimelineEditError("invalid-transition", "Clips must be adjacent (one ends exactly where the other starts) to transition between them.");
+  }
+  const existing = Object.values(timeline.transitions ?? {});
+  if (from && existing.some((t) => t.fromClipId === from.id)) throw new TimelineEditError("invalid-transition", `The end of clip "${from.id}" already has a transition.`);
+  if (to && existing.some((t) => t.toClipId === to.id)) throw new TimelineEditError("invalid-transition", `The start of clip "${to.id}" already has a transition.`);
+  const easing = opts.easing === undefined ? DEFAULT_TRANSITION_EASING : normalizeEasing(opts.easing);
+  if (!easing) throw new TimelineEditError("invalid-transition", "Invalid easing.");
+
+  const def = getTransitionDefinition(opts.type)!;
+  const draft: Transition = {
+    id: createId("transition"),
+    type: opts.type,
+    trackId,
+    fromClipId: from?.id ?? null,
+    toClipId: to?.id ?? null,
+    duration: 1,
+    alignment: !from ? "start" : !to ? "end" : (opts.alignment ?? "center"),
+    params: normalizeTransitionParams(opts.type, opts.params),
+    easing,
+    enabled: opts.enabled ?? true,
+  };
+  const direction = normalizeDirection(opts.type, opts.direction);
+  if (direction) draft.direction = direction;
+  draft.duration = fitDuration(timeline, draft, opts.duration ?? Math.round(def.defaultSeconds * timeline.frameRate));
+  return { timeline: withTransitions(timeline, { ...timeline.transitions, [draft.id]: draft }), transition: draft };
+}
+
+export interface TransitionPatch {
+  type?: string;
+  duration?: number;
+  alignment?: TransitionAlignment;
+  params?: TransitionParams;
+  direction?: TransitionDirection;
+  easing?: unknown;
+  enabled?: boolean;
+  metadata?: Transition["metadata"];
+}
+
+/** Edits a transition (type, duration, alignment, params, direction, easing, enabled). Changing the type keeps params the new type shares. One undo step. */
+export function updateTransition(timeline: TimelineModel, transitionId: string, patch: TransitionPatch): TimelineModel {
+  const t = requireTransition(timeline, transitionId);
+  requireUnlocked(requireTrack(timeline, t.trackId));
+  const type = patch.type ?? t.type;
+  if (!isTransitionType(type)) throw new TimelineEditError("invalid-transition", `Unknown transition type "${String(type)}".`);
+  let easing = t.easing;
+  if (patch.easing !== undefined) {
+    const e = normalizeEasing(patch.easing);
+    if (!e) throw new TimelineEditError("invalid-transition", "Invalid easing.");
+    easing = e;
+  }
+  const paired = t.fromClipId !== null && t.toClipId !== null;
+  if (patch.alignment !== undefined && !["center", "start", "end"].includes(patch.alignment)) throw new TimelineEditError("invalid-transition", `Invalid alignment "${String(patch.alignment)}".`);
+  const next: Transition = {
+    ...t,
+    type,
+    alignment: paired ? (patch.alignment ?? t.alignment) : t.alignment,
+    params: normalizeTransitionParams(type, { ...t.params, ...patch.params }),
+    easing,
+    enabled: patch.enabled ?? t.enabled,
+  };
+  const direction = normalizeDirection(type, patch.direction ?? t.direction);
+  if (direction) next.direction = direction;
+  else delete next.direction;
+  if (patch.metadata !== undefined) next.metadata = patch.metadata;
+  next.duration = fitDuration(timeline, next, patch.duration ?? t.duration);
+  return withTransitions(timeline, { ...timeline.transitions, [t.id]: next });
+}
+
+export function removeTransition(timeline: TimelineModel, transitionId: string): TimelineModel {
+  const t = requireTransition(timeline, transitionId);
+  requireUnlocked(requireTrack(timeline, t.trackId));
+  const transitions = { ...timeline.transitions };
+  delete transitions[transitionId];
+  return withTransitions(timeline, transitions);
+}
+
+/**
+ * Keeps transitions consistent with the clips after ANY edit (run by TimelineEngine after every op): a transition
+ * whose clips were deleted, moved apart, moved to another track, or trimmed so they no longer touch is removed; one
+ * whose clips got shorter is shortened to fit. Returns the same object when nothing changed. Undo restores both,
+ * because history snapshots the whole timeline.
+ */
+export function reconcileTransitions(timeline: TimelineModel): TimelineModel {
+  if (!timeline.transitions) return timeline;
+  let current = timeline;
+  let changed = false;
+  for (const id of Object.keys(timeline.transitions).sort()) {
+    const t = current.transitions![id];
+    const w = transitionWindow(current, t);
+    const transitions = { ...current.transitions };
+    if (!w) {
+      delete transitions[id];
+    } else if (w.duration !== t.duration) {
+      transitions[id] = { ...t, duration: w.duration };
+    } else continue;
+    current = withTransitions(current, transitions);
+    changed = true;
+  }
+  return changed ? current : timeline;
+}
+
+// ---------------------------------------------------------------------------
+// AUDIO (Phase 11 — AUDIO_ENGINE_ARCHITECTURE.md §5)
+// ---------------------------------------------------------------------------
+
+export type ClipAudioPatch = Partial<Omit<ClipAudio, "normalize">> & { normalize?: ClipAudio["normalize"] | null };
+
+function requireAudibleClip(timeline: TimelineModel, clipId: string): Clip {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  if (!isAudibleKind(clip.content.kind)) throw new TimelineEditError("kind-mismatch", `"${clip.content.kind}" clips have no sound.`);
+  return clip;
+}
+
+/**
+ * Edits a clip's audio (volume, gain, fades, curve, mute, role, normalization). Keyframe-aware like visual edits: when
+ * `frame` is given and volume/gain is animated, the new value becomes a keyframe at the playhead (auto-key) instead of
+ * changing the static base. One undo step. Values are clamped (fades to >= 0 whole frames).
+ */
+export function setClipAudio(timeline: TimelineModel, clipId: string, patch: ClipAudioPatch, frame?: number): TimelineModel {
+  const clip = requireAudibleClip(timeline, clipId);
+  const base = clipAudioOf(clip);
+  const merged: Record<string, unknown> = { ...base, ...patch };
+  if (patch.normalize === null) delete merged.normalize;
+  const next = normalizeClipAudio(merged)!;
+  if (patch.volume !== undefined && !Number.isFinite(patch.volume)) throw new TimelineEditError("invalid-visual", "Volume must be a number.");
+  if (patch.gainDb !== undefined && !Number.isFinite(patch.gainDb)) throw new TimelineEditError("invalid-visual", "Gain must be a number.");
+  let out: Clip = { ...clip, audio: next };
+  // Auto-key: animated volume/gain take the change as a keyframe at the playhead, keeping the stored base.
+  for (const [key, path, clamp] of [["volume", "audio.volume", clampVolume], ["gainDb", "audio.gainDb", clampGainDb]] as const) {
+    if (patch[key] === undefined || frame === undefined || !clip.animation?.tracks[path]?.keyframes.length) continue;
+    out = { ...out, audio: { ...out.audio!, [key]: base[key] } };
+    out = withTrack_(out, path, upsertKeyframe(out.animation?.tracks[path], Math.round(frame) - clip.timelineStart, clamp(patch[key]!)));
+  }
+  return withPatchedClip(timeline, clipId, () => out);
+}
+
+/**
+ * Peak normalization: given the clip's measured peak (dBFS, over its source range — measured by the audio engine),
+ * stores the make-up gain that brings the peak to `targetDb`. Non-destructive; clearing it is setClipAudio({ normalize: null }).
+ */
+export function normalizeClipAudioOp(timeline: TimelineModel, clipId: string, peakDb: number, targetDb = -1): TimelineModel {
+  const clip = requireAudibleClip(timeline, clipId);
+  let normalize: ClipAudio["normalize"];
+  try {
+    normalize = normalizationFor(peakDb, targetDb);
+  } catch (e) {
+    throw new TimelineEditError("out-of-range", (e as Error).message);
+  }
+  return withPatchedClip(timeline, clipId, () => ({ ...clip, audio: { ...clipAudioOf(clip), normalize } }));
+}
+
+// ---------------------------------------------------------------------------
+// CAPTIONS (Phase 12 — CAPTIONS_ARCHITECTURE.md §6). Segments are clips on a "caption" track, so move/trim/split/
+// delete/duplicate are the generic ops above; these cover what's caption-specific.
+// ---------------------------------------------------------------------------
+
+function requireCaptionTrack(timeline: TimelineModel, trackId: string): Track {
+  const track = requireTrack(timeline, trackId);
+  if (track.kind !== "caption") throw new TimelineEditError("kind-mismatch", `Track "${trackId}" isn't a caption track.`);
+  return track;
+}
+
+function requireCaptionClip(timeline: TimelineModel, clipId: string): Clip & { content: AuthoredClipContent } {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  if (clip.content.kind !== "caption") throw new TimelineEditError("kind-mismatch", `Clip "${clipId}" isn't a caption.`);
+  return clip as Clip & { content: AuthoredClipContent };
+}
+
+/** A new caption track at the FRONT of the stack (captions sit on top of everything). */
+export function addCaptionTrack(timeline: TimelineModel, opts: { name?: string; settings?: Partial<CaptionTrackSettings> } = {}): { timeline: TimelineModel; track: Track } {
+  const added = addTrack(timeline, "caption", opts.name ?? "Captions");
+  const tl = reorderTrack(added.timeline, added.track.id, 0);
+  const caption = normalizeCaptionTrackSettings({ ...opts.settings, style: { ...opts.settings?.style } });
+  const track = withTrack(tl.tracks[added.track.id], { caption });
+  return { timeline: { ...tl, tracks: { ...tl.tracks, [track.id]: track } }, track };
+}
+
+export type CaptionImportResult = {
+  timeline: TimelineModel;
+  trackId: string;
+  clips: Clip[];
+  /** Cues whose timing had to change to fit (overlaps trimmed, sub-frame cues widened, same-frame starts nudged). */
+  adjusted: number;
+};
+
+/**
+ * Places absolute-time cues (from speech-to-text or an SRT/VTT file) as caption clips. `target` = an existing caption
+ * track to REPLACE the contents of (one undo step, like any op), or omitted for a new track. Times are converted to
+ * frames; overlapping cues (legal in subtitle files, impossible on a track) are trimmed to end where the next begins.
+ * Word timings are stored relative to each clip.
+ */
+export function importCaptionCues(
+  timeline: TimelineModel,
+  cues: readonly SubtitleCue[],
+  opts: { target?: string; name?: string; settings?: Partial<CaptionTrackSettings>; offsetSec?: number } = {},
+): CaptionImportResult {
+  let tl = timeline;
+  let trackId: string;
+  if (opts.target) {
+    const track = requireCaptionTrack(tl, opts.target);
+    requireUnlocked(track);
+    tl = deleteClips(tl, [...track.clipIds]);
+    trackId = track.id;
+  } else {
+    const added = addCaptionTrack(tl, { name: opts.name, settings: opts.settings });
+    tl = added.timeline;
+    trackId = added.track.id;
+  }
+  const fps = tl.frameRate;
+  const offset = opts.offsetSec ?? 0;
+  const sorted = [...cues].filter((c) => c.text.trim() && Number.isFinite(c.start) && Number.isFinite(c.end)).sort((a, b) => a.start - b.start);
+  const clips: Clip[] = [];
+  let prevEnd = 0;
+  let adjusted = 0;
+  sorted.forEach((cue, i) => {
+    let s = Math.max(0, Math.round((cue.start + offset) * fps));
+    const next = sorted[i + 1];
+    let e = Math.round((cue.end + offset) * fps);
+    if (s < prevEnd) {
+      s = prevEnd;
+      adjusted++;
+    }
+    if (next && e > Math.round((next.start + offset) * fps) && Math.round((next.start + offset) * fps) > s) {
+      e = Math.round((next.start + offset) * fps);
+      adjusted++;
+    }
+    if (e <= s) {
+      e = s + 1;
+      adjusted++;
+    }
+    const startSec = s / fps;
+    const durSec = (e - s) / fps;
+    const words = cue.words
+      ?.map((w) => ({ text: w.text, start: ms(Math.min(durSec, Math.max(0, w.start + offset - startSec))), end: ms(Math.min(durSec, Math.max(0, w.end + offset - startSec))) }))
+      .filter((w) => w.end >= w.start);
+    const content: ClipContent = { kind: "caption", text: cue.text.trim(), durationFrames: e - s, ...(words?.length ? { words } : {}), ...(cue.speaker ? { speaker: cue.speaker } : {}) };
+    const r = insertClip(tl, trackId, content, s);
+    tl = r.timeline;
+    clips.push(r.clip);
+    prevEnd = e;
+  });
+  return { timeline: tl, trackId, clips, adjusted };
+}
+
+/** The track's captions as absolute-time cues (SRT/VTT export). */
+export function captionCuesOf(timeline: TimelineModel, trackId: string): SubtitleCue[] {
+  const track = requireCaptionTrack(timeline, trackId);
+  const fps = timeline.frameRate;
+  return track.clipIds.map((id) => {
+    const c = timeline.clips[id];
+    const content = c.content as AuthoredClipContent;
+    const start = c.timelineStart / fps;
+    return {
+      start,
+      end: clipTimelineEnd(c) / fps,
+      text: content.text ?? "",
+      ...(content.speaker ? { speaker: content.speaker } : {}),
+      ...(content.words?.length ? { words: content.words.map((w) => ({ text: w.text, start: ms(start + w.start), end: ms(start + w.end) })) } : {}),
+    };
+  });
+}
+
+/**
+ * Manual correction of a caption's text. Word timings carry over word-for-word when the word count is unchanged
+ * (typo fixes keep exact timing) and are re-spread over the caption otherwise. Empty text is rejected — deleting a
+ * caption is deleteClip.
+ */
+export function updateCaptionText(timeline: TimelineModel, clipId: string, text: string): TimelineModel {
+  const clip = requireCaptionClip(timeline, clipId);
+  if (!text.trim()) throw new TimelineEditError("out-of-range", "A caption can't be empty — delete it instead.");
+  const words = retimeWords(clip.content.words, text, clip.content.durationFrames / timeline.frameRate);
+  const content: AuthoredClipContent = { ...clip.content, text };
+  if (words) content.words = words;
+  return withPatchedClip(timeline, clipId, (c) => withContent(c, content));
+}
+
+export function setCaptionSpeaker(timeline: TimelineModel, clipId: string, speaker: string | null): TimelineModel {
+  const clip = requireCaptionClip(timeline, clipId);
+  const content: AuthoredClipContent = { ...clip.content };
+  const name = speaker?.trim();
+  if (name) content.speaker = name;
+  else delete content.speaker;
+  return withPatchedClip(timeline, clipId, (c) => withContent(c, content));
+}
+
+/** Replaces a caption's word timings (e.g. after re-transcribing). Validated and clamped to the caption. */
+export function setCaptionWords(timeline: TimelineModel, clipId: string, words: readonly CaptionWordTiming[] | null): TimelineModel {
+  const clip = requireCaptionClip(timeline, clipId);
+  const content: AuthoredClipContent = { ...clip.content };
+  if (words === null) delete content.words;
+  else {
+    const v = normalizeWords(words);
+    if (!v) throw new TimelineEditError("out-of-range", "Invalid word timings.");
+    const dur = clip.content.durationFrames / timeline.frameRate;
+    content.words = v.map((w) => ({ ...w, start: Math.min(w.start, dur), end: Math.min(w.end, dur) }));
+  }
+  return withPatchedClip(timeline, clipId, (c) => withContent(c, content));
+}
+
+export interface CaptionTrackPatch {
+  style?: Partial<CaptionStyleSettings>;
+  presetId?: string;
+  language?: string;
+  speakerColors?: Record<string, string>;
+}
+
+/** Restyles every caption on the track (fields not given keep their value). One undo step. */
+export function setCaptionTrackSettings(timeline: TimelineModel, trackId: string, patch: CaptionTrackPatch): TimelineModel {
+  const track = requireCaptionTrack(timeline, trackId);
+  requireUnlocked(track);
+  const cur = track.caption ?? normalizeCaptionTrackSettings({});
+  // Hand-tuning the style makes it "Custom" (the preset label would otherwise claim a look the track no longer has).
+  const { presetId: _prev, ...rest } = cur;
+  void _prev;
+  const caption = normalizeCaptionTrackSettings({
+    ...(patch.style ? rest : cur),
+    ...(patch.presetId !== undefined ? { presetId: patch.presetId } : {}),
+    ...(patch.language !== undefined ? { language: patch.language } : {}),
+    ...(patch.speakerColors !== undefined ? { speakerColors: patch.speakerColors } : {}),
+    style: { ...cur.style, ...patch.style },
+  });
+  return withPatchedTrack(timeline, trackId, (t) => withTrack(t, { caption }));
+}
+
+/** Applies a styling preset to the whole track (look AND placement). */
+export function applyCaptionPreset(timeline: TimelineModel, trackId: string, presetId: string): TimelineModel {
+  const preset = getCaptionPreset(presetId);
+  if (!preset) throw new TimelineEditError("out-of-range", `Unknown caption preset "${presetId}".`);
+  const track = requireCaptionTrack(timeline, trackId);
+  requireUnlocked(track);
+  const cur = track.caption ?? normalizeCaptionTrackSettings({});
+  return withPatchedTrack(timeline, trackId, (t) => withTrack(t, { caption: { ...cur, style: normalizeCaptionStyle(preset.style), presetId } }));
+}
+
+/** Joins a caption with the next one on its track (text, words, and the span between them). */
+export function mergeCaptionWithNext(timeline: TimelineModel, clipId: string): TimelineModel {
+  const clip = requireCaptionClip(timeline, clipId);
+  const track = timeline.tracks[clip.trackId];
+  const idx = track.clipIds.indexOf(clipId);
+  const nextId = track.clipIds[idx + 1];
+  if (!nextId) throw new TimelineEditError("out-of-range", "There's no next caption to merge with.");
+  const next = timeline.clips[nextId] as typeof clip;
+  const fps = timeline.frameRate;
+  const shift = (next.timelineStart - clip.timelineStart) / fps;
+  const words = clip.content.words || next.content.words ? [...(clip.content.words ?? []), ...(next.content.words ?? []).map((w) => ({ ...w, start: ms(w.start + shift), end: ms(w.end + shift) }))] : undefined;
+  const content: ClipContent = {
+    ...clip.content,
+    text: `${clip.content.text ?? ""} ${next.content.text ?? ""}`.trim(),
+    durationFrames: clipTimelineEnd(next) - clip.timelineStart,
+    ...(words ? { words } : {}),
+  };
+  const merged = withContent(clip, content);
+  const clips = { ...timeline.clips, [clipId]: merged };
+  delete clips[nextId];
+  return { ...timeline, clips, tracks: { ...timeline.tracks, [track.id]: withTrack(track, { clipIds: track.clipIds.filter((id) => id !== nextId) }) } };
+}
+
+/**
+ * Sets a caption's in/out on the timeline (frames) as ONE edit — the numeric timing fields in the captions list.
+ * Built from trimClip, so the same clamping and overlap rules apply; word timings stay on their timeline moments.
+ */
+export function setCaptionTiming(timeline: TimelineModel, clipId: string, startFrame: number, endFrame: number): TimelineModel {
+  const clip = requireCaptionClip(timeline, clipId);
+  const s = Math.round(startFrame);
+  const e = Math.round(endFrame);
+  if (!(e > s)) throw new TimelineEditError("out-of-range", "A caption must end after it starts.");
+  // Grow first, then shrink, so the intermediate state never needs to pass through a neighbor.
+  const steps: ["start" | "end", number][] = s < clip.timelineStart ? [["start", s], ["end", e]] : [["end", e], ["start", s]];
+  let tl = timeline;
+  for (const [edge, f] of steps) tl = trimClip(tl, clipId, edge, f);
+  return tl;
+}
