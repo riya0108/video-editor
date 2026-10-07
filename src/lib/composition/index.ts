@@ -21,3 +21,5 @@ export * from "./overlay";
 export * from "./multi-select";
 export * from "./media-import";
 export * from "./svg-raster";
+export * from "./matte-generation";
+export * from "./frame-sequence";

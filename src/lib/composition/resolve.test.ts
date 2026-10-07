@@ -137,7 +137,7 @@ describe("resolveFrame", () => {
     expect(without.layers.map((l) => l.clipId)).not.toContain(ids.overlayClip);
     expect(without.missingSources).toContain("matte");
     const withMatte = resolveFrame(tl, 30, fakeContext(SOURCES)).layers.find((l) => l.clipId === ids.overlayClip)!;
-    expect(withMatte.matte).toEqual({ sourceId: "matte", sourceFrame: 10, invert: false });
+    expect(withMatte.matte).toEqual({ sourceId: "matte", sourceFrame: 10, invert: false, channel: "alpha", decontaminate: false });
   });
 
   it("text layers are sized by layout, wrap at maxWidth, and anchor at their center by default", () => {

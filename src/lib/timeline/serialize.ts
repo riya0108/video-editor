@@ -8,6 +8,7 @@ import { isAnimatablePath, isAudioPath } from "../animation/properties";
 import { isAudibleKind, normalizeClipAudio } from "../audio/model";
 import { normalizeCaptionTrackSettings, normalizeWords } from "../captions/caption-model";
 import { normalizeEffect, parseEffectPath, type Effect } from "../effects/model";
+import { normalizeMask, parseMaskPath, type Mask } from "../masks/model";
 import { clipTimelineEnd, hasVisual, isTrimmableContent, type Clip } from "./clip";
 import type { Track } from "./track";
 import { maxTransitionDuration, normalizeTransition, transitionWindow, type Transition } from "../transitions/model";
@@ -32,7 +33,7 @@ import { maxTransitionDuration, normalizeTransition, transitionWindow, type Tran
  */
 
 export const PROJECT_FORMAT = "clipbench-timeline";
-export const PROJECT_VERSION = 9;
+export const PROJECT_VERSION = 10;
 
 export class ProjectFormatError extends Error {
   constructor(message: string) {
@@ -148,6 +149,15 @@ export function deserializeTimeline(json: string): TimelineModel {
         if (new Set(effects.map((e) => e!.id)).size !== effects.length) fail(`Clip "${clipId}" has duplicate effect ids.`);
         c.effects = effects as Effect[];
       }
+      if (c.masks !== undefined) {
+        // v10: masks. Known shapes/modes only, numbers clamped, paths need 3+ finite points, ids unique within the clip.
+        if (!hasVisual(c.content.kind)) fail(`Audio clip "${clipId}" can't have masks.`);
+        if (!Array.isArray(c.masks)) fail(`Clip "${clipId}" has an invalid masks list.`);
+        const masks = (c.masks as unknown[]).map(normalizeMask);
+        if (masks.some((m) => m === null)) fail(`Clip "${clipId}" has an invalid mask.`);
+        if (new Set(masks.map((m) => m!.id)).size !== masks.length) fail(`Clip "${clipId}" has duplicate mask ids.`);
+        c.masks = masks as Mask[];
+      }
       if (c.audio !== undefined) {
         // v8: per-clip audio (volume, gain, fades, mute, role, normalization) — only on clips that carry sound.
         if (!isAudibleKind(c.content.kind)) fail(`Clip "${clipId}" (${c.content.kind}) can't have audio settings.`);
@@ -161,9 +171,13 @@ export function deserializeTimeline(json: string): TimelineModel {
         const kind = c.content.kind;
         // Effect-param tracks must point at an effect that exists on THIS clip and at one of its real params.
         const clipEffects = c.effects ?? [];
+        const clipMasks = c.masks ?? [];
         const isKnown = (p: string) => {
           if (isAudioPath(p)) return isAudibleKind(kind) && isAnimatablePath(p);
           if (!hasVisual(kind)) return false;
+          // v10: mask-param tracks must point at a mask on THIS clip.
+          const mk = parseMaskPath(p);
+          if (mk) return clipMasks.some((m) => m.id === mk.maskId);
           const fx = parseEffectPath(p);
           if (!fx) return isAnimatablePath(p);
           const e = clipEffects.find((x) => x.id === fx.effectId);
@@ -228,6 +242,7 @@ export function deserializeTimeline(json: string): TimelineModel {
     ...Object.keys(clips),
     ...guides.map((g) => g.id),
     ...Object.values(clips).flatMap((c) => (c.effects ?? []).map((e) => e.id)),
+    ...Object.values(clips).flatMap((c) => (c.masks ?? []).map((m) => m.id)),
     ...Object.keys(timeline.transitions ?? {}),
   ]);
   return timeline;

@@ -3,6 +3,7 @@ import { defaultClipVisual, normalizeCrop, type ClipVisual } from "../timeline/v
 import { evaluateTrack, type ClipAnimation, type PropertyPath } from "./keyframes";
 import { clampParam, parseEffectPath } from "../effects/model";
 import { clampGainDb, clampVolume, clipAudioOf } from "../audio/model";
+import { clampMaskParam, MASK_PARAM_LABELS, parseMaskPath } from "../masks/model";
 
 /**
  * ANIMATABLE PROPERTY REGISTRY (KEYFRAME_ENGINE_ARCHITECTURE.md §3).
@@ -135,6 +136,25 @@ registerPropertyResolver((path) => {
       const e = findEffect(c);
       if (!e || !(param in e.params)) return c;
       return { ...c, effects: c.effects!.map((x) => (x === e ? { ...x, params: { ...x.params, [param]: clampParam(x.type, param, v) } } : x)) };
+    },
+  };
+});
+
+// Mask params (Phase 13): masks.<maskId>.<param>, resolved against the clip's mask list.
+registerPropertyResolver((path) => {
+  const parsed = parseMaskPath(path);
+  if (!parsed) return undefined;
+  const { maskId, param } = parsed;
+  const findMask = (c: Clip) => c.masks?.find((m) => m.id === maskId);
+  return {
+    path,
+    label: MASK_PARAM_LABELS[param],
+    get: (c) => findMask(c)?.[param] ?? NaN,
+    set: (c, v) => {
+      const m = findMask(c);
+      const clamped = clampMaskParam(param, v);
+      if (!m || clamped === null) return c;
+      return { ...c, masks: c.masks!.map((x) => (x === m ? { ...x, [param]: clamped } : x)) };
     },
   };
 });

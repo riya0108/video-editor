@@ -34,8 +34,53 @@ export interface CropInsets {
   left: number;
 }
 
-/** Subset of Canvas 2D globalCompositeOperation that has a well-defined meaning for layer blending (and maps 1:1 to the final renderer). */
-export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten" | "add";
+/**
+ * Layer blend modes — every one maps 1:1 to a Canvas 2D globalCompositeOperation (the W3C Compositing and Blending
+ * spec's separable and non-separable modes), so preview and final render blend identically. Phase 13 added the
+ * contrast, inversion and component groups (dodge/burn through luminosity). See MASK_COMPOSITING_ARCHITECTURE.md §6.
+ */
+export type BlendMode =
+  | "normal"
+  | "multiply"
+  | "screen"
+  | "overlay"
+  | "darken"
+  | "lighten"
+  | "color-dodge"
+  | "color-burn"
+  | "hard-light"
+  | "soft-light"
+  | "difference"
+  | "exclusion"
+  | "hue"
+  | "saturation"
+  | "color"
+  | "luminosity"
+  | "add";
+
+export const BLEND_MODES: readonly BlendMode[] = [
+  "normal",
+  "darken",
+  "multiply",
+  "color-burn",
+  "lighten",
+  "screen",
+  "color-dodge",
+  "add",
+  "overlay",
+  "soft-light",
+  "hard-light",
+  "difference",
+  "exclusion",
+  "hue",
+  "saturation",
+  "color",
+  "luminosity",
+];
+
+export function isBlendMode(v: unknown): v is BlendMode {
+  return typeof v === "string" && (BLEND_MODES as readonly string[]).includes(v);
+}
 
 /**
  * How a sized source (video/image) is fitted into the composition before the
@@ -53,6 +98,18 @@ export type FitMode = "contain" | "cover" | "fill" | "none";
 export interface MatteRef {
   sourceId: string;
   invert: boolean;
+  /**
+   * Which channel of the matte source drives the layer's alpha (Phase 13). "alpha" (default, absent = alpha): a
+   * background-removal result or any transparent asset. "luma": a black/white matte (white = keep), as exported by
+   * other keyers/rotoscoping tools.
+   */
+  channel?: "alpha" | "luma";
+  /**
+   * Phase 13: unmix the background color out of the matte's soft edge pixels at render time (the matting engine's own
+   * colour-decontamination stage, run on each frame's real pixels) — removes the green/background fringe a hard
+   * alpha-only matte leaves. Alpha channel, non-inverted mattes only. Absent = off.
+   */
+  decontaminate?: boolean;
 }
 
 export interface ClipVisual {
@@ -132,6 +189,7 @@ export function applyVisualPatch(base: ClipVisual, patch: ClipVisualPatch): Clip
 
   const opacity = patch.opacity ?? base.opacity;
   if (!Number.isFinite(opacity)) throw new InvalidVisualError("opacity must be finite.");
+  if (patch.blendMode !== undefined && !isBlendMode(patch.blendMode)) throw new InvalidVisualError(`Unknown blend mode "${String(patch.blendMode)}".`);
 
   const next: ClipVisual = {
     transform,
@@ -141,7 +199,12 @@ export function applyVisualPatch(base: ClipVisual, patch: ClipVisualPatch): Clip
     fit: patch.fit ?? base.fit,
   };
   const matte = patch.matte === undefined ? base.matte : patch.matte ?? undefined;
-  if (matte) next.matte = matte;
+  if (matte) {
+    if (typeof matte.sourceId !== "string" || !matte.sourceId) throw new InvalidVisualError("matte.sourceId must be a non-empty string.");
+    if (matte.channel !== undefined && matte.channel !== "alpha" && matte.channel !== "luma") throw new InvalidVisualError(`Unknown matte channel "${String(matte.channel)}".`);
+    if (matte.decontaminate !== undefined && typeof matte.decontaminate !== "boolean") throw new InvalidVisualError("matte.decontaminate must be a boolean.");
+    next.matte = { sourceId: matte.sourceId, invert: !!matte.invert, ...(matte.channel === "luma" ? { channel: "luma" as const } : {}), ...(matte.decontaminate ? { decontaminate: true } : {}) };
+  }
   return next;
 }
 

@@ -27,7 +27,15 @@ import {
  * the layer does not move on screen.
  */
 
-const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay", "darken", "lighten", "add"];
+/** Grouped like Premiere/After Effects: normal, darken, lighten, contrast, inversion, component (Phase 13: full set). */
+const BLEND_GROUPS: { label: string; modes: [BlendMode, string][] }[] = [
+  { label: "Normal", modes: [["normal", "Normal"]] },
+  { label: "Darken", modes: [["darken", "Darken"], ["multiply", "Multiply"], ["color-burn", "Color burn"]] },
+  { label: "Lighten", modes: [["lighten", "Lighten"], ["screen", "Screen"], ["color-dodge", "Color dodge"], ["add", "Add (linear dodge)"]] },
+  { label: "Contrast", modes: [["overlay", "Overlay"], ["soft-light", "Soft light"], ["hard-light", "Hard light"]] },
+  { label: "Inversion", modes: [["difference", "Difference"], ["exclusion", "Exclusion"]] },
+  { label: "Component", modes: [["hue", "Hue"], ["saturation", "Saturation"], ["color", "Color"], ["luminosity", "Luminosity"]] },
+];
 const FIT_MODES: FitMode[] = ["contain", "cover", "fill", "none"];
 const ALIGN_BUTTONS: { a: Alignment; label: string; Icon: typeof AlignStartVertical }[] = [
   { a: "left", label: "Align left edges", Icon: AlignStartVertical },
@@ -305,9 +313,15 @@ export default function TransformPanel({ visual, box, fitLocked, composition, sa
         </button>
         <label className="flex flex-1 flex-col gap-0.5">
           <span className="text-(--color-text-muted)">Blend</span>
-          <select value={visual.blendMode} disabled={locked} onChange={(e) => onCommit({ blendMode: e.target.value as BlendMode })} className="rounded border border-(--color-border) bg-(--color-surface) px-1 py-1">
-            {BLEND_MODES.map((m) => (
-              <option key={m}>{m}</option>
+          <select value={visual.blendMode} disabled={locked} onChange={(e) => onCommit({ blendMode: e.target.value as BlendMode })} aria-label="Blend mode" className="rounded border border-(--color-border) bg-(--color-surface) px-1 py-1">
+            {BLEND_GROUPS.map((g) => (
+              <optgroup key={g.label} label={g.label}>
+                {g.modes.map(([m, label]) => (
+                  <option key={m} value={m}>
+                    {label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>

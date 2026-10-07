@@ -23,7 +23,10 @@ import KeyframesPanel from "./KeyframesPanel";
 import EffectsPanel from "./EffectsPanel";
 import TransitionsPanel from "./TransitionsPanel";
 import { transitionWindow } from "../../../../lib/transitions/model";
-import { updateEffectParams } from "../../../../lib/timeline/operations";
+import { updateEffectParams, updateMask } from "../../../../lib/timeline/operations";
+import MasksPanel, { type BackgroundRemovalState } from "./MasksPanel";
+import { canRemoveBackground, generateClipMatte, matteSourceIdFor } from "../../../../lib/composition/matte-generation";
+import type { MaskPatch } from "../../../../lib/masks/model";
 import MultiSelectionPanel from "./MultiSelectionPanel";
 import AudioPanel from "./AudioPanel";
 import CaptionsPanel, { type GenerateOptions } from "./CaptionsPanel";
@@ -136,6 +139,13 @@ export default function CompositionPlaygroundPanel() {
   /** Captions (Phase 12): which caption track the panel edits, and speech-to-text progress. */
   const [captionTrackId, setCaptionTrackId] = useState<string | null>(null);
   const [captionProgress, setCaptionProgress] = useState<CaptionProgress | null>(null);
+  /** Masks (Phase 13): the mask being edited on the canvas, draw mode, and a mask param/handle mid-gesture (rendered through a draft timeline). */
+  const [activeMask, setActiveMask] = useState<{ clipId: string; maskId: string } | null>(null);
+  const [maskDrawing, setMaskDrawing] = useState<{ clipId: string; type: "polygon" | "freeform" } | null>(null);
+  const [maskDraft, setMaskDraft] = useState<{ clipId: string; maskId: string; patch: MaskPatch } | null>(null);
+  /** Background removal (existing matting engine -> matte input), per clip. */
+  const [bgRemoval, setBgRemoval] = useState<BackgroundRemovalState & { clipId: string | null }>({ clipId: null, busy: null, error: null, report: null });
+  const bgAbortRef = useRef<AbortController | null>(null);
 
   // --- build the demo project once ---
   useEffect(() => {
@@ -492,6 +502,37 @@ export default function CompositionPlaygroundPanel() {
   const overrides = sliderDraft ? { [sliderDraft.clipId]: sliderDraft.visual } : undefined;
   const zones = safeZones(safeZonePreset, timeline.composition.width, timeline.composition.height);
   const selectedLayer = selectedClip ? resolveClipLayer(timeline, selectedClip.id, frame, { getSourceInfo: (id) => provider.getSourceInfo(id), measurer }) : null;
+  const activeMaskId = activeMask && selectedClip && activeMask.clipId === selectedClip.id && selectedClip.masks?.some((m) => m.id === activeMask.maskId) ? activeMask.maskId : null;
+
+  /**
+   * BACKGROUND REMOVAL (MASK_COMPOSITING_ARCHITECTURE.md §7): the existing matting engine runs on the layer's own media
+   * (video: sampled frames across the clip), its alpha becomes a matte source, and the layer's matte points at it —
+   * ONE undo step, fully non-destructive (remove/invert/combine with masks any time).
+   */
+  const removeBackground = async (clip: Clip) => {
+    bgAbortRef.current?.abort();
+    const ac = new AbortController();
+    bgAbortRef.current = ac;
+    setBgRemoval({ clipId: clip.id, busy: { done: 0, total: 1 }, error: null, report: null });
+    try {
+      const out = await generateClipMatte(provider, clip, {
+        fps: FPS,
+        signal: ac.signal,
+        onProgress: (pr) => setBgRemoval((s) => (s.clipId === clip.id ? { ...s, busy: { done: pr.done, total: pr.total, modelFraction: pr.modelFraction } } : s)),
+      });
+      const sourceId = matteSourceIdFor(clip);
+      if (out.kind === "still") provider.addStill(sourceId, out.image);
+      else provider.addFrameSequence(sourceId, out.frames);
+      const current = engine.timeline.clips[clip.id];
+      if (current) apply(engine.setClipVisualsAtFrame({ [clip.id]: { matte: { sourceId, invert: false, decontaminate: true } } }, frame));
+      setBgRemoval({ clipId: clip.id, busy: null, error: null, report: out.report });
+    } catch (e) {
+      const aborted = (e as { name?: string })?.name === "AbortError";
+      setBgRemoval({ clipId: clip.id, busy: null, error: aborted ? null : (e as Error).message, report: null });
+    } finally {
+      if (bgAbortRef.current === ac) bgAbortRef.current = null;
+    }
+  };
 
   return (
     <div
@@ -630,15 +671,36 @@ export default function CompositionPlaygroundPanel() {
             }}
             onCommitEdits={(edits) => apply(engine.editClips(edits, frame))}
             contentDrafts={contentDraft ? { [contentDraft.clipId]: contentDraft.patch } : undefined}
-            draftTimeline={
-              effectDraft
-                ? (() => {
-                    try {
-                      return updateEffectParams(timeline, effectDraft.clipId, effectDraft.effectId, effectDraft.params, frame);
-                    } catch {
-                      return null;
-                    }
-                  })()
+            draftTimeline={(() => {
+              try {
+                if (effectDraft) return updateEffectParams(timeline, effectDraft.clipId, effectDraft.effectId, effectDraft.params, frame);
+                if (maskDraft) return updateMask(timeline, maskDraft.clipId, maskDraft.maskId, maskDraft.patch, frame);
+              } catch {
+                /* an invalid draft renders the committed state */
+              }
+              return null;
+            })()}
+            maskEditing={
+              selectedClip && selectedClip.content.kind !== "audio" && (selectedClip.masks?.length || maskDrawing?.clipId === selectedClip.id)
+                ? {
+                    clipId: selectedClip.id,
+                    activeMaskId,
+                    drawing: maskDrawing?.clipId === selectedClip.id ? maskDrawing.type : null,
+                    locked: timeline.tracks[selectedClip.trackId]?.locked ?? false,
+                    onSelectMask: (maskId) => setActiveMask({ clipId: selectedClip.id, maskId }),
+                    onDraft: (maskId, patch) => setMaskDraft(patch ? { clipId: selectedClip.id, maskId, patch } : null),
+                    onCommit: (maskId, patch) => {
+                      setMaskDraft(null);
+                      apply(engine.updateMask(selectedClip.id, maskId, patch, frame));
+                    },
+                    onCreatePath: (type, layerPoints) => {
+                      setMaskDrawing(null);
+                      const r = engine.addMask(selectedClip.id, type, { layerPoints });
+                      apply(r);
+                      if (r.ok) setActiveMask({ clipId: selectedClip.id, maskId: r.mask.id });
+                    },
+                    onCancelDraw: () => setMaskDrawing(null),
+                  }
                 : null
             }
             onAddGuide={(axis, position) => apply(engine.addGuide(axis, position))}
@@ -755,6 +817,57 @@ export default function CompositionPlaygroundPanel() {
                 setPlayRange({ start, end: Math.min(duration, end + FPS / 2) });
                 setPlaying(true);
               }}
+            />
+          )}
+          {selectedClip && selectedClip.content.kind !== "audio" && (
+            <MasksPanel
+              clip={maskDraft?.clipId === selectedClip.id ? (() => {
+                try {
+                  return updateMask(timeline, maskDraft.clipId, maskDraft.maskId, maskDraft.patch, frame).clips[selectedClip.id];
+                } catch {
+                  return selectedClip;
+                }
+              })() : selectedClip}
+              frame={frame}
+              composition={timeline.composition}
+              locked={timeline.tracks[selectedClip.trackId]?.locked ?? false}
+              activeMaskId={activeMaskId}
+              drawing={maskDrawing?.clipId === selectedClip.id ? maskDrawing.type : null}
+              onActiveMask={(id) => setActiveMask(id ? { clipId: selectedClip.id, maskId: id } : null)}
+              onDraw={(type) => setMaskDrawing(type ? { clipId: selectedClip.id, type } : null)}
+              onAdd={(type) => {
+                const r = engine.addMask(selectedClip.id, type);
+                apply(r);
+                if (r.ok) setActiveMask({ clipId: selectedClip.id, maskId: r.mask.id });
+              }}
+              onRemove={(id) => apply(engine.removeMask(selectedClip.id, id))}
+              onMove={(id, i) => apply(engine.moveMask(selectedClip.id, id, i))}
+              onDuplicate={(id) => {
+                const r = engine.duplicateMask(selectedClip.id, id);
+                apply(r);
+                if (r.ok) setActiveMask({ clipId: selectedClip.id, maskId: r.mask.id });
+              }}
+              onDraft={(id, patch) => setMaskDraft(patch ? { clipId: selectedClip.id, maskId: id, patch } : null)}
+              onCommit={(id, patch) => {
+                setMaskDraft(null);
+                apply(engine.updateMask(selectedClip.id, id, patch, frame));
+              }}
+              keyframes={(path) => {
+                const track = selectedClip.animation?.tracks[path];
+                const key = track?.keyframes.find((k) => k.frame === frame - selectedClip.timelineStart);
+                return {
+                  state: !track ? "static" : key ? "key" : "animated",
+                  onToggle: () =>
+                    apply(!track ? engine.setPropertyAnimated(selectedClip.id, path, true, frame) : key ? engine.removeKeyframe(selectedClip.id, path, key.id) : engine.addKeyframe(selectedClip.id, path, frame)),
+                };
+              }}
+              matte={selectedClip.visual?.matte}
+              matteStatus={!selectedClip.visual?.matte ? "none" : provider.getSourceInfo(selectedClip.visual.matte.sourceId) ? "ready" : "missing"}
+              canRemoveBackground={canRemoveBackground(selectedClip)}
+              bgRemoval={bgRemoval.clipId === selectedClip.id ? bgRemoval : { busy: null, error: null, report: null }}
+              onRemoveBackground={() => void removeBackground(selectedClip)}
+              onCancelRemoveBackground={() => bgAbortRef.current?.abort()}
+              onMattePatch={(matte) => commitVisuals({ [selectedClip.id]: { matte } })}
             />
           )}
           {selectedClip && selectedClip.content.kind !== "audio" && (

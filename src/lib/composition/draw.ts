@@ -8,6 +8,10 @@ import { svgRasterSize } from "../graphics/svg";
 import { applyEffects, bytesToFloat, effectsSpill, floatToBytes } from "../effects/process";
 import { getTransitionDefinition } from "../transitions/registry";
 import { CanvasTransitionPainter } from "./transition-painter";
+import { maskRenderPolygon, matrixPixelScale } from "../masks/geometry";
+import { MaskRasterCache, type RasterMask, type Region } from "../masks/raster";
+import type { Mask } from "../masks/model";
+import { decontaminate } from "../matting/pipeline/decontaminate";
 
 /**
  * DRAW CORE — rasterizes a ResolvedFrame with Canvas 2D. Shared verbatim by
@@ -21,6 +25,12 @@ import { CanvasTransitionPainter } from "./transition-painter";
  * first isolated on a scratch canvas — content, then matte applied with
  * destination-in/out — and only THEN composited with opacity and blend mode,
  * so the matte can never cut into layers underneath it.
+ *
+ * MASKS (MASK_COMPOSITING_ARCHITECTURE.md §4): a single crisp mask is a canvas
+ * clip path — the layer stays vector/text/video and is drawn straight into
+ * the frame, no extra raster. Anything softer (feather, expansion, partial
+ * opacity, several masks) takes the isolated path: content -> matte ->
+ * mask coverage (lib/masks/raster.ts) -> effects -> opacity + blend.
  */
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -34,8 +44,9 @@ export interface DrawOptions {
   renderScale: number;
   smoothing: ImageSmoothingQuality;
   /**
-   * Same-size scratch contexts, created lazily by the caller. Slot 0 isolates matted / effected layers; transitions use
-   * slots 1 (outgoing side), 2 (incoming side) and 3 (the transition's mix). Each slot is a distinct canvas.
+   * Same-size scratch contexts, created lazily by the caller. Slot 0 isolates matted / effected / soft-masked layers;
+   * transitions use slots 1 (outgoing side), 2 (incoming side) and 3 (the transition's mix); slot 4 holds mask coverage
+   * and slot 5 a luma matte being converted. Each slot is a distinct canvas.
    */
   getScratch: (slot?: number) => Ctx2D;
 }
@@ -53,8 +64,40 @@ const BLEND_TO_COMPOSITE: Record<BlendMode, GlobalCompositeOperation> = {
   overlay: "overlay",
   darken: "darken",
   lighten: "lighten",
+  "color-dodge": "color-dodge",
+  "color-burn": "color-burn",
+  "hard-light": "hard-light",
+  "soft-light": "soft-light",
+  difference: "difference",
+  exclusion: "exclusion",
+  hue: "hue",
+  saturation: "saturation",
+  color: "color",
+  luminosity: "luminosity",
   add: "lighter",
 };
+
+/** Mask rasters are cached across frames and renderers by exact inputs (see MaskRasterCache). */
+const maskCache = new MaskRasterCache(16);
+
+export type MaskPlan = { kind: "none" } | { kind: "clip"; mask: Mask; inverted: boolean } | { kind: "raster" };
+
+/**
+ * How a layer's masks are applied. "clip" = one crisp, full-strength mask: drawn as a canvas clip path, no raster.
+ * Inversion is only clipped for rectangles/ellipses (always simple shapes) — an inverted path that might
+ * self-intersect goes through the rasterizer so its NONZERO fill is complemented exactly.
+ */
+export function maskPlanFor(layer: ResolvedLayer): MaskPlan {
+  const masks = layer.masks;
+  if (masks.length === 0) return { kind: "none" };
+  if (masks.length === 1) {
+    const m = masks[0];
+    // A lone subtract = everything but the shape (stack starts full); intersect/difference with one mask = the shape.
+    const inverted = m.inverted !== (m.mode === "subtract");
+    if (m.feather === 0 && m.expansion === 0 && m.opacity >= 1 && (!inverted || m.type === "rectangle" || m.type === "ellipse")) return { kind: "clip", mask: m, inverted };
+  }
+  return { kind: "raster" };
+}
 
 /** Device-pixel raster size for an SVG layer drawn at `renderScale` (layer matrix x render scale, per axis). */
 export function svgRasterSizeFor(layer: ResolvedLayer, renderScale: number, mode: "preview" | "final"): { width: number; height: number } {
@@ -102,8 +145,9 @@ export function drawResolvedFrame(ctx: Ctx2D, frame: ResolvedFrame, pixels: Read
       continue;
     }
     const m = multiply(base, layer.matrix);
+    const plan = maskPlanFor(layer);
 
-    if (layer.matte || layer.effects.length > 0) {
+    if (layer.matte || layer.effects.length > 0 || plan.kind === "raster") {
       // ISOLATED-LAYER PATH: matte and/or effects. The layer is drawn alone on a scratch canvas, matted, processed by its
       // effect stack, and only then composited with opacity + blend — so neither the matte nor any effect can touch the
       // layers underneath. Same path for every layer kind (EFFECTS_ENGINE_ARCHITECTURE.md §1).
@@ -118,11 +162,16 @@ export function drawResolvedFrame(ctx: Ctx2D, frame: ResolvedFrame, pixels: Read
       ctx.globalCompositeOperation = compositeOperationFor(layer.blendMode);
       ctx.drawImage(scratch.canvas, 0, 0);
     } else {
+      if (plan.kind === "clip") {
+        ctx.save();
+        clipToMask(ctx, layer, plan, m);
+      }
       setMatrix(ctx, m);
       ctx.globalAlpha = layer.opacity;
       ctx.globalCompositeOperation = compositeOperationFor(layer.blendMode);
       applySmoothing(ctx, opts.smoothing);
       drawLayerContent(ctx, layer, px.image, m);
+      if (plan.kind === "clip") ctx.restore();
     }
     stats.drawn++;
   }
@@ -141,22 +190,180 @@ function clearSurface(c: Ctx2D) {
   c.clearRect(0, 0, c.canvas.width, c.canvas.height);
 }
 
-/** Draws ONE layer alone onto a cleared, frame-sized surface: content -> matte -> effect stack (render-pixel space). Opacity/blend are left to the caller. */
+/** Draws ONE layer alone onto a cleared, frame-sized surface: content -> matte -> masks -> effect stack (render-pixel space). Opacity/blend are left to the caller. */
 function renderLayerIsolated(scratch: Ctx2D, layer: ResolvedLayer, px: LayerPixels, opts: DrawOptions, absFrame: number) {
   const m = multiply(scaleMatrix(opts.renderScale), layer.matrix);
+  const plan = maskPlanFor(layer);
   clearSurface(scratch);
   applySmoothing(scratch, opts.smoothing);
+  if (plan.kind === "clip") {
+    scratch.save();
+    clipToMask(scratch, layer, plan, m);
+  }
   setMatrix(scratch, m);
   drawLayerContent(scratch, layer, px.image, m);
-  if (layer.matte && px.matte) {
+  if (plan.kind === "clip") scratch.restore();
+  if (layer.matte && px.matte && layer.matte.decontaminate && layer.matte.channel === "alpha" && !layer.matte.invert) {
+    applyDecontaminatedMatte(scratch, opts.getScratch(5), layer, px.matte, m, opts.renderScale);
+  } else if (layer.matte && px.matte) {
     // destination-in keeps content only where the matte has alpha (subject); destination-out removes it there instead (keeps background). Drawn over the same cropped content rect, so it aligns pixel-for-pixel regardless of matte resolution.
+    const matteImage = layer.matte.channel === "luma" ? lumaMatteSurface(opts.getScratch(5), layer, px.matte, m, opts.renderScale) : null;
+    setMatrix(scratch, m);
     scratch.globalCompositeOperation = layer.matte.invert ? "destination-out" : "destination-in";
-    drawMediaCropped(scratch, px.matte, layer);
+    if (matteImage) {
+      scratch.setTransform(1, 0, 0, 1, 0, 0);
+      scratch.drawImage(matteImage.canvas, 0, 0);
+    } else drawMediaCropped(scratch, px.matte, layer);
   }
+  if (plan.kind === "raster") applyRasterMasks(scratch, opts.getScratch(4), layer, m, opts.renderScale);
   if (layer.effects.length > 0) processLayerEffects(scratch, layer, opts.renderScale, absFrame);
   scratch.setTransform(1, 0, 0, 1, 0, 0);
   scratch.globalAlpha = 1;
   scratch.globalCompositeOperation = "source-over";
+}
+
+/** Render-space polygon path of one mask on `ctx` (device transform reset first). */
+function maskPath(ctx: Ctx2D, layer: ResolvedLayer, mask: Mask, m: Matrix2D) {
+  const poly = maskRenderPolygon(mask, layer.width, layer.height, m);
+  for (let i = 0; i < poly.length; i++) {
+    if (i === 0) ctx.moveTo(poly[i].x, poly[i].y);
+    else ctx.lineTo(poly[i].x, poly[i].y);
+  }
+  ctx.closePath();
+}
+
+/** FAST PATH: clips the context to the mask (or its complement) — the caller wraps it in save()/restore(). */
+function clipToMask(ctx: Ctx2D, layer: ResolvedLayer, plan: Extract<MaskPlan, { kind: "clip" }>, m: Matrix2D) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.beginPath();
+  if (plan.inverted) {
+    // Complement of a simple shape: the whole surface plus the shape, filled even-odd.
+    ctx.rect(-1, -1, ctx.canvas.width + 2, ctx.canvas.height + 2);
+    maskPath(ctx, layer, plan.mask, m);
+    ctx.clip("evenodd");
+  } else {
+    maskPath(ctx, layer, plan.mask, m);
+    ctx.clip("nonzero");
+  }
+}
+
+/** Integer render-px region a layer can paint into: its bounds (plus content shadow/stroke spill), clamped to the surface. */
+export function layerPaintRegion(layer: ResolvedLayer, renderScale: number, surfaceW: number, surfaceH: number): Region | null {
+  const spill = Math.ceil(contentSpill(layer) * matrixPixelScale(layer.matrix) * renderScale) + 1;
+  const b = layer.bounds;
+  const x0 = Math.max(0, Math.floor(b.x * renderScale) - spill);
+  const y0 = Math.max(0, Math.floor(b.y * renderScale) - spill);
+  const x1 = Math.min(surfaceW, Math.ceil((b.x + b.width) * renderScale) + spill);
+  const y1 = Math.min(surfaceH, Math.ceil((b.y + b.height) * renderScale) + spill);
+  return x1 > x0 && y1 > y0 ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null;
+}
+
+/** How far (content px) a layer's own drawing reaches past its box: shadows and text stroke. */
+function contentSpill(layer: ResolvedLayer): number {
+  const c = layer.content;
+  const shadow = (s: ShadowFields & { shadow?: boolean }) => (s.shadow ? s.shadowBlur * 2 + Math.max(Math.abs(s.shadowOffsetX), Math.abs(s.shadowOffsetY)) : 0);
+  if (c.type === "text") return shadow(c.style) + (c.style.stroke ? c.style.strokeWidth : 0);
+  if (c.type === "shape") return shadow(c.shape);
+  if (c.type === "svg") return shadow(c.svg as ShadowFields & { shadow?: boolean });
+  return 0;
+}
+
+/** The layer's masks as rasterizer inputs: render-space polygons, feather/expansion scaled from layer px to render px. */
+export function rasterMasksFor(layer: ResolvedLayer, m: Matrix2D): RasterMask[] {
+  const k = matrixPixelScale(m);
+  return layer.masks.map((mask) => ({
+    polygon: maskRenderPolygon(mask, layer.width, layer.height, m),
+    mode: mask.mode,
+    inverted: mask.inverted,
+    feather: mask.feather * k,
+    expansion: mask.expansion * k,
+    opacity: mask.opacity,
+  }));
+}
+
+/** RASTER PATH: multiplies the isolated layer by the masks' coverage (destination-in through a coverage surface). */
+function applyRasterMasks(scratch: Ctx2D, coverageSurface: Ctx2D, layer: ResolvedLayer, m: Matrix2D, renderScale: number) {
+  const region = layerPaintRegion(layer, renderScale, scratch.canvas.width, scratch.canvas.height);
+  scratch.setTransform(1, 0, 0, 1, 0, 0);
+  scratch.globalAlpha = 1;
+  if (!region) {
+    clearSurface(scratch);
+    return;
+  }
+  const coverage = maskCache.get(rasterMasksFor(layer, m), region);
+  clearSurface(coverageSurface);
+  const img = coverageSurface.createImageData(region.width, region.height);
+  const d = img.data;
+  for (let i = 0; i < coverage.length; i++) d[i * 4 + 3] = Math.round(coverage[i] * 255);
+  coverageSurface.putImageData(img, region.x, region.y);
+  // destination-in also clears everything OUTSIDE the drawn region — correct: the layer paints nothing out there.
+  scratch.globalCompositeOperation = "destination-in";
+  scratch.drawImage(coverageSurface.canvas, region.x, region.y, region.width, region.height, region.x, region.y, region.width, region.height);
+  scratch.globalCompositeOperation = "source-over";
+}
+
+/** LUMA MATTE: draws the matte at the layer's placement, then turns its luminance (x its own alpha) into alpha. */
+function lumaMatteSurface(surface: Ctx2D, layer: ResolvedLayer, matte: CanvasImageSource, m: Matrix2D, renderScale: number): Ctx2D {
+  clearSurface(surface);
+  setMatrix(surface, m);
+  drawMediaCropped(surface, matte, layer);
+  surface.setTransform(1, 0, 0, 1, 0, 0);
+  const region = layerPaintRegion(layer, renderScale, surface.canvas.width, surface.canvas.height);
+  if (!region) return surface;
+  const img = surface.getImageData(region.x, region.y, region.width, region.height);
+  lumaToAlpha(img.data);
+  surface.putImageData(img, region.x, region.y);
+  return surface;
+}
+
+/**
+ * DECONTAMINATED MATTE: the matte drawn at the layer's placement, then the matting engine's colour-decontamination
+ * stage (lib/matting/pipeline/decontaminate.ts — reused, not reimplemented) unmixes the background color out of the
+ * soft edge using THIS frame's real pixels, and the result replaces the layer region: decontaminated RGB, alpha =
+ * content alpha x (consistency-checked) matte alpha. Equivalent to destination-in everywhere the edge is clean.
+ */
+function applyDecontaminatedMatte(scratch: Ctx2D, matteSurface: Ctx2D, layer: ResolvedLayer, matte: CanvasImageSource, m: Matrix2D, renderScale: number) {
+  const region = layerPaintRegion(layer, renderScale, scratch.canvas.width, scratch.canvas.height);
+  scratch.setTransform(1, 0, 0, 1, 0, 0);
+  scratch.globalAlpha = 1;
+  scratch.globalCompositeOperation = "source-over";
+  if (!region) return clearSurface(scratch);
+  clearSurface(matteSurface);
+  applySmoothing(matteSurface, "high");
+  setMatrix(matteSurface, m);
+  drawMediaCropped(matteSurface, matte, layer);
+  matteSurface.setTransform(1, 0, 0, 1, 0, 0);
+  const content = scratch.getImageData(region.x, region.y, region.width, region.height);
+  const matteData = matteSurface.getImageData(region.x, region.y, region.width, region.height).data;
+  decontaminatedMatteInPlace(content.data, matteData, region.width, region.height);
+  // Everything outside the region is outside the layer: clear it, as destination-in would.
+  clearSurface(scratch);
+  scratch.putImageData(content, region.x, region.y);
+}
+
+/** Pure core of the decontaminated matte (Node-tested): `content` (unpremultiplied RGBA, unmatted) is rewritten in place. */
+export function decontaminatedMatteInPlace(content: Uint8ClampedArray, matte: Uint8ClampedArray, width: number, height: number): { pixelsDecontaminated: number; pixelsSuppressed: number } {
+  const n = width * height;
+  const alpha = new Float32Array(n);
+  for (let i = 0; i < n; i++) alpha[i] = matte[i * 4 + 3] / 255;
+  const r = decontaminate(content, alpha, width, height);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    content[o] = r.rgba[o];
+    content[o + 1] = r.rgba[o + 1];
+    content[o + 2] = r.rgba[o + 2];
+    content[o + 3] = Math.round(content[o + 3] * r.alpha[i]);
+  }
+  return { pixelsDecontaminated: r.pixelsDecontaminated, pixelsSuppressed: r.pixelsSuppressed };
+}
+
+/** In place over unpremultiplied RGBA bytes: alpha = Rec. 709 luma x alpha (white = keep), RGB cleared. */
+export function lumaToAlpha(d: Uint8ClampedArray): void {
+  for (let i = 0; i < d.length; i += 4) {
+    const luma = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    d[i + 3] = Math.round((luma * d[i + 3]) / 255);
+    d[i] = d[i + 1] = d[i + 2] = 0;
+  }
 }
 
 /**

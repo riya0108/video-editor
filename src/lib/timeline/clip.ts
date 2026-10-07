@@ -4,6 +4,7 @@ import type { ClipAnimation } from "../animation/keyframes";
 import type { Effect } from "../effects/model";
 import type { ClipAudio } from "../audio/model";
 import type { CaptionWordTiming } from "../captions/caption-model";
+import type { Mask } from "../masks/model";
 
 /** Opaque reference to source media — never bytes, never a File/Blob/URL. Resolving sourceId to real media is a different layer's job; see TIMELINE_ARCHITECTURE.md §2. */
 export interface MediaSourceRef {
@@ -61,6 +62,8 @@ export interface Clip {
   animation?: ClipAnimation;
   /** Effect stack (Phase 9): index = order, top runs first. Params animate through `animation` at effects.<id>.<param>. See EFFECTS_ENGINE_ARCHITECTURE.md. */
   effects?: Effect[];
+  /** Masks (Phase 13): index = order, each combines into the result above it. Params animate through `animation` at masks.<id>.<param>. See MASK_COMPOSITING_ARCHITECTURE.md. */
+  masks?: Mask[];
   /** Audio settings (Phase 11) for clips that carry sound (audio, video, overlay). Undefined = DEFAULT_CLIP_AUDIO. See AUDIO_ENGINE_ARCHITECTURE.md. */
   audio?: ClipAudio;
 }

@@ -3,6 +3,7 @@ import { createTimeline, type CompositionSettings, type Guide, type TimelineMode
 import type { ClipVisualPatch } from "./visual";
 import type { EasingSpec } from "../animation/easing";
 import type { Effect } from "../effects/model";
+import type { Mask, MaskPatch, MaskShape } from "../masks/model";
 import type { Transition } from "../transitions/model";
 import type { SubtitleCue } from "../captions/subtitle-io";
 import type { CaptionTrackSettings, CaptionWordTiming } from "../captions/caption-model";
@@ -213,6 +214,27 @@ export class TimelineEngine {
 
   updateEffectParams(clipId: string, effectId: string, patch: Record<string, number>, frame?: number): EditResult {
     return this.runVoid(() => ops.updateEffectParams(this.timeline, clipId, effectId, patch, frame));
+  }
+
+  /** Masks (Phase 13) — each call is one undo step. */
+  addMask(clipId: string, type: MaskShape, opts?: ops.AddMaskOptions): EditResult<{ mask: Mask }> {
+    return this.run(() => ops.addMask(this.timeline, clipId, type, opts));
+  }
+
+  removeMask(clipId: string, maskId: string): EditResult {
+    return this.runVoid(() => ops.removeMask(this.timeline, clipId, maskId));
+  }
+
+  moveMask(clipId: string, maskId: string, newIndex: number): EditResult {
+    return this.runVoid(() => ops.moveMask(this.timeline, clipId, maskId, newIndex));
+  }
+
+  duplicateMask(clipId: string, maskId: string): EditResult<{ mask: Mask }> {
+    return this.run(() => ops.duplicateMask(this.timeline, clipId, maskId));
+  }
+
+  updateMask(clipId: string, maskId: string, patch: MaskPatch, frame?: number): EditResult {
+    return this.runVoid(() => ops.updateMask(this.timeline, clipId, maskId, patch, frame));
   }
 
   /** Adds a transition at an edit point (between adjacent clips, or a clip's start/end). One undo step. */

@@ -8,6 +8,9 @@ import { textResize } from "../../../../lib/text/text-transform";
 import { graphicResize, type GraphicSpec } from "../../../../lib/graphics/graphic-transform";
 import { sharedSvgRasterizer } from "../../../../lib/composition/svg-raster";
 import TextEditOverlay from "./TextEditOverlay";
+import MaskEditOverlay from "./MaskEditOverlay";
+import { applyAnimation } from "../../../../lib/animation/properties";
+import type { MaskPatch, MaskPoint } from "../../../../lib/masks/model";
 import {
   buildSnapTargets,
   boxToComp,
@@ -144,6 +147,18 @@ export interface CompositionPreviewProps {
   onSafeZonePresetChange: (preset: SafeZonePreset) => void;
   initialQuality?: PreviewQuality;
   className?: string;
+  /** MASK EDITING (Phase 13): show the selected layer's masks on the canvas with handles / draw mode. */
+  maskEditing?: {
+    clipId: string;
+    activeMaskId: string | null;
+    drawing: "polygon" | "freeform" | null;
+    locked: boolean;
+    onSelectMask: (maskId: string) => void;
+    onDraft: (maskId: string, patch: MaskPatch | null) => void;
+    onCommit: (maskId: string, patch: MaskPatch) => void;
+    onCreatePath: (type: "polygon" | "freeform", layerPoints: MaskPoint[]) => void;
+    onCancelDraw: () => void;
+  } | null;
 }
 
 type ClipDrag = { clipId: string; start: ClipVisual; box: BoxSize; targets: SnapTargets | null; moved: boolean };
@@ -195,6 +210,7 @@ export default function CompositionPreview({
   onSafeZonePresetChange,
   initialQuality = "auto",
   className = "",
+  maskEditing = null,
 }: CompositionPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -821,6 +837,31 @@ export default function CompositionPreview({
         className="relative min-h-0 flex-1 touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/60"
       >
         <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+        {maskEditing &&
+          (() => {
+            const clip = renderTimeline.clips[maskEditing.clipId];
+            if (!clip || (!clip.masks?.length && !maskEditing.drawing)) return null;
+            // Resolved with live drag overrides, so the outlines ride along while the layer itself is being moved.
+            const layer = resolveClipLayer(renderTimeline, maskEditing.clipId, frame, { ...resolveCtx, visualOverrides: overrides });
+            if (!layer) return null;
+            const masks = applyAnimation(clip, frame - clip.timelineStart, renderTimeline.composition).masks ?? [];
+            return (
+              <MaskEditOverlay
+                layer={layer}
+                masks={masks}
+                activeMaskId={maskEditing.activeMaskId}
+                drawing={maskEditing.drawing}
+                viewport={viewport}
+                accent={colorsRef.current.accent}
+                locked={maskEditing.locked}
+                onSelectMask={maskEditing.onSelectMask}
+                onDraft={maskEditing.onDraft}
+                onCommit={maskEditing.onCommit}
+                onCreatePath={maskEditing.onCreatePath}
+                onCancelDraw={maskEditing.onCancelDraw}
+              />
+            );
+          })()}
         {editingTextClipId && isTextLike(timeline.clips[editingTextClipId]?.content.kind) && (
           <TextEditOverlay
             key={editingTextClipId}

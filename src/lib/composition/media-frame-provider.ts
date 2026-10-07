@@ -1,6 +1,7 @@
 import { createCanvas, get2d } from "./canvas";
 import type { FrameProvider, FrameRequest } from "./frame-provider";
 import type { SourceInfo } from "./resolve";
+import { normalizeSequence, sampleAt, type SequenceFrame } from "./frame-sequence";
 
 /**
  * Browser FrameProvider backed by <video> elements and decoded ImageBitmaps.
@@ -36,7 +37,14 @@ interface StillSource {
   info: SourceInfo;
 }
 
-type Source = VideoSource | StillSource;
+/** Individually rendered frames (e.g. a video's background-removal matte), sample-and-hold between samples. */
+interface SequenceSource {
+  kind: "sequence";
+  frames: SequenceFrame<CanvasImageSource & { width: number; height: number }>[];
+  info: SourceInfo;
+}
+
+type Source = VideoSource | StillSource | SequenceSource;
 
 /** A preview decoder not on screen for this long is released — covers clips that were deleted/undone/split away, whose slot key will never be asked for again. Short enough to bound memory, long enough that scrubbing back and forth doesn't reload decoders. */
 const SLOT_IDLE_EVICT_MS = 10_000;
@@ -91,9 +99,31 @@ export class MediaFrameProvider implements FrameProvider {
     return info;
   }
 
+  /**
+   * A source made of separately rendered frames keyed by SOURCE frame — what a per-frame background-removal matte of
+   * a video is. Frames without a sample hold the nearest earlier one. All frames must share one size.
+   */
+  addFrameSequence(sourceId: string, frames: readonly SequenceFrame<CanvasImageSource & { width: number; height: number }>[]): SourceInfo {
+    const sorted = normalizeSequence(frames);
+    if (sorted.length === 0) throw new Error(`Frame sequence "${sourceId}" has no frames.`);
+    const info = { width: sorted[0].image.width, height: sorted[0].image.height };
+    this.sources.set(sourceId, { kind: "sequence", frames: sorted, info });
+    this.notify();
+    return info;
+  }
+
+  /** True when `sourceId` is registered (used to tell a missing matte from a loaded one). */
+  has(sourceId: string): boolean {
+    return this.sources.has(sourceId);
+  }
+
   remove(sourceId: string): void {
     const s = this.sources.get(sourceId);
     if (!s) return;
+    if (s.kind === "sequence") {
+      this.sources.delete(sourceId);
+      return;
+    }
     if (s.kind === "video") {
       for (const el of s.previewSlots.values()) disposeVideo(el);
       if (s.exact) disposeVideo(s.exact);
@@ -150,6 +180,7 @@ export class MediaFrameProvider implements FrameProvider {
     const s = this.sources.get(req.sourceId);
     if (!s) return null;
     if (s.kind === "still") return s.image;
+    if (s.kind === "sequence") return sampleAt(s.frames, req.sourceFrame)?.image ?? null;
 
     let el = s.previewSlots.get(req.slotKey);
     if (!el) {
@@ -186,6 +217,7 @@ export class MediaFrameProvider implements FrameProvider {
     const s = this.sources.get(req.sourceId);
     if (!s) return Promise.reject(new Error(`Unknown source "${req.sourceId}".`));
     if (s.kind === "still") return Promise.resolve(s.image);
+    if (s.kind === "sequence") return Promise.resolve(sampleAt(s.frames, req.sourceFrame)!.image);
 
     // One exact decoder per source, so requests are serialized on it. Each resolves with its own snapshot canvas — never the live element.
     const run = async (): Promise<CanvasImageSource> => {

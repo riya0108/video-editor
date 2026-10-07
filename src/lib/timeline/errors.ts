@@ -13,7 +13,9 @@ export type TimelineEditErrorReason =
   | "keyframe-conflict"
   | "effect-not-found"
   | "transition-not-found"
-  | "invalid-transition";
+  | "invalid-transition"
+  | "mask-not-found"
+  | "invalid-mask";
 
 /**
  * Thrown by every mutating function in operations.ts. Deliberately a single

@@ -10,6 +10,7 @@ import { captionDisplayText, captionTextStyle, type CaptionTrackSettings } from 
 import { normalizeTextStyle, type BlendMode, type ClipVisual, type FitMode, type ShapeSpec, type TextStyle } from "../timeline/visual";
 import { compose, rectsIntersect, rotateDegrees, scale, transformedBounds, translate, type Matrix2D, type Rect } from "./matrix";
 import { layoutText, type TextLayout, type TextMeasurer } from "./text-layout";
+import type { Mask } from "../masks/model";
 
 /**
  * SCENE RESOLUTION — turns (timeline, frame) into a flat, ordered list of
@@ -78,7 +79,9 @@ export interface ResolvedLayer {
   crop: Rect;
   opacity: number;
   blendMode: BlendMode;
-  matte?: { sourceId: string; sourceFrame: number; invert: boolean };
+  matte?: { sourceId: string; sourceFrame: number; invert: boolean; channel: "alpha" | "luma"; decontaminate: boolean };
+  /** Enabled masks in order, params already keyframe-evaluated (Phase 13). Empty = unmasked (the unchanged draw path). */
+  masks: Mask[];
   /** Axis-aligned composition-pixel bounds of the visible (cropped) region. */
   bounds: Rect;
   /** Enabled effects in stack order, params already keyframe-evaluated (Phase 9). Empty = the unchanged draw path. */
@@ -345,7 +348,7 @@ function resolveClip(timeline: TimelineModel, rawClip: Clip, frame: number, ctx:
       missing.add(visual.matte.sourceId);
       return null;
     }
-    matte = { sourceId: visual.matte.sourceId, sourceFrame, invert: visual.matte.invert };
+    matte = { sourceId: visual.matte.sourceId, sourceFrame, invert: visual.matte.invert, channel: visual.matte.channel ?? "alpha", decontaminate: !!visual.matte.decontaminate };
   }
 
   const box = fitBox(width, height, compW, compH, fit);
@@ -367,5 +370,6 @@ function resolveClip(timeline: TimelineModel, rawClip: Clip, frame: number, ctx:
     bounds: transformedBounds(matrix, crop),
     visual,
     effects: (clip.effects ?? []).filter((e) => e.enabled).map((e) => ({ id: e.id, type: e.type, params: e.params })),
+    masks: (clip.masks ?? []).filter((m) => m.enabled),
   };
 }

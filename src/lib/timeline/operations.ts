@@ -37,6 +37,7 @@ import { getTransitionDefinition, isTransitionType, type TransitionDirection, ty
 import { clipBaseVisual, withConcreteVisual } from "../captions/timeline-bridge";
 import { ms, getCaptionPreset, normalizeCaptionStyle, normalizeCaptionTrackSettings, normalizeWords, retimeWords, splitCaptionText, type CaptionStyleSettings, type CaptionTrackSettings, type CaptionWordTiming } from "../captions/caption-model";
 import type { SubtitleCue } from "../captions/subtitle-io";
+import { applyMaskPatch, createMask, InvalidMaskError, isMaskParam, maskParamPath, parseMaskPath, type Mask, type MaskMode, type MaskPatch, type MaskPoint, type MaskShape, MASK_SHAPES } from "../masks/model";
 import { normalizeShapeSpec, normalizeSvgSpec, patchShapeSpec, patchSvgSpec, type ShapePatch, type SvgPatch, type SvgSpec } from "./shape-style";
 
 const MIN_CLIP_DURATION_FRAMES = 1;
@@ -827,6 +828,140 @@ export function updateEffectParams(timeline: TimelineModel, clipId: string, effe
     else staticPatch[key] = v;
   }
   if (Object.keys(staticPatch).length) next = { ...next, effects: next.effects!.map((e) => (e.id === effectId ? { ...e, params: { ...e.params, ...staticPatch } } : e)) };
+  return withPatchedClip(timeline, clipId, () => next);
+}
+
+// ---------------------------------------------------------------------------
+// MASKS (MASK_COMPOSITING_ARCHITECTURE.md §5) — pure, validated first, locked tracks rejected, one undo step each.
+// ---------------------------------------------------------------------------
+
+function requireMaskClip(timeline: TimelineModel, clipId: string): Clip {
+  const clip = requireClip(timeline, clipId);
+  requireUnlocked(requireTrack(timeline, clip.trackId));
+  if (!hasVisual(clip.content.kind)) throw new TimelineEditError("kind-mismatch", `"${clip.content.kind}" clips can't have masks.`);
+  return clip;
+}
+
+function requireMask(clip: Clip, maskId: string): { mask: Mask; index: number } {
+  const index = clip.masks?.findIndex((m) => m.id === maskId) ?? -1;
+  if (index < 0) throw new TimelineEditError("mask-not-found", `No mask "${maskId}" on clip "${clip.id}".`);
+  return { mask: clip.masks![index], index };
+}
+
+function asMaskEditError(e: unknown): never {
+  if (e instanceof InvalidMaskError) throw new TimelineEditError("invalid-mask", e.message);
+  throw e;
+}
+
+export interface AddMaskOptions {
+  /** polygon/freeform: vertices in normalized LAYER space (what was drawn over the layer). Omitted = a default shape. */
+  layerPoints?: MaskPoint[];
+  mode?: MaskMode;
+  /** Initial overrides (box, feather, inversion...). */
+  patch?: MaskPatch;
+  /** Insert position (default: bottom of the list = combines last). */
+  index?: number;
+}
+
+/** Adds a mask (rectangle/ellipse default to the middle 60% of the layer). */
+export function addMask(timeline: TimelineModel, clipId: string, type: MaskShape, opts: AddMaskOptions = {}): { timeline: TimelineModel; mask: Mask } {
+  const clip = requireMaskClip(timeline, clipId);
+  if (!MASK_SHAPES.includes(type)) throw new TimelineEditError("invalid-mask", `Unknown mask shape "${String(type)}".`);
+  let mask: Mask;
+  try {
+    mask = createMask(createId("mask"), type, { layerPoints: opts.layerPoints, mode: opts.mode });
+    if (opts.patch) mask = applyMaskPatch(mask, opts.patch);
+  } catch (e) {
+    asMaskEditError(e);
+  }
+  const list = [...(clip.masks ?? [])];
+  list.splice(opts.index === undefined ? list.length : Math.max(0, Math.min(list.length, Math.round(opts.index))), 0, mask);
+  return { timeline: withPatchedClip(timeline, clipId, () => ({ ...clip, masks: list })), mask };
+}
+
+/** Removes a mask and its keyframe tracks (no orphaned animation). */
+export function removeMask(timeline: TimelineModel, clipId: string, maskId: string): TimelineModel {
+  const clip = requireMaskClip(timeline, clipId);
+  requireMask(clip, maskId);
+  const masks = clip.masks!.filter((m) => m.id !== maskId);
+  let next: Clip = { ...clip, masks };
+  if (masks.length === 0) delete next.masks;
+  if (clip.animation) {
+    const tracks = Object.fromEntries(Object.entries(clip.animation.tracks).filter(([p]) => parseMaskPath(p)?.maskId !== maskId));
+    next = { ...next, animation: { tracks } };
+    if (Object.keys(tracks).length === 0) delete next.animation;
+  }
+  return withPatchedClip(timeline, clipId, () => next);
+}
+
+/** Reorders the list (order matters: each mask combines into the result of the ones above it). */
+export function moveMask(timeline: TimelineModel, clipId: string, maskId: string, newIndex: number): TimelineModel {
+  const clip = requireMaskClip(timeline, clipId);
+  const { mask, index } = requireMask(clip, maskId);
+  if (!Number.isInteger(newIndex) || newIndex < 0 || newIndex >= clip.masks!.length) throw new TimelineEditError("out-of-range", `Mask index ${newIndex} is out of range.`);
+  if (newIndex === index) return timeline;
+  const list = clip.masks!.filter((m) => m.id !== maskId);
+  list.splice(newIndex, 0, mask);
+  return withPatchedClip(timeline, clipId, () => ({ ...clip, masks: list }));
+}
+
+/** Copies a mask (new id, same keyframes) directly below the original. */
+export function duplicateMask(timeline: TimelineModel, clipId: string, maskId: string): { timeline: TimelineModel; mask: Mask } {
+  const clip = requireMaskClip(timeline, clipId);
+  const { mask, index } = requireMask(clip, maskId);
+  const copy: Mask = { ...mask, id: createId("mask"), ...(mask.points ? { points: mask.points.map((p) => ({ ...p })) } : {}) };
+  const list = [...clip.masks!];
+  list.splice(index + 1, 0, copy);
+  let next: Clip = { ...clip, masks: list };
+  if (clip.animation) {
+    const tracks = { ...clip.animation.tracks };
+    for (const [path, track] of Object.entries(clip.animation.tracks)) {
+      const p = parseMaskPath(path);
+      if (p?.maskId === maskId) tracks[maskParamPath(copy.id, p.param)] = { keyframes: track.keyframes.map((k) => ({ ...k, id: createKeyframeId() })) };
+    }
+    next = { ...next, animation: { tracks } };
+  }
+  return { timeline: withPatchedClip(timeline, clipId, () => next), mask: copy };
+}
+
+/**
+ * Edits a mask. With a playhead `frame`, it's keyframe-aware like every other edit (Phase 8 auto-key): an animated
+ * param gets a keyframe at the playhead (holding the value the user set THERE), a static one changes its base value.
+ * Non-animatable fields (shape, mode, inversion, enabled, points, name) always change the base.
+ */
+export function updateMask(timeline: TimelineModel, clipId: string, maskId: string, patch: MaskPatch, frame?: number): TimelineModel {
+  const clip = requireMaskClip(timeline, clipId);
+  const { mask } = requireMask(clip, maskId);
+  let next: Clip = clip;
+  const staticPatch: MaskPatch = {};
+  for (const [key, value] of Object.entries(patch) as [keyof MaskPatch, unknown][]) {
+    if (value === undefined) continue;
+    if (isMaskParam(key)) {
+      const path = maskParamPath(maskId, key);
+      const track = clip.animation?.tracks[path];
+      if (frame !== undefined && track?.keyframes.length) {
+        // Validate (and clamp) through the patch path first so an animated param gets the same checks as a static one.
+        let probe: Mask;
+        try {
+          probe = applyMaskPatch(mask, { [key]: value } as MaskPatch);
+        } catch (e) {
+          asMaskEditError(e);
+        }
+        next = withTrack_(next, path, upsertKeyframe(next.animation?.tracks[path], Math.round(frame) - clip.timelineStart, probe[key]));
+        continue;
+      }
+    }
+    (staticPatch as Record<string, unknown>)[key] = value;
+  }
+  if (Object.keys(staticPatch).length) {
+    let patched: Mask;
+    try {
+      patched = applyMaskPatch(mask, staticPatch);
+    } catch (e) {
+      asMaskEditError(e);
+    }
+    next = { ...next, masks: next.masks!.map((m) => (m.id === maskId ? patched : m)) };
+  }
   return withPatchedClip(timeline, clipId, () => next);
 }
 
