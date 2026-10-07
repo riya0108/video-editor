@@ -1,0 +1,13 @@
+MediaPipe detector models bundled for the AI editing engine (Phase 14)
+
+blaze_face_short_range.tflite
+  Source: https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+  SHA-256: b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f
+  Model: BlazeFace (short range), Google MediaPipe. License: Apache License 2.0.
+
+efficientdet_lite0.tflite
+  Source: https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite
+  SHA-256: 0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb
+  Model: EfficientDet-Lite0 (int8, COCO 80 classes), Google MediaPipe / TensorFlow. License: Apache License 2.0.
+
+Both are used unmodified, client-side only, via @mediapipe/tasks-vision (Apache License 2.0).

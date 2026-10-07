@@ -41,6 +41,8 @@ The architecture diagram calls for a dedicated temporal video-matting network (R
 | `@mediapipe/tasks-vision` (Google) | MediaPipe runtime | Apache-2.0 | — |
 | `@huggingface/transformers` (transformers.js) | Runs RMBG-1.4, Whisper, etc. | Apache-2.0 | The runtime is fine; it's the *weights it loads* (RMBG-1.4) that carry the restriction above |
 | `realesr-general-x4v3.onnx` (xinntao/Real-ESRGAN, modified) | Upscale tool's super-resolution model | BSD-3-Clause | Already self-hosted in `public/models/`; unrelated to matting but confirms the project's existing "self-host small, permissively-licensed weights" convention this plan follows |
+| `blaze_face_short_range.tflite` (Google MediaPipe BlazeFace) | AI editing engine (Phase 14): face detection, auto-reframe subject | Apache-2.0 | Self-hosted in `public/models/`; provenance + SHA-256 in `public/models/LICENSES/MEDIAPIPE_DETECTORS_NOTICE.txt` |
+| `efficientdet_lite0.tflite` (Google MediaPipe / TF EfficientDet-Lite0, int8, COCO) | AI editing engine (Phase 14): object detection | Apache-2.0 | Self-hosted in `public/models/`; same notice file |
 
 ## Redistribution requirements this plan must satisfy
 

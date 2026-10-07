@@ -27,6 +27,12 @@ import { updateEffectParams, updateMask } from "../../../../lib/timeline/operati
 import MasksPanel, { type BackgroundRemovalState } from "./MasksPanel";
 import { canRemoveBackground, generateClipMatte, matteSourceIdFor } from "../../../../lib/composition/matte-generation";
 import type { MaskPatch } from "../../../../lib/masks/model";
+import AIPanel from "./AIPanel";
+import { AIEditingSession } from "../../../../lib/ai/session";
+import { createDefaultRegistry } from "../../../../lib/ai/registry";
+import { createBrowserServices, createClipMediaSource } from "../../../../lib/ai/media-browser";
+import { FACE_MODEL, OBJECT_MODEL, loadFaceDetector, loadObjectDetector, mediapipeAvailable } from "../../../../lib/ai/detectors-mediapipe";
+import { applyToPoint } from "../../../../lib/composition/matrix";
 import MultiSelectionPanel from "./MultiSelectionPanel";
 import AudioPanel from "./AudioPanel";
 import CaptionsPanel, { type GenerateOptions } from "./CaptionsPanel";
@@ -146,6 +152,13 @@ export default function CompositionPlaygroundPanel() {
   /** Background removal (existing matting engine -> matte input), per clip. */
   const [bgRemoval, setBgRemoval] = useState<BackgroundRemovalState & { clipId: string | null }>({ clipId: null, busy: null, error: null, report: null });
   const bgAbortRef = useRef<AbortController | null>(null);
+  /** AI editing engine (Phase 14): one session per editor — analysis never edits; apply actions go through engine.transact. */
+  const aiSession = useMemo(() => {
+    if (!provider) return null;
+    const registry = createDefaultRegistry({ loadFace: loadFaceDetector, loadObject: loadObjectDetector, available: mediapipeAvailable, faceModel: FACE_MODEL, objectModel: OBJECT_MODEL });
+    const services = createBrowserServices({ registerCanvas: (id, canvas) => provider.addStill(id, canvas) });
+    return new AIEditingSession(registry, services, (clip) => createClipMediaSource(clip, FPS, provider, (id) => audioStore?.pcm(id)));
+  }, [provider, audioStore]);
 
   // --- build the demo project once ---
   useEffect(() => {
@@ -294,8 +307,8 @@ export default function CompositionPlaygroundPanel() {
 
   // Debug handle for in-browser verification (dev only).
   useEffect(() => {
-    if (import.meta.env.DEV && engine) (window as unknown as Record<string, unknown>).__composition = { engine, provider, finalRenderer, measurer, audioStore, player };
-  }, [engine, provider, finalRenderer, measurer, audioStore, player]);
+    if (import.meta.env.DEV && engine) (window as unknown as Record<string, unknown>).__composition = { engine, provider, finalRenderer, measurer, audioStore, player, aiSession };
+  }, [engine, provider, finalRenderer, measurer, audioStore, player, aiSession]);
 
   // --- keyboard: undo/redo/play ---
   useEffect(() => {
@@ -817,6 +830,29 @@ export default function CompositionPlaygroundPanel() {
                 setPlayRange({ start, end: Math.min(duration, end + FPS / 2) });
                 setPlaying(true);
               }}
+            />
+          )}
+          {aiSession && (
+            <AIPanel
+              session={aiSession}
+              timeline={timeline}
+              clip={selectedClip && (selectedClip.content as { source?: unknown }).source && selectedClip.content.kind !== "caption" ? selectedClip : null}
+              frame={frame}
+              onApply={(edit) => {
+                const r = engine.transact(edit);
+                apply(r);
+                return r.ok ? null : r.error.message;
+              }}
+              onSeek={(f) => (setPlaying(false), setFrame(f))}
+              sourceSize={(c) => {
+                const id = (c.content as { source?: { sourceId: string } }).source?.sourceId;
+                return id ? (provider.getSourceInfo(id) ?? null) : null;
+              }}
+              pictureToComp={(clipId, f) => {
+                const layer = resolveClipLayer(engine.timeline, clipId, f, { getSourceInfo: (id) => provider.getSourceInfo(id), measurer });
+                return layer ? (nx, ny) => applyToPoint(layer.matrix, { x: nx * layer.width, y: ny * layer.height }) : null;
+              }}
+              layers={timeline.trackIds.flatMap((tid) => timeline.tracks[tid].clipIds.map((cid) => ({ id: cid, label: `${timeline.tracks[tid].name}` })))}
             />
           )}
           {selectedClip && selectedClip.content.kind !== "audio" && (

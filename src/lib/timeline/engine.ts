@@ -139,6 +139,15 @@ export class TimelineEngine {
     }
   }
 
+  /**
+   * Runs a composition of the pure operations in operations.ts as ONE atomic edit / ONE undo step (Phase 14: AI
+   * apply actions such as "split at every detected shot" or "cut all silences"). `fn` receives the current timeline
+   * and returns the next one; if any op inside throws, nothing is committed.
+   */
+  transact(fn: (timeline: TimelineModel) => TimelineModel): EditResult {
+    return this.runVoid(() => fn(this.timeline));
+  }
+
   addTrack(kind: TrackKind, name: string): EditResult<{ track: Track }> {
     return this.run(() => ops.addTrack(this.timeline, kind, name));
   }
