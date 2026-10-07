@@ -70,6 +70,7 @@ export default defineConfig({
         "@mediapipe/tasks-vision",
         "wavesurfer.js",
         "wavesurfer.js/plugins/regions",
+        "mediabunny",
       ],
     },
   },

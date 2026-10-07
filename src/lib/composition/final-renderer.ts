@@ -19,7 +19,7 @@ export class FinalRenderError extends Error {
 }
 
 export interface FinalFrame {
-  /** Exactly composition width x height. Owned by the renderer and overwritten by the next renderFrame() — consume (encode/copy) before rendering again. */
+  /** Exactly composition width x height (x outputScale). Owned by the renderer and overwritten by the next renderFrame() — consume (encode/copy) before rendering again. */
   canvas: AnyCanvas;
   resolved: ResolvedFrame;
 }
@@ -48,14 +48,25 @@ export class FinalRenderer {
     this.ctx = get2d(this.canvas);
   }
 
-  async renderFrame(timeline: TimelineModel, frame: number): Promise<FinalFrame> {
+  /**
+   * `opts` (Phase 15, RENDER_ENGINE_ARCHITECTURE.md §3) — used by the render engine, never by preview:
+   *  - outputScale: output pixels per composition pixel (an output preset of the composition's shape at another size,
+   *    e.g. 2160×3840 from a 1080×1920 composition). Text, shapes and SVG are re-rasterized at that size; media is
+   *    sampled from full-resolution source frames. Default 1.
+   *  - mediaFrameOffset: added to every video/matte source frame, so a frame rendered at a different output rate
+   *    samples media at the centre of its own output interval (see render/plan.ts). Default 0.
+   * `frame` may be fractional (an output rate that differs from the project's).
+   */
+  async renderFrame(timeline: TimelineModel, frame: number, opts: { outputScale?: number; mediaFrameOffset?: number } = {}): Promise<FinalFrame> {
     const profile = FINAL_PROFILE;
-    let resolved = this.resolve(timeline, frame);
+    const scale = opts.outputScale ?? 1;
+    if (!(scale > 0)) throw new FinalRenderError(`Invalid output scale ${scale}.`, frame);
+    let resolved = this.resolve(timeline, frame, opts.mediaFrameOffset ?? 0);
 
     if (await this.ensureFonts(resolved)) {
       // Fonts just arrived: anything measured against a fallback font is stale — re-measure so wrapping/box sizes match the real glyphs.
       this.measurer.invalidate?.();
-      resolved = this.resolve(timeline, frame);
+      resolved = this.resolve(timeline, frame, opts.mediaFrameOffset ?? 0);
     }
     if (resolved.missingSources.length > 0) {
       throw new FinalRenderError(`Frame ${frame}: source(s) not loaded: ${resolved.missingSources.join(", ")}.`, frame, resolved.missingSources);
@@ -70,7 +81,7 @@ export class FinalRenderer {
             px.image = await this.provider.getExactFrame({ sourceId: layer.content.sourceId, sourceFrame: layer.content.sourceFrame, slotKey: layer.clipId });
           } else if (layer.content.type === "svg") {
             // Rasterized at exactly the output pixel size — vector-sharp in the export.
-            const { width: rw, height: rh } = svgRasterSizeFor(layer, profile.scale, "final");
+            const { width: rw, height: rh } = svgRasterSizeFor(layer, profile.scale * scale, "final");
             px.image = await this.svg.get(layer.content.svg, rw, rh);
           }
           if (layer.matte) {
@@ -83,12 +94,14 @@ export class FinalRenderer {
       throw new FinalRenderError(`Frame ${frame}: could not produce a layer's pixels (media frame or SVG) — ${(e as Error).message}`, frame);
     }
 
-    // Exactly composition size — never a preview scale.
-    ensureSize(this.canvas, resolved.width, resolved.height);
+    // Exactly composition size x output scale — never a preview scale.
+    const outW = Math.round(resolved.width * scale);
+    const outH = Math.round(resolved.height * scale);
+    ensureSize(this.canvas, outW, outH);
     const stats = drawResolvedFrame(this.ctx, resolved, pixels, {
-      renderScale: profile.scale,
+      renderScale: profile.scale * scale,
       smoothing: profile.smoothing,
-      getScratch: (slot = 0) => this.getScratch(slot, resolved.width, resolved.height),
+      getScratch: (slot = 0) => this.getScratch(slot, outW, outH),
     });
     if (stats.skipped.length > 0) {
       throw new FinalRenderError(`Frame ${frame}: ${stats.skipped.length} layer(s) had no pixels.`, frame, stats.skipped);
@@ -101,8 +114,17 @@ export class FinalRenderer {
     for (let f = start; f < end; f++) yield await this.renderFrame(timeline, f);
   }
 
-  private resolve(timeline: TimelineModel, frame: number): ResolvedFrame {
-    return resolveFrame(timeline, frame, { getSourceInfo: (id) => this.provider.getSourceInfo(id), measurer: this.measurer });
+  private resolve(timeline: TimelineModel, frame: number, mediaFrameOffset: number): ResolvedFrame {
+    const resolved = resolveFrame(timeline, frame, { getSourceInfo: (id) => this.provider.getSourceInfo(id), measurer: this.measurer });
+    if (mediaFrameOffset === 0) return resolved;
+    return {
+      ...resolved,
+      layers: resolved.layers.map((l) => ({
+        ...l,
+        content: l.content.type === "media" && !l.content.still ? { ...l.content, sourceFrame: Math.max(0, l.content.sourceFrame + mediaFrameOffset) } : l.content,
+        matte: l.matte ? { ...l.matte, sourceFrame: Math.max(0, l.matte.sourceFrame + mediaFrameOffset) } : l.matte,
+      })),
+    };
   }
 
   /** Returns true if any font was newly loaded. */

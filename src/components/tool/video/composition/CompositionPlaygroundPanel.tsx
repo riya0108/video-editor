@@ -28,6 +28,8 @@ import MasksPanel, { type BackgroundRemovalState } from "./MasksPanel";
 import { canRemoveBackground, generateClipMatte, matteSourceIdFor } from "../../../../lib/composition/matte-generation";
 import type { MaskPatch } from "../../../../lib/masks/model";
 import AIPanel from "./AIPanel";
+import VideoExportPanel from "./VideoExportPanel";
+import type { RenderDeps } from "../../../../lib/render/job";
 import { AIEditingSession } from "../../../../lib/ai/session";
 import { createDefaultRegistry } from "../../../../lib/ai/registry";
 import { createBrowserServices, createClipMediaSource } from "../../../../lib/ai/media-browser";
@@ -152,6 +154,22 @@ export default function CompositionPlaygroundPanel() {
   /** Background removal (existing matting engine -> matte input), per clip. */
   const [bgRemoval, setBgRemoval] = useState<BackgroundRemovalState & { clipId: string | null }>({ clipId: null, busy: null, error: null, report: null });
   const bgAbortRef = useRef<AbortController | null>(null);
+  /** Final rendering engine (Phase 15): the sources it reads — exact-frame decoders, decoded PCM and its status. */
+  const renderDeps = useMemo<RenderDeps | null>(
+    () =>
+      provider && measurer && audioStore
+        ? {
+            provider,
+            measurer,
+            pcm: (id) => audioStore.pcm(id),
+            audioState: (id) => {
+              const st = audioStore.status(id).state;
+              return st === "ready" || st === "loading" || st === "no-audio" || st === "error" ? st : "missing";
+            },
+          }
+        : null,
+    [provider, measurer, audioStore],
+  );
   /** AI editing engine (Phase 14): one session per editor — analysis never edits; apply actions go through engine.transact. */
   const aiSession = useMemo(() => {
     if (!provider) return null;
@@ -307,8 +325,8 @@ export default function CompositionPlaygroundPanel() {
 
   // Debug handle for in-browser verification (dev only).
   useEffect(() => {
-    if (import.meta.env.DEV && engine) (window as unknown as Record<string, unknown>).__composition = { engine, provider, finalRenderer, measurer, audioStore, player, aiSession };
-  }, [engine, provider, finalRenderer, measurer, audioStore, player, aiSession]);
+    if (import.meta.env.DEV && engine) (window as unknown as Record<string, unknown>).__composition = { engine, provider, finalRenderer, measurer, audioStore, player, aiSession, renderDeps };
+  }, [engine, provider, finalRenderer, measurer, audioStore, player, aiSession, renderDeps]);
 
   // --- keyboard: undo/redo/play ---
   useEffect(() => {
@@ -749,6 +767,7 @@ export default function CompositionPlaygroundPanel() {
           />
           <FinalRenderBox renderer={finalRenderer} timeline={timeline} frame={frame} />
           {audioStore && <AudioExportBox store={audioStore} timeline={timeline} />}
+          {renderDeps && <VideoExportPanel timeline={timeline} deps={renderDeps} />}
         </div>
 
         <div className="flex flex-col gap-4">

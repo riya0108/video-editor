@@ -180,7 +180,7 @@ export class MediaFrameProvider implements FrameProvider {
     const s = this.sources.get(req.sourceId);
     if (!s) return null;
     if (s.kind === "still") return s.image;
-    if (s.kind === "sequence") return sampleAt(s.frames, req.sourceFrame)?.image ?? null;
+    if (s.kind === "sequence") return sampleAt(s.frames, sequenceFrameIndex(req.sourceFrame))?.image ?? null;
 
     let el = s.previewSlots.get(req.slotKey);
     if (!el) {
@@ -217,7 +217,7 @@ export class MediaFrameProvider implements FrameProvider {
     const s = this.sources.get(req.sourceId);
     if (!s) return Promise.reject(new Error(`Unknown source "${req.sourceId}".`));
     if (s.kind === "still") return Promise.resolve(s.image);
-    if (s.kind === "sequence") return Promise.resolve(sampleAt(s.frames, req.sourceFrame)!.image);
+    if (s.kind === "sequence") return Promise.resolve(sampleAt(s.frames, sequenceFrameIndex(req.sourceFrame))!.image);
 
     // One exact decoder per source, so requests are serialized on it. Each resolves with its own snapshot canvas — never the live element.
     const run = async (): Promise<CanvasImageSource> => {
@@ -242,6 +242,15 @@ export class MediaFrameProvider implements FrameProvider {
     s.exactQueue = result.catch(() => {});
     return result;
   }
+}
+
+/**
+ * The sequence frame shown at a (possibly fractional, Phase 15 rate conversion) source frame — the same frame a video
+ * shows when seeked to (sourceFrame + 0.5) / fps, so a video and its per-frame matte never disagree. Identity for
+ * integer frames.
+ */
+export function sequenceFrameIndex(sourceFrame: number): number {
+  return Math.floor(sourceFrame + 0.5 + 1e-9);
 }
 
 function createVideoElement(url: string): HTMLVideoElement {
