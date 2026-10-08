@@ -54,9 +54,9 @@ function project(fps = 30, comp = { width: 1920, height: 1080 }) {
 const S = (fps: number, width = 1920, height = 1080): RenderSettings => ({ width, height, fps: fps as RenderSettings["fps"] });
 
 describe("output settings", () => {
-  it("exactly the four resolutions and five frame rates of the spec", () => {
+  it("the standard sizes and delivery rates offered first (Phase 16 also accepts custom ones)", () => {
     expect(OUTPUT_RESOLUTIONS.map((r) => `${r.width}x${r.height}`)).toEqual(["1080x1920", "1920x1080", "1080x1080", "2160x3840"]);
-    expect([...OUTPUT_FRAME_RATES]).toEqual([24, 25, 30, 50, 60]);
+    expect([...OUTPUT_FRAME_RATES]).toEqual([24, 25, 30, 48, 50, 60]);
   });
 
   it("same aspect at another size renders at a scale; a different aspect, size or rate is refused with the reason", () => {
@@ -66,8 +66,11 @@ describe("output settings", () => {
     const bad = checkRenderSettings(tl916, S(30, 1920, 1080));
     expect(bad.ok).toBe(false);
     expect(bad.errors[0]).toMatch(/16:9.*doesn't match the composition.*9:16/);
-    expect(checkRenderSettings(tl916, S(30, 720, 1280)).errors[0]).toMatch(/Unsupported output size/);
+    expect(checkRenderSettings(tl916, S(30, 720, 1280))).toMatchObject({ ok: true, renderScale: 720 / 1080 });
+    expect(checkRenderSettings(tl916, S(30, 721, 1281)).errors[0]).toMatch(/Unsupported output size.*even/);
+    expect(checkRenderSettings(tl916, S(30, 4096, 4096 * 16 / 9 - (4096 * 16 / 9) % 2)).errors[0]).toMatch(/Unsupported output size|too large/);
     expect(checkRenderSettings(tl916, S(29.97, 1080, 1920)).errors[0]).toMatch(/Unsupported frame rate/);
+    expect(checkRenderSettings(tl916, S(121, 1080, 1920)).errors[0]).toMatch(/Unsupported frame rate/);
   });
 
   it("high-quality default bitrate scales with pixels x fps and is clamped", () => {
@@ -154,7 +157,7 @@ describe("render plan: frame count, duration, time mapping", () => {
   it("an empty timeline or invalid settings throw a RenderPlanError with every reason", () => {
     expect(() => buildRenderPlan(createTimeline(30, { width: 1920, height: 1080 }), S(30))).toThrow(RenderPlanError);
     try {
-      buildRenderPlan(project().tl, { width: 1080, height: 1920, fps: 23 as RenderSettings["fps"] });
+      buildRenderPlan(project().tl, { width: 1080, height: 1920, fps: 23.5 });
     } catch (e) {
       expect((e as RenderPlanError).errors.length).toBe(2);
     }
@@ -283,7 +286,7 @@ describe("validation", () => {
   it("a correct file passes every technical check", () => {
     const checks = technicalChecks(plan, good());
     expect(checks.filter((c) => !c.ok)).toEqual([]);
-    expect(checks.map((c) => c.id)).toEqual(["video-track", "resolution", "frame-count", "fps", "duration", "audio-track", "audio-format", "audio-duration"]);
+    expect(checks.map((c) => c.id)).toEqual(["video-track", "resolution", "frame-count", "fps", "duration", "audio-track", "audio-codec", "audio-format", "audio-duration"]);
   });
 
   it("each defect fails its own check", () => {

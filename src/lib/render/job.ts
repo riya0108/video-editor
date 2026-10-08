@@ -8,11 +8,14 @@ import {
   CanvasSink,
   EncodedPacketSink,
   Input,
+  MovOutputFormat,
   Mp4OutputFormat,
   Output,
+  WebMOutputFormat,
   VideoSample,
   VideoSampleSource,
   canEncodeAudio,
+  canEncodeVideo,
   getFirstEncodableVideoCodec,
   type AudioCodec,
   type InputAudioTrack,
@@ -26,8 +29,8 @@ import { FinalRenderer } from "../composition/final-renderer";
 import { buildRenderPlan, frameStep, RenderPlanError, type RenderPlan } from "./plan";
 import { audioBlockers, audioChunks, renderAudio, type AudioSourceState, type RenderedAudio } from "./audio";
 import { crossCheckFrame, type CrossCheckIssue } from "./graph";
-import { audioSyncCheck, fidelityCheck, flattenOverBlack, measureLag, psnr, structureCheck, technicalChecks, type ProbedOutput, type RenderReport } from "./validate";
-import type { RenderSettings } from "./settings";
+import { alphaCheck, alphaPsnr, audioSyncCheck, fidelityCheck, flattenOverBlack, measureLag, psnr, structureCheck, technicalChecks, type ProbedOutput, type RenderCheck, type RenderReport } from "./validate";
+import { codecLabel, type OutputContainer, type OutputVideoCodec, type RenderSettings } from "./settings";
 
 /**
  * FINAL RENDER JOB (RENDER_ENGINE_ARCHITECTURE.md §5–§8) — browser only.
@@ -76,26 +79,49 @@ export async function renderTimeline(timeline: TimelineModel, settings: RenderSe
   if (blockers.length) throw new RenderPlanError(blockers);
 
   const warnings: string[] = [];
-  const videoCodec = await getFirstEncodableVideoCodec(["avc", "hevc", "vp9", "av1"] as VideoCodec[], { width: s.width, height: s.height, bitrate: s.videoBitrate });
-  if (!videoCodec) throw new RenderPlanError([`This browser can't encode ${s.width}×${s.height} video at ${(s.videoBitrate / 1e6).toFixed(1)} Mbit/s with any supported codec.`]);
-  if (videoCodec !== "avc") warnings.push(`H.264 isn't available here at ${s.width}×${s.height}; encoded as ${videoCodec.toUpperCase()} instead.`);
+  const encodeOpts = { width: s.width, height: s.height, bitrate: s.videoBitrate };
+  let videoCodec: VideoCodec | null;
+  if (s.videoCodec) {
+    // An explicit choice is honoured exactly or refused — never silently swapped.
+    videoCodec = (await canEncodeVideoWith(s.videoCodec, encodeOpts, s.alpha)) ? s.videoCodec : null;
+    if (!videoCodec) throw new RenderPlanError([`This browser can't encode ${codecLabel(s.videoCodec)}${s.alpha ? " with alpha" : ""} at ${s.width}×${s.height}, ${(s.videoBitrate / 1e6).toFixed(1)} Mbit/s. Pick another codec or size.`]);
+  } else {
+    videoCodec = await getFirstEncodableVideoCodec(["avc", "hevc", "vp9", "av1"] as VideoCodec[], encodeOpts);
+    if (!videoCodec) throw new RenderPlanError([`This browser can't encode ${s.width}×${s.height} video at ${(s.videoBitrate / 1e6).toFixed(1)} Mbit/s with any supported codec.`]);
+    if (videoCodec !== "avc") warnings.push(`H.264 isn't available here at ${s.width}×${s.height}; encoded as ${videoCodec.toUpperCase()} instead.`);
+  }
   let audioCodec: AudioCodec | null = null;
   if (s.audio) {
     const fmt = { numberOfChannels: s.audio.channels, sampleRate: s.audio.sampleRate, bitrate: s.audio.bitrate };
-    audioCodec = (await canEncodeAudio("aac", fmt)) ? "aac" : (await canEncodeAudio("opus", fmt)) ? "opus" : null;
-    if (!audioCodec) throw new RenderPlanError(["This browser can't encode AAC or Opus audio."]);
-    if (audioCodec !== "aac") warnings.push("AAC isn't available here; audio encoded as Opus.");
+    if (!(await canEncodeAudio(s.audio.codec, fmt))) throw new RenderPlanError([`This browser can't encode ${codecLabel(s.audio.codec)} audio at ${s.audio.bitrate / 1000} kbit/s. Pick another audio codec or bitrate.`]);
+    // Preflight: actually encode with this exact configuration (it's the cached delay measurement the audio stage needs
+    // anyway). Capability queries can lie — Chrome's macOS AAC encoder "supports" 384 kbit/s and then fails every
+    // encode — and finding that out after rendering every video frame would waste the whole render.
+    try {
+      await encoderDelaySamples(s.audio.codec, { sampleRate: s.audio.sampleRate, channels: s.audio.channels, bitrate: s.audio.bitrate });
+    } catch (e) {
+      throw new RenderPlanError([`This browser's ${codecLabel(s.audio.codec)} encoder fails at ${s.audio.bitrate / 1000} kbit/s although it reports support (${(e as Error).message}). Pick a lower audio bitrate.`]);
+    }
+    audioCodec = s.audio.codec;
   }
-  if (timeline.composition.background === "transparent") warnings.push("The composition background is transparent; MP4 has no alpha channel, so it is rendered over black.");
+  const transparentBg = timeline.composition.background === "transparent";
+  if (transparentBg && !s.alpha) warnings.push(`The composition background is transparent; ${s.container.toUpperCase()} + ${codecLabel(videoCodec as OutputVideoCodec)} has no alpha channel, so it is rendered over black.`);
+  if (s.alpha && !transparentBg) warnings.push("Alpha was requested, but the composition background is opaque: every pixel will be fully opaque.");
+  const P = plan.placement;
+  const framed = P.x !== 0 || P.y !== 0 || P.width !== s.width || P.height !== s.height;
+  if (framed) warnings.push(s.framing === "fit" ? `Letterboxed: the ${timeline.composition.width}×${timeline.composition.height} composition is scaled to ${P.width}×${P.height} and centred in ${s.width}×${s.height}, with ${s.alpha ? "transparent" : "black"} bars.` : `Cropped: the ${timeline.composition.width}×${timeline.composition.height} composition is scaled to ${P.width}×${P.height} to cover ${s.width}×${s.height}; ${Math.max(-P.x, 0) * 2 || Math.max(-P.y, 0) * 2} px are cut off ${P.x < 0 ? "left and right" : "top and bottom"}.`);
 
-  const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target: new BufferTarget() });
-  const videoSource = new VideoSampleSource({ codec: videoCodec, bitrate: s.videoBitrate, keyFrameInterval: s.keyframeIntervalSec, latencyMode: "quality" });
+  const output = new Output({ format: outputFormat(s.container), target: new BufferTarget() });
+  const videoSource = new VideoSampleSource({ codec: videoCodec, bitrate: s.videoBitrate, bitrateMode: s.bitrateMode, keyFrameInterval: s.keyframeIntervalSec, latencyMode: "quality", alpha: s.alpha ? "keep" : "discard" });
   output.addVideoTrack(videoSource, { frameRate: s.fps });
   const audioSource = audioCodec && s.audio ? new EncodedAudioPacketSource(audioCodec) : null;
   if (audioSource) output.addAudioTrack(audioSource);
   await output.start();
 
   const renderer = new FinalRenderer(deps.provider, deps.measurer);
+  // Framing: the composition is rendered at the placement's scale and copied 1:1 (integer offset, no resampling) into the output frame.
+  const frameCanvas = framed ? new OffscreenCanvas(s.width, s.height) : null;
+  const frameCtx = frameCanvas?.getContext("2d", { alpha: s.alpha }) ?? null;
   const checkpoints = new Set(plan.checkpoints);
   const references = new Map<number, Uint8ClampedArray>();
   const structural: { frame: number; issues: CrossCheckIssue[] }[] = [];
@@ -107,16 +133,25 @@ export async function renderTimeline(timeline: TimelineModel, settings: RenderSe
     for (let k = 0; k < plan.frameCount; k++) {
       abortIfNeeded();
       const step = frameStep(plan, k);
-      const { canvas, resolved } = await renderer.renderFrame(timeline, step.timelineFrame, { outputScale: plan.renderScale, mediaFrameOffset: plan.mediaFrameOffset });
-      if (canvas.width !== s.width || canvas.height !== s.height) throw new Error(`Frame ${k} rendered at ${canvas.width}×${canvas.height}, expected ${s.width}×${s.height}.`);
-      const issues = crossCheckFrame(timeline, step.timelineFrame, resolved, resolveCtx);
+      const rendered = await renderer.renderFrame(timeline, step.timelineFrame, { outputScale: plan.renderScale, mediaFrameOffset: plan.mediaFrameOffset });
+      if (rendered.canvas.width !== P.width || rendered.canvas.height !== P.height) throw new Error(`Frame ${k} rendered at ${rendered.canvas.width}×${rendered.canvas.height}, expected ${P.width}×${P.height}.`);
+      let canvas: CanvasImageSource & { width: number; height: number } = rendered.canvas as CanvasImageSource & { width: number; height: number };
+      if (frameCanvas && frameCtx) {
+        frameCtx.globalCompositeOperation = "copy";
+        frameCtx.fillStyle = s.alpha ? "rgba(0,0,0,0)" : "#000";
+        frameCtx.fillRect(0, 0, s.width, s.height);
+        frameCtx.globalCompositeOperation = "source-over";
+        frameCtx.drawImage(canvas, P.x, P.y);
+        canvas = frameCanvas;
+      }
+      const issues = crossCheckFrame(timeline, step.timelineFrame, rendered.resolved, resolveCtx);
       if (issues.length) structural.push({ frame: k, issues });
       if (checkpoints.has(k)) {
-        const thumb = downscale(canvas as CanvasImageSource & { width: number; height: number });
+        const thumb = downscale(canvas);
         compareSize = thumb.size;
-        references.set(k, flattenOverBlack(thumb.rgba));
+        references.set(k, s.alpha ? thumb.rgba : flattenOverBlack(thumb.rgba));
       }
-      const sample = new VideoSample(canvas as CanvasImageSource, { timestamp: step.timestamp, duration: step.duration });
+      const sample = new VideoSample(canvas, { timestamp: step.timestamp, duration: step.duration });
       try {
         await videoSource.add(sample);
       } finally {
@@ -130,9 +165,10 @@ export async function renderTimeline(timeline: TimelineModel, settings: RenderSe
       const audio = renderAudio(timeline, deps.pcm, plan);
       mixed = audio;
       if (audio.clippedSamples > 0) warnings.push(`The audio mix peaks at ${(20 * Math.log10(audio.peak)).toFixed(1)} dBFS: ${audio.clippedSamples} samples were clipped at full scale. Lower the volume of loud clips.`);
-      await encodeAudioExact(audio, audioCodec!, s.audio!, plan.durationSec, audioSource);
+      await encodeAudioExact(audio, audioCodec!, s.audio!, plan.durationSec, audioSource, s.container);
       progress("audio", 1, 1);
     }
+    abortIfNeeded();
     progress("finalizing", 0, 1);
     await output.finalize();
   } catch (e) {
@@ -141,36 +177,76 @@ export async function renderTimeline(timeline: TimelineModel, settings: RenderSe
   }
 
   const buffer = (output.target as BufferTarget).buffer;
-  if (!buffer) throw new Error("The encoder produced no file.");
-  const blob = new Blob([buffer], { type: await output.getMimeType() });
+  const blob = new Blob(buffer ? [buffer] : [], { type: await output.getMimeType() });
   const renderMs = performance.now() - t0;
 
   // ---- validation: read the FILE back, never trust the encoder's own bookkeeping ----
+  abortIfNeeded();
   progress("validating", 0, 1);
+  const checks: RenderCheck[] = [];
+  const fileCheck = (ok: boolean, detail: string) => checks.push({ id: "file", label: "File written and readable", ok, detail });
+  if (blob.size === 0) {
+    fileCheck(false, "The encoder returned without error but produced an empty file.");
+    return { blob, plan, report: { ok: false, checks, warnings, codec: [videoCodec, audioCodec].filter(Boolean).join(" + "), bytes: 0, renderMs, frameCount: plan.frameCount, durationSec: plan.durationSec } };
+  }
   const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
   try {
-    const probed = await probeInput(input, blob.type);
-    const checks = technicalChecks(plan, probed);
+    let probed: ProbedOutput;
+    try {
+      probed = await probeInput(input, blob.type);
+    } catch (e) {
+      fileCheck(false, `${blob.size.toLocaleString("en-US")} bytes, but the file can't be read back: ${(e as Error).message}`);
+      return { blob, plan, report: { ok: false, checks, warnings, codec: [videoCodec, audioCodec].filter(Boolean).join(" + "), bytes: blob.size, renderMs, frameCount: plan.frameCount, durationSec: plan.durationSec } };
+    }
+    fileCheck(true, `${blob.size.toLocaleString("en-US")} bytes, ${probed.container ?? "unknown container"} (${probed.mimeType})`);
+    // Audio is decoded once up front: its duration is judged by what a player actually outputs, not container metadata.
+    const audioTrack = await input.getPrimaryAudioTrack();
+    let decodedAudio: { samples: Float32Array; endSec: number } | null = null;
+    if (audioTrack && mixed) {
+      try {
+        decodedAudio = await decodeChannel0(audioTrack, mixed.sampleRate, mixed.channels[0].length);
+      } catch (e) {
+        checks.push({ id: "audio-decode", label: "Audio decodes", ok: false, detail: `The audio track can't be decoded: ${(e as Error).message}` });
+      }
+    }
+    if (decodedAudio && probed.audio) probed.audio.decodedSec = decodedAudio.endSec;
+    checks.push(...technicalChecks(plan, probed, { video: videoCodec, audio: audioCodec }));
     checks.push(structureCheck(structural, plan.frameCount));
     const videoTrack = await input.getPrimaryVideoTrack();
     const fidelity: { frame: number; psnr: number }[] = [];
+    const alphaFidelity: { frame: number; psnr: number }[] = [];
+    let decodeFailure: { frame: number; message: string } | null = null;
     if (videoTrack && compareSize) {
-      const sink = new CanvasSink(videoTrack, { poolSize: 1 });
+      const sink = new CanvasSink(videoTrack, { poolSize: 1, alpha: s.alpha });
       for (const k of plan.checkpoints) {
+        abortIfNeeded();
         const ref = references.get(k);
         if (!ref) continue;
         // Mid-frame timestamp: unambiguously inside frame k whatever the container's timestamp rounding.
-        const wrapped = await sink.getCanvas((k + 0.5) / s.fps);
+        let wrapped: Awaited<ReturnType<typeof sink.getCanvas>>;
+        try {
+          wrapped = await sink.getCanvas((k + 0.5) / s.fps);
+        } catch (e) {
+          // A broken bitstream is a failed check on a kept file, not an exception that loses the report.
+          decodeFailure = { frame: k, message: (e as Error).message };
+          break;
+        }
         if (!wrapped) {
           fidelity.push({ frame: k, psnr: 0 });
+          if (s.alpha) alphaFidelity.push({ frame: k, psnr: 0 });
           continue;
         }
-        fidelity.push({ frame: k, psnr: psnr(ref, downscale(wrapped.canvas as CanvasImageSource & { width: number; height: number }).rgba) });
+        const got = downscale(wrapped.canvas as CanvasImageSource & { width: number; height: number }).rgba;
+        if (s.alpha) {
+          alphaFidelity.push({ frame: k, psnr: alphaPsnr(ref, got) });
+          fidelity.push({ frame: k, psnr: psnr(flattenOverBlack(ref.slice()), flattenOverBlack(got)) });
+        } else fidelity.push({ frame: k, psnr: psnr(ref, got) });
       }
     }
-    checks.push(fidelityCheck(fidelity));
-    const audioTrack = await input.getPrimaryAudioTrack();
-    if (audioTrack && mixed) checks.push(audioSyncCheck(measureLag(mixed.channels[0], await decodeChannel0(audioTrack, mixed.sampleRate, mixed.channels[0].length), mixed.sampleRate), mixed.sampleRate));
+    if (decodeFailure) checks.push({ id: "video-decode", label: "Video decodes", ok: false, detail: `The video can't be decoded at frame ${decodeFailure.frame}: ${decodeFailure.message}` });
+    checks.push(fidelityCheck(fidelity, undefined, references.size));
+    if (s.alpha) checks.push(alphaCheck(probed, alphaFidelity));
+    if (decodedAudio && mixed) checks.push(audioSyncCheck(measureLag(mixed.channels[0], decodedAudio.samples, mixed.sampleRate), mixed.sampleRate));
     const report: RenderReport = {
       ok: checks.every((c) => c.ok),
       checks,
@@ -188,20 +264,43 @@ export async function renderTimeline(timeline: TimelineModel, settings: RenderSe
   }
 }
 
+function outputFormat(container: OutputContainer) {
+  if (container === "webm") return new WebMOutputFormat();
+  if (container === "mov") return new MovOutputFormat({ fastStart: "in-memory" });
+  return new Mp4OutputFormat({ fastStart: "in-memory" });
+}
+
+/** Mediabunny's encodability check, plus WebCodecs' own answer for alpha (Mediabunny encodes VP9/VP8 alpha as a second stream when the browser can't). */
+async function canEncodeVideoWith(codec: OutputVideoCodec, o: { width: number; height: number; bitrate: number }, alpha: boolean): Promise<boolean> {
+  if (!(await canEncodeVideo(codec, o))) return false;
+  return !alpha || codec === "vp9" || codec === "vp8";
+}
+
 /** Reads what the encoded file actually contains. */
 export async function probeInput(input: Input, mimeType: string): Promise<ProbedOutput> {
+  const format = await input.getFormat();
   const v = await input.getPrimaryVideoTrack();
   const a = await input.getPrimaryAudioTrack();
   let video: ProbedOutput["video"] = null;
   if (v) {
     const timestamps: number[] = [];
+    let bytes = 0;
     const sink = new EncodedPacketSink(v);
-    for (let p = await sink.getFirstPacket({ metadataOnly: true }); p; p = await sink.getNextPacket(p, { metadataOnly: true })) timestamps.push(p.timestamp);
+    for (let p = await sink.getFirstPacket({ metadataOnly: true }); p; p = await sink.getNextPacket(p, { metadataOnly: true })) {
+      timestamps.push(p.timestamp);
+      bytes += p.byteLength;
+    }
     timestamps.sort((x, y) => x - y);
-    video = { codec: await v.getCodec(), width: await v.getDisplayWidth(), height: await v.getDisplayHeight(), frameCount: timestamps.length, timestamps, durationSec: await v.computeDuration() };
+    video = { codec: await v.getCodec(), width: await v.getDisplayWidth(), height: await v.getDisplayHeight(), frameCount: timestamps.length, timestamps, durationSec: await v.computeDuration(), bytes, canBeTransparent: await v.canBeTransparent() };
   }
-  const audio: ProbedOutput["audio"] = a ? { codec: await a.getCodec(), sampleRate: await a.getSampleRate(), channels: await a.getNumberOfChannels(), durationSec: await a.computeDuration() } : null;
-  return { mimeType, video, audio };
+  let audio: ProbedOutput["audio"] = null;
+  if (a) {
+    let bytes = 0;
+    const sink = new EncodedPacketSink(a);
+    for (let p = await sink.getFirstPacket({ metadataOnly: true }); p; p = await sink.getNextPacket(p, { metadataOnly: true })) bytes += p.byteLength;
+    audio = { codec: await a.getCodec(), sampleRate: await a.getSampleRate(), channels: await a.getNumberOfChannels(), durationSec: await a.computeDuration(), bytes };
+  }
+  return { mimeType, container: format.name, containerMime: format.mimeType, video, audio };
 }
 
 /** Identical downscale for the reference and the decoded frame (same canvas path, same filter). */
@@ -226,7 +325,7 @@ function downscale(src: CanvasImageSource & { width: number; height: number }): 
  *    dropped and the last one's duration is cut to end exactly at `durationSec` (live test: the track ran 31 ms long).
  * The encoder is driven directly (WebCodecs) because both need control over packet timestamps and durations.
  */
-async function encodeAudioExact(audio: RenderedAudio, codec: AudioCodec, a: { channels: number; bitrate: number }, durationSec: number, sink: EncodedAudioPacketSource): Promise<void> {
+async function encodeAudioExact(audio: RenderedAudio, codec: AudioCodec, a: { channels: number; bitrate: number }, durationSec: number, sink: EncodedAudioPacketSource, container: OutputContainer): Promise<void> {
   const sr = audio.sampleRate;
   const shift = (await encoderDelaySamples(codec, { sampleRate: sr, channels: a.channels, bitrate: a.bitrate })) / sr;
   const chunks: { chunk: EncodedAudioChunk; meta?: EncodedAudioChunkMetadata }[] = [];
@@ -240,31 +339,50 @@ async function encodeAudioExact(audio: RenderedAudio, codec: AudioCodec, a: { ch
   await enc.flush();
   enc.close();
   if (failure) throw failure;
+  // Delay the DECODER removes by itself, signalled in the codec header (Opus pre-skip): packet time runs that much
+  // ahead of presentation time, so the end is cut in presentation time (live test: cutting in packet time dropped the
+  // last Opus packet and the track came out 20 ms short).
+  const signalled = codecDelaySec(codec, chunks.find((c) => c.meta?.decoderConfig)?.meta?.decoderConfig);
+  // MP4/MOV trim the last packet through the edit list; Mediabunny's WebM writes no DiscardPadding, so there the last
+  // packet stays whole (its tail past the video is encoder padding = silence, under one frame).
+  const canTrimEnd = container !== "webm";
   let t = chunks.length ? chunks[0].chunk.timestamp / 1e6 - shift : 0;
   for (let i = 0; i < chunks.length; i++) {
     const { chunk, meta } = chunks[i];
     const dur = (chunk.duration ?? 0) / 1e6;
-    if (t >= durationSec - 1e-9) break;
-    const packet = EncodedPacket.fromEncodedChunk(chunk).clone({ timestamp: t, duration: Math.min(dur, durationSec - t) });
+    if (t - signalled >= durationSec - 1e-9) break;
+    const packet = EncodedPacket.fromEncodedChunk(chunk).clone({ timestamp: t, duration: canTrimEnd ? Math.min(dur, durationSec + signalled - t) : dur });
     await sink.add(packet, i === 0 ? meta : undefined);
     t += dur;
   }
+}
+
+/** Seconds of priming the codec header tells every decoder to drop (Opus: OpusHead pre-skip at 48 kHz). AAC signals none in WebCodecs. */
+export function codecDelaySec(codec: AudioCodec, config: AudioDecoderConfig | undefined): number {
+  if (codec !== "opus" || !config?.description) return 0;
+  const d = config.description;
+  const bytes = ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d);
+  // OpusHead: "OpusHead" (8) | version (1) | channels (1) | pre-skip (u16 LE) ...
+  if (bytes.length < 12 || String.fromCharCode(...bytes.subarray(0, 8)) !== "OpusHead") return 0;
+  return (bytes[10] | (bytes[11] << 8)) / 48000;
 }
 
 function webCodecsAudioCodec(codec: AudioCodec): string {
   return codec === "aac" ? "mp4a.40.2" : codec;
 }
 
-/** Decodes a track's first channel onto a sample grid at its presentation timestamps (edit list applied by the demuxer). */
-async function decodeChannel0(track: InputAudioTrack, sampleRate: number, length: number): Promise<Float32Array> {
+/** Decodes a track's first channel onto a sample grid at its presentation timestamps (edit list / pre-skip applied by the demuxer and decoder). `endSec` = where the decoded audio actually ends. */
+async function decodeChannel0(track: InputAudioTrack, sampleRate: number, length: number): Promise<{ samples: Float32Array; endSec: number }> {
   const out = new Float32Array(length);
+  let end = 0;
   for await (const { buffer, timestamp } of new AudioBufferSink(track).buffers()) {
     if (buffer.sampleRate !== sampleRate) throw new Error(`Decoded audio is ${buffer.sampleRate} Hz, expected ${sampleRate} Hz.`);
     const ch = buffer.getChannelData(0);
     const at = Math.round(timestamp * sampleRate);
+    end = Math.max(end, at + ch.length);
     for (let i = Math.max(0, -at); i < ch.length && at + i < length; i++) out[at + i] = ch[i];
   }
-  return out;
+  return { samples: out, endSec: end / sampleRate };
 }
 
 const delayCache = new Map<string, Promise<number>>();

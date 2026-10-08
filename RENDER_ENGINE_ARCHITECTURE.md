@@ -46,6 +46,8 @@ Files live in `src/lib/render/`:
 
 ## 2. Output settings (`settings.ts`)
 
+> Phase 16 extended these settings: containers, codecs, alpha, fit/fill framing, custom sizes and rates. See `EXPORT_ARCHITECTURE.md` §3. The rules below remain the defaults.
+
 - **Sizes:** 1080×1920, 1920×1080, 1080×1080, 2160×3840.
 - **Frame rates:** 24, 25, 30, 50, 60. Anything else is rejected before rendering.
 - **The output must have the composition's aspect ratio.** Rendering a 16:9 composition into 9:16 would mean cropping or letterboxing, a creative decision the timeline didn't make. It is refused with what to change instead.
@@ -138,6 +140,8 @@ Given the same project and media, the rendered frames are byte-identical across 
 The encoded bytes are not guaranteed identical across machines: hardware encoders differ. That is why fidelity is validated against the rendered frames, not against a stored file.
 
 ## 11. Not supported / known limits
+
+> Phase 16 lifted the MP4-only, fixed-size and same-aspect limits. See `EXPORT_ARCHITECTURE.md` §8 for the current limits.
 
 - **Containers:** MP4 only. No transparent export (it would need WebM/VP9 alpha or ProRes 4444).
 - **Ranges:** the whole timeline is rendered; no in/out sub-range export yet.

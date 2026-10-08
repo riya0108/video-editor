@@ -4,9 +4,7 @@ import CompositionPreview from "./CompositionPreview";
 import { TimelineEngine, type EditResult } from "../../../../lib/timeline/engine";
 import { formatTimecode, secondsToFrames } from "../../../../lib/timeline/time-model";
 import { timelineDurationFrames, type CompositionSettings, type TimelineModel } from "../../../../lib/timeline/model";
-import { deserializeTimeline, serializeTimeline } from "../../../../lib/timeline/serialize";
-import { isTrimmableContent } from "../../../../lib/timeline/clip";
-import { clipTimelineEnd, type Clip } from "../../../../lib/timeline/clip";
+import { clipTimelineEnd, isTrimmableContent, type Clip } from "../../../../lib/timeline/clip";
 import { defaultClipVisual, type ClipVisual, type ClipVisualPatch } from "../../../../lib/timeline/visual";
 import { normalizeTextStyle, type TextStyle } from "../../../../lib/timeline/text-style";
 import TextPanel, { type TextPanelProps } from "./TextPanel";
@@ -47,6 +45,11 @@ import { AudioPlaybackEngine } from "../../../../lib/audio/playback";
 import { clipPeakDb, encodeWav16, mixTimeline } from "../../../../lib/audio/engine-core";
 import { AUDIO_ROLES, guessAudioRole, isAudibleKind } from "../../../../lib/audio/model";
 import { valueAt } from "../../../../lib/animation/properties";
+import { AssetRegistry } from "../../../../lib/project/asset-registry";
+import { encodePng } from "../../../../lib/project/media-host";
+import { fsAccessAvailable, pickMediaWithHandles } from "../../../../lib/project/file-target";
+import type { ExportSettingsState, ProjectDocument } from "../../../../lib/project/document";
+import { ProjectFileBar, useProjectPersistence, type PersistenceEditor } from "./ProjectFileBar";
 
 /**
  * COMPOSITION PLAYGROUND — internal page that drives the composition &
@@ -57,7 +60,6 @@ import { valueAt } from "../../../../lib/animation/properties";
  */
 
 const FPS = 30;
-const STORAGE_KEY = "clipbench.compositionPlayground.project";
 const DEMO_VIDEO_URL = "/videos/hero-phone-demo.mp4";
 
 const COMPOSITION_PRESETS: { label: string; width: number; height: number }[] = [
@@ -123,6 +125,11 @@ export default function CompositionPlaygroundPanel() {
   const audioStore = useMemo(() => (typeof window === "undefined" ? null : new AudioSourceStore()), []);
   const player = useMemo(() => (audioStore ? new AudioPlaybackEngine((id) => audioStore.buffer(id)) : null), [audioStore]);
   const engineRef = useRef<TimelineEngine | null>(null);
+  /** PERSISTENCE (Phase 17): where every source's media came from, so a project can be saved and reopened. */
+  const registry = useMemo(() => new AssetRegistry(), []);
+  const exportSettingsRef = useRef<ExportSettingsState | null>(null);
+  const [exportPanelKey, setExportPanelKey] = useState(0);
+  const frameRef = useRef(0);
   const [, bump] = useReducer((x: number) => x + 1, 0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
@@ -173,10 +180,16 @@ export default function CompositionPlaygroundPanel() {
   /** AI editing engine (Phase 14): one session per editor — analysis never edits; apply actions go through engine.transact. */
   const aiSession = useMemo(() => {
     if (!provider) return null;
-    const registry = createDefaultRegistry({ loadFace: loadFaceDetector, loadObject: loadObjectDetector, available: mediapipeAvailable, faceModel: FACE_MODEL, objectModel: OBJECT_MODEL });
-    const services = createBrowserServices({ registerCanvas: (id, canvas) => provider.addStill(id, canvas) });
-    return new AIEditingSession(registry, services, (clip) => createClipMediaSource(clip, FPS, provider, (id) => audioStore?.pcm(id)));
-  }, [provider, audioStore]);
+    const aiRegistry = createDefaultRegistry({ loadFace: loadFaceDetector, loadObject: loadObjectDetector, available: mediapipeAvailable, faceModel: FACE_MODEL, objectModel: OBJECT_MODEL });
+    const services = createBrowserServices({
+      registerCanvas: (id, canvas) => {
+        provider.addStill(id, canvas);
+        // AI-made images exist nowhere else: kept (as PNG) in the project.
+        void encodePng(canvas).then((png) => registry.setGenerated(id, "still", "AI image", "ai", [{ frame: 0, png, width: canvas.width, height: canvas.height }]));
+      },
+    });
+    return new AIEditingSession(aiRegistry, services, (clip) => createClipMediaSource(clip, FPS, provider, (id) => audioStore?.pcm(id)));
+  }, [provider, audioStore, registry]);
 
   // --- build the demo project once ---
   useEffect(() => {
@@ -184,11 +197,16 @@ export default function CompositionPlaygroundPanel() {
     let cancelled = false;
     (async () => {
       try {
-        const { durationSec } = await provider.addVideo("demo-video", DEMO_VIDEO_URL, FPS);
+        const { info: demoInfo, durationSec } = await provider.addVideo("demo-video", DEMO_VIDEO_URL, FPS);
         // The video's own soundtrack (decoded in the background; a video without one is simply silent).
         void audioStore?.add("demo-video", DEMO_VIDEO_URL, "Demo video", { video: true });
-        provider.addStill("logo", makeLogoAsset());
-        provider.addStill("matte", makeMatteAsset());
+        const logoAsset = makeLogoAsset();
+        const matteAsset = makeMatteAsset();
+        provider.addStill("logo", logoAsset);
+        provider.addStill("matte", matteAsset);
+        registry.setUrl("demo-video", "video", "Demo video", DEMO_VIDEO_URL, { width: demoInfo.width, height: demoInfo.height, durationSec, fps: FPS });
+        await registry.setGenerated("logo", "still", "Logo (generated)", "demo:logo", [{ frame: 0, png: await encodePng(logoAsset), width: logoAsset.width, height: logoAsset.height }]);
+        await registry.setGenerated("matte", "still", "Matte (generated)", "demo:matte", [{ frame: 0, png: await encodePng(matteAsset), width: matteAsset.width, height: matteAsset.height }]);
         if (cancelled) return;
         const durationFrames = Math.max(1, secondsToFrames(durationSec, FPS, "floor"));
         const engine = new TimelineEngine(FPS, { width: 1920, height: 1080, background: "#000000" });
@@ -248,6 +266,33 @@ export default function CompositionPlaygroundPanel() {
   const engine = engineRef.current;
   const timeline = engine?.timeline ?? null;
   const duration = timeline ? Math.max(1, timelineDurationFrames(timeline)) : 1;
+  frameRef.current = frame;
+
+  const persistenceEditor = useMemo<PersistenceEditor | null>(
+    () =>
+      engine && provider && audioStore
+        ? {
+            engine,
+            provider,
+            audio: audioStore,
+            aiStore: aiSession?.store ?? null,
+            registry,
+            fps: FPS,
+            getFrame: () => frameRef.current,
+            exportSettings: exportSettingsRef,
+            onLoaded: (doc: ProjectDocument) => {
+              setPlaying(false);
+              setSelectedTransitionId(null);
+              setFrame(Math.min(doc.ui.frame, Math.max(0, timelineDurationFrames(doc.timeline) - 1)));
+              setExportPanelKey((k) => k + 1);
+              player?.update(engine.timeline);
+              bump();
+            },
+          }
+        : null,
+    [engine, provider, audioStore, aiSession, registry, player],
+  );
+  const persistence = useProjectPersistence(persistenceEditor);
 
   // --- playback clock: wall-clock based, so dropped render frames don't slow playback down ---
   // SYNC (AUDIO_ENGINE_ARCHITECTURE.md §4): while playing, the AudioContext clock is the master — the frame shown is
@@ -354,13 +399,14 @@ export default function CompositionPlaygroundPanel() {
    * selected, with a confirmation. Every rejection or decode failure is
    * reported by file name with a concrete fix; one bad file doesn't stop the rest.
    */
-  const addMediaFiles = async (files: File[]) => {
+  const addMediaFiles = async (files: File[], handles: (FileSystemFileHandle | undefined)[] = []) => {
     if (!engine || !provider) return;
     const errors: string[] = [];
     const added: string[] = [];
     const relinked: string[] = [];
     const at = frame;
-    for (const file of files) {
+    for (const [fi, file] of files.entries()) {
+      const handle = handles[fi];
       const c = classifyImport(file);
       if (!c.ok) {
         errors.push(c.message);
@@ -384,7 +430,10 @@ export default function CompositionPlaygroundPanel() {
             for (const sid of missingIds) {
               const st = await audioStore.add(sid, file, file.name);
               if (st.state !== "ready") errors.push(st.state === "error" ? st.message : `${file.name}: no audio could be decoded.`);
-              else if (st.warning) errors.push(st.warning);
+              else {
+                if (st.warning) errors.push(st.warning);
+                await registry.setFile(sid, "audio", file, { durationSec: st.durationSec }, handle);
+              }
             }
             relinked.push(file.name);
             continue;
@@ -401,6 +450,7 @@ export default function CompositionPlaygroundPanel() {
           const roleLabel = AUDIO_ROLES.find((x) => x.role === role)?.label ?? "Audio";
           const t = engine.addTrack("audio", `${roleLabel}: ${file.name}`);
           if (!t.ok) throw t.error;
+          await registry.setFile(id, "audio", file, { durationSec: st.durationSec }, handle);
           r = engine.insertClip(t.track.id, { kind: "audio", source: { sourceId: id, label: file.name, sourceDurationFrames: n }, sourceInFrame: 0, sourceOutFrame: n }, at);
           if (r.ok) engine.setClipAudio(r.clip.id, { role });
         } else if (c.kind === "svg") {
@@ -409,16 +459,18 @@ export default function CompositionPlaygroundPanel() {
           const svg = svgSpecFromMarkup(await file.text(), Math.min(width, height) * 0.5);
           r = engine.addGraphicLayer({ graphic: { svg }, atFrame: at, durationFrames: 5 * FPS, name: file.name });
         } else if (c.kind === "video") {
-          const { durationSec } = await provider.addVideo(id, url, FPS);
+          const { info, durationSec } = await provider.addVideo(id, url, FPS);
           void audioStore?.add(id, url, file.name, { video: true });
+          await registry.setFile(id, "video", file, { width: info.width, height: info.height, durationSec, fps: FPS }, handle);
           const n = Math.max(1, secondsToFrames(durationSec, FPS, "floor"));
           const t = engine.addTrack("overlay", file.name);
           if (!t.ok) throw t.error;
           engine.reorderTrack(t.track.id, 0);
           r = engine.insertClip(t.track.id, { kind: "overlay", source: { sourceId: id, label: file.name, sourceDurationFrames: n }, sourceInFrame: 0, sourceOutFrame: n }, at, { transform: { scaleX: 0.5, scaleY: 0.5 } });
         } else {
-          await provider.addImage(id, file);
+          const info = await provider.addImage(id, file);
           URL.revokeObjectURL(url); // images are decoded to a bitmap; the URL isn't needed
+          await registry.setFile(id, "image", file, { width: info.width, height: info.height }, handle);
           const t = engine.addTrack("image", file.name);
           if (!t.ok) throw t.error;
           engine.reorderTrack(t.track.id, 0);
@@ -431,6 +483,7 @@ export default function CompositionPlaygroundPanel() {
         URL.revokeObjectURL(url);
         provider.remove(id);
         audioStore?.remove(id);
+        registry.remove(id);
         errors.push(describeDecodeFailure(file, c.kind, e));
       }
     }
@@ -552,8 +605,12 @@ export default function CompositionPlaygroundPanel() {
         onProgress: (pr) => setBgRemoval((s) => (s.clipId === clip.id ? { ...s, busy: { done: pr.done, total: pr.total, modelFraction: pr.modelFraction } } : s)),
       });
       const sourceId = matteSourceIdFor(clip);
+      // The matte exists only here: its frames go into the project as PNG before the layer points at it.
+      const frames = out.kind === "still" ? [{ frame: 0, image: out.image }] : out.frames;
+      const pngs = await Promise.all(frames.map(async (f) => ({ frame: f.frame, png: await encodePng(f.image), width: f.image.width, height: f.image.height })));
       if (out.kind === "still") provider.addStill(sourceId, out.image);
       else provider.addFrameSequence(sourceId, out.frames);
+      await registry.setGenerated(sourceId, out.kind, `Background removal (${clip.content.source?.label ?? clip.id})`, "background-removal", pngs);
       const current = engine.timeline.clips[clip.id];
       if (current) apply(engine.setClipVisualsAtFrame({ [clip.id]: { matte: { sourceId, invert: false, decontaminate: true } } }, frame));
       setBgRemoval({ clipId: clip.id, busy: null, error: null, report: out.report });
@@ -564,6 +621,8 @@ export default function CompositionPlaygroundPanel() {
       if (bgAbortRef.current === ac) bgAbortRef.current = null;
     }
   };
+  // Dev-only test handle: the same actions the UI buttons run (persistence tests build projects through them).
+  if (import.meta.env.DEV && typeof window !== "undefined") Object.assign(((window as unknown as Record<string, Record<string, unknown>>).__compositionActions ??= {}), { apply, addMediaFiles, removeBackground });
 
   return (
     <div
@@ -595,6 +654,7 @@ export default function CompositionPlaygroundPanel() {
           Drop images or videos to add them at the playhead
         </div>
       )}
+      {persistence && <ProjectFileBar p={persistence} registry={registry} />}
       <ProjectBar
         composition={timeline.composition}
         canUndo={engine.canUndo}
@@ -622,39 +682,16 @@ export default function CompositionPlaygroundPanel() {
           apply(r);
           if (r.ok) setEditingTextId(r.clip.id);
         }}
-        onSave={() => {
-          try {
-            // engine.timeline, not the rendered `timeline` snapshot: save must capture the engine's present state even if a render is pending.
-            const current = engine.timeline;
-            localStorage.setItem(STORAGE_KEY, serializeTimeline(current));
-            setNotice(`Saved ${Object.keys(current.clips).length} clips at ${new Date().toLocaleTimeString()}.`);
-          } catch (e) {
-            setNotice(`Save failed: ${(e as Error).message}`);
-          }
-        }}
-        onLoad={() => {
-          try {
-            const json = localStorage.getItem(STORAGE_KEY);
-            if (!json) return setNotice("Nothing saved yet.");
-            const loaded = deserializeTimeline(json);
-            // Media isn't embedded in a project — list any source this session can't resolve (e.g. an upload from an earlier session).
-            const missing = new Set<string>();
-            for (const c of Object.values(loaded.clips)) {
-              const id = isTrimmableContent(c.content) ? c.content.source.sourceId : c.content.source?.sourceId;
-              // Audio sources live in the audio store (decoded PCM), pictures in the frame provider.
-              const present = c.content.kind === "audio" ? audioStore?.status(id ?? "").state === "ready" : !!(id && provider.getSourceInfo(id));
-              if (id && !present) missing.add(c.content.source?.label ?? id);
-              if (c.visual?.matte && !provider.getSourceInfo(c.visual.matte.sourceId)) missing.add(c.visual.matte.sourceId);
-            }
-            engine.loadTimeline(loaded);
-            setFrame((f) => Math.min(f, Math.max(0, timelineDurationFrames(loaded) - 1)));
-            setNotice(missing.size ? `Loaded. Missing media (re-add to relink): ${[...missing].join(", ")}` : "Loaded.");
-            bump();
-          } catch (e) {
-            setNotice(`Load failed: ${(e as Error).message}`);
-          }
-        }}
         onAddMedia={addMediaFiles}
+        onPickMedia={
+          fsAccessAvailable()
+            ? async () => {
+                // With the File System Access picker the browser hands out READ handles, so a reopened project finds its media again.
+                const picked = await pickMediaWithHandles({ "video/*": [".mp4", ".mov", ".webm", ".m4v"], "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"], "audio/*": [".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac"] }).catch(() => []);
+                if (picked.length) await addMediaFiles(picked.map((x) => x.file), picked.map((x) => x.handle));
+              }
+            : undefined
+        }
       />
       {notice && <p className="rounded-md bg-(--color-bg-subtle) px-3 py-2 text-caption" role="status">{notice}</p>}
       {editError && <p className="rounded-md bg-warning-500/10 px-3 py-2 text-caption text-warning-700 dark:text-warning-300">Edit rejected: {editError}</p>}
@@ -767,7 +804,18 @@ export default function CompositionPlaygroundPanel() {
           />
           <FinalRenderBox renderer={finalRenderer} timeline={timeline} frame={frame} />
           {audioStore && <AudioExportBox store={audioStore} timeline={timeline} />}
-          {renderDeps && <VideoExportPanel timeline={timeline} deps={renderDeps} />}
+          {renderDeps && (
+            <VideoExportPanel
+              key={exportPanelKey}
+              timeline={timeline}
+              deps={renderDeps}
+              initial={exportSettingsRef.current}
+              onSettingsChange={(st) => {
+                exportSettingsRef.current = st;
+                persistence?.manager.markEdited();
+              }}
+            />
+          )}
         </div>
 
         <div className="flex flex-col gap-4">
@@ -1051,8 +1099,7 @@ function ProjectBar({
   onRedo,
   onChange,
   onAddMedia,
-  onSave,
-  onLoad,
+  onPickMedia,
   onAddText,
   onAddShape,
 }: {
@@ -1063,8 +1110,8 @@ function ProjectBar({
   onRedo: () => void;
   onChange: (patch: Partial<CompositionSettings>) => void;
   onAddMedia: (files: File[]) => void;
-  onSave: () => void;
-  onLoad: () => void;
+  /** Present when the browser has the File System Access picker (media then comes with read handles). */
+  onPickMedia?: () => void;
   onAddText: () => void;
   onAddShape: (choice: string) => void;
 }) {
@@ -1129,7 +1176,17 @@ function ProjectBar({
       <button type="button" onClick={onAddText} className="flex items-center gap-1.5 rounded-md border border-(--color-border) px-2 py-1 font-medium hover:bg-(--color-bg-subtle)" title="Add a text layer at the playhead">
         <Type className="h-4 w-4" /> Add text
       </button>
-      <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-(--color-border) px-2 py-1 hover:bg-(--color-bg-subtle)">
+      <label
+        className="flex cursor-pointer items-center gap-1.5 rounded-md border border-(--color-border) px-2 py-1 hover:bg-(--color-bg-subtle)"
+        onClick={
+          onPickMedia
+            ? (e) => {
+                e.preventDefault();
+                onPickMedia();
+              }
+            : undefined
+        }
+      >
         <ImagePlus className="h-4 w-4" /> Add media <span className="text-(--color-text-faint)">(or drop files)</span>
         <input
           type="file"
@@ -1145,12 +1202,6 @@ function ProjectBar({
         />
       </label>
       <div className="ml-auto flex items-center gap-1">
-        <button type="button" onClick={onSave} className="rounded-md border border-(--color-border) px-2 py-1 hover:bg-(--color-bg-subtle)">
-          Save
-        </button>
-        <button type="button" onClick={onLoad} className="mr-2 rounded-md border border-(--color-border) px-2 py-1 hover:bg-(--color-bg-subtle)">
-          Load
-        </button>
         <button type="button" disabled={!canUndo} onClick={onUndo} className="rounded p-1.5 hover:bg-(--color-bg-subtle) disabled:opacity-40" aria-label="Undo" title="Undo (⌘Z)">
           <Undo2 className="h-4 w-4" />
         </button>

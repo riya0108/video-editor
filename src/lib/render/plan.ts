@@ -1,5 +1,5 @@
 import { timelineDurationFrames, type TimelineModel } from "../timeline/model";
-import { checkRenderSettings, DEFAULT_AUDIO, defaultVideoBitrate, type AudioOutputSettings, type RenderSettings } from "./settings";
+import { checkRenderSettings, DEFAULT_AUDIO, defaultVideoBitrate, type AudioOutputSettings, type Placement, type RenderSettings } from "./settings";
 import { audioSegments } from "../audio/engine-core";
 import { clipTimelineEnd } from "../timeline/clip";
 import { transitionWindow } from "../transitions/model";
@@ -30,9 +30,12 @@ export interface FrameStep {
 }
 
 export interface RenderPlan {
-  settings: Required<Omit<RenderSettings, "audio">> & { audio: AudioOutputSettings | null };
+  /** `videoCodec` stays optional: omitted = H.264 with a fallback (job.ts). */
+  settings: Required<Omit<RenderSettings, "audio" | "videoCodec">> & Pick<RenderSettings, "videoCodec"> & { audio: AudioOutputSettings | null };
   projectFps: number;
   renderScale: number;
+  /** Where the rendered composition lands in the output frame (identity unless framing is "fit"/"fill" with another shape). */
+  placement: Placement;
   /** Timeline end, project frames. */
   timelineFrames: number;
   frameCount: number;
@@ -86,9 +89,15 @@ export function buildRenderPlan(timeline: TimelineModel, settings: RenderSetting
       videoBitrate: settings.videoBitrate ?? defaultVideoBitrate(settings.width, settings.height, fps),
       keyframeIntervalSec,
       audio,
+      bitrateMode: settings.bitrateMode ?? "variable",
+      container: settings.container ?? "mp4",
+      videoCodec: settings.videoCodec,
+      alpha: settings.alpha ?? false,
+      framing: settings.framing ?? "match",
     },
     projectFps,
     renderScale: check.renderScale,
+    placement: check.placement,
     timelineFrames,
     frameCount,
     durationSec,
