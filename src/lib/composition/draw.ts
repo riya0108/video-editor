@@ -47,8 +47,13 @@ export interface DrawOptions {
    * Same-size scratch contexts, created lazily by the caller. Slot 0 isolates matted / effected / soft-masked layers;
    * transitions use slots 1 (outgoing side), 2 (incoming side) and 3 (the transition's mix); slot 4 holds mask coverage
    * and slot 5 a luma matte being converted. Each slot is a distinct canvas.
+   *
+   * `readback` (default true): whether anything will read the surface's pixels back (getImageData). Surfaces that are
+   * only drawn into and composited are asked for with false, so the renderer can give them a GPU-backed canvas: drawing
+   * a decoded video frame into a CPU (willReadFrequently) canvas costs a GPU→CPU copy per frame
+   * (PERFORMANCE_OPTIMIZATION_REPORT.md §4). The same (slot, readback) pair is always the same canvas.
    */
-  getScratch: (slot?: number) => Ctx2D;
+  getScratch: (slot?: number, readback?: boolean) => Ctx2D;
 }
 
 export interface DrawStats {
@@ -155,7 +160,7 @@ export function drawResolvedFrame(ctx: Ctx2D, frame: ResolvedFrame, pixels: Read
         stats.skipped.push(layer.clipId);
         continue;
       }
-      const scratch = opts.getScratch(0);
+      const scratch = opts.getScratch(0, readsBackIsolated(layer));
       renderLayerIsolated(scratch, layer, px, opts, frame.frame);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = layer.opacity;
@@ -177,6 +182,11 @@ export function drawResolvedFrame(ctx: Ctx2D, frame: ResolvedFrame, pixels: Read
   }
   ctx.restore();
   return stats;
+}
+
+/** Whether renderLayerIsolated reads the layer's own isolation surface back: effects and colour-decontaminated mattes do; mattes, luma mattes (converted on slot 5) and masks only draw and composite. */
+export function readsBackIsolated(layer: ResolvedLayer): boolean {
+  return layer.effects.length > 0 || (!!layer.matte && layer.matte.decontaminate && layer.matte.channel === "alpha" && !layer.matte.invert);
 }
 
 function needsPixels(layer: ResolvedLayer): boolean {
@@ -382,7 +392,8 @@ function drawTransition(ctx: Ctx2D, from: ResolvedLayer | null, to: ResolvedLaye
       stats.skipped.push(layer.clipId);
       return null;
     }
-    const surface = opts.getScratch(slot);
+    // mixPixels-based transitions read the sides back too — correct on either kind of canvas, so that isn't predicted here.
+    const surface = opts.getScratch(slot, readsBackIsolated(layer));
     renderLayerIsolated(surface, layer, px, opts, absFrame);
     if (layer.opacity < 1) {
       // Bake the layer's own opacity into its surface (exact: scales every premultiplied channel).
@@ -398,7 +409,7 @@ function drawTransition(ctx: Ctx2D, from: ResolvedLayer | null, to: ResolvedLaye
   const b = side(to, 2);
   if (!a && !b) return;
 
-  const mix = opts.getScratch(3);
+  const mix = opts.getScratch(3, false);
   clearSurface(mix);
   applySmoothing(mix, opts.smoothing);
   const painter = new CanvasTransitionPainter(mix, a, b, opts.renderScale);

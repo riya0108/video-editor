@@ -157,16 +157,42 @@ export function flattenOverBlack(rgba: Uint8ClampedArray): Uint8ClampedArray {
 /** Minimum PSNR between a rendered frame and the same frame decoded from the file. H.264 at the default bitrate measures well above this; a wrong, shifted or missing frame measures far below. */
 export const MIN_FIDELITY_PSNR = 30;
 
-/** `expected`: how many checkpoints should have been compared; fewer (e.g. decoding broke off) fails the check. */
-export function fidelityCheck(results: { frame: number; psnr: number }[], min = MIN_FIDELITY_PSNR, expected = results.length): RenderCheck {
-  const worst = results.reduce((w, r) => (r.psnr < w.psnr ? r : w), { frame: -1, psnr: Infinity });
+/**
+ * Floor for a CODEC-LIMITED checkpoint (Phase 20, P1-1): content whose fine detail no lossy codec keeps — the Dissolve
+ * transition's per-pixel dither, heavy grain — decodes 21–26 dB from its render even at 40 Mbit/s although the right
+ * frame was encoded. Such a frame passes when it is at least this close AND matches its own render at least as well
+ * as the renders of the frames either side of it (a shifted or wrong frame matches a neighbour better). Measured: correct
+ * dither-dissolve frames 22–23 dB and best-matching; shifted frames lose to their neighbour; black/garbage < 15 dB.
+ */
+export const CODEC_LIMITED_MIN_PSNR = 20;
+
+export interface FidelityResult {
+  frame: number;
+  /** Decoded frame vs its own render. */
+  psnr: number;
+  /** Decoded frame vs the closer of the renders of frames k-1 / k+1 (absent at a timeline edge with no neighbour captured). */
+  neighborPsnr?: number;
+}
+
+/**
+ * `expected`: how many checkpoints should have been compared; fewer (e.g. decoding broke off) fails the check.
+ * Every checkpoint must reach `min`, or be codec-limited (see CODEC_LIMITED_MIN_PSNR); and at least half must reach
+ * `min` outright, so a global problem (wrong colour matrix, a starved bitrate) can't pass as "codec-limited".
+ */
+export function fidelityCheck(results: FidelityResult[], min = MIN_FIDELITY_PSNR, expected = results.length): RenderCheck {
+  const worst = results.reduce((w, r) => (r.psnr < w.psnr ? r : w), { frame: -1, psnr: Infinity } as FidelityResult);
   const fmt = (x: number) => (Number.isFinite(x) ? `${x.toFixed(1)} dB` : "identical");
-  return {
-    id: "fidelity",
-    label: "Encoded frames match the render",
-    ok: results.length > 0 && results.length >= expected && worst.psnr >= min,
-    detail: results.length === 0 ? "No frames compared." : `${results.length}${results.length < expected ? ` of ${expected}` : ""} checkpoint frames, worst ${fmt(worst.psnr)} at frame ${worst.frame} (minimum ${min} dB)`,
-  };
+  const clean = results.filter((r) => r.psnr >= min);
+  const limited = results.filter((r) => r.psnr < min && r.psnr >= CODEC_LIMITED_MIN_PSNR && r.neighborPsnr !== undefined && r.psnr >= r.neighborPsnr);
+  const bad = results.filter((r) => r.psnr < min && !limited.includes(r));
+  const ok = results.length > 0 && results.length >= expected && bad.length === 0 && clean.length * 2 >= results.length;
+  let detail = results.length === 0 ? "No frames compared." : `${results.length}${results.length < expected ? ` of ${expected}` : ""} checkpoint frames, worst ${fmt(worst.psnr)} at frame ${worst.frame} (minimum ${min} dB)`;
+  if (results.length > 0 && limited.length > 0) detail += `; ${limited.length} high-detail frame(s) below ${min} dB (lowest ${fmt(Math.min(...limited.map((r) => r.psnr)))}) still match their own frame best — codec-limited detail such as a dither dissolve or grain, not a wrong frame`;
+  if (bad.length > 0) {
+    const b = bad[0];
+    detail += `; frame ${b.frame} ${b.psnr < CODEC_LIMITED_MIN_PSNR ? `is only ${fmt(b.psnr)}` : `matches a neighbouring frame better (${fmt(b.neighborPsnr ?? NaN)}) than itself`}`;
+  } else if (results.length > 0 && clean.length * 2 < results.length) detail += `; only ${clean.length} of ${results.length} reach ${min} dB`;
+  return { id: "fidelity", label: "Encoded frames match the render", ok, detail };
 }
 
 export function structureCheck(issues: { frame: number; issues: CrossCheckIssue[] }[], framesChecked: number): RenderCheck {
@@ -198,11 +224,16 @@ export interface RenderReport {
  * block, zero-mean) — smooth, so a sub-block shift can't hide the peak the way plain decimation of wideband audio
  * does. Fine stage: raw samples, ±24 around the coarse lag. `corr` is the raw normalized correlation at the best lag.
  */
-export function measureLag(reference: Float32Array, decoded: Float32Array, sampleRate: number, maxLagSamples = 8192, windowSec = 1): { lag: number; corr: number; silent: boolean } {
+/**
+ * The loudest `windowSec` window of `reference` (searched on a grid of window/4), where measureLag correlates. Returned
+ * with the grid step so a caller can cut a slice that starts ON the grid (see lagSlice) and get identical results.
+ */
+export function loudestWindow(reference: Float32Array, sampleRate: number, windowSec = 1): { start: number; win: number; step: number; energy: number } {
   const win = Math.min(reference.length, Math.round(windowSec * sampleRate));
+  const step = Math.max(1, win >> 2);
   let start = 0;
   let best = -1;
-  for (let s = 0; s + win <= reference.length; s += Math.max(1, win >> 2)) {
+  for (let s = 0; s + win <= reference.length; s += step) {
     let e = 0;
     for (let i = s; i < s + win; i += 4) e += reference[i] * reference[i];
     if (e > best) {
@@ -210,6 +241,25 @@ export function measureLag(reference: Float32Array, decoded: Float32Array, sampl
       start = s;
     }
   }
+  return { start, win, step, energy: best };
+}
+
+/**
+ * The sample range [from, to) that measureLag actually reads for this reference: from the loudest window, a whole
+ * second plus the maximum lag either side, starting on the window grid. measureLag over just this range of the mix and
+ * of the decoded audio returns exactly what it returns over the whole signals — so an export's sync check needs one
+ * second of decoded audio, not the full track (Phase 20, P1-2: memory on long exports).
+ */
+export function lagSlice(reference: Float32Array, sampleRate: number, maxLagSamples = 8192, windowSec = 1): { from: number; to: number } {
+  const { start, win, step } = loudestWindow(reference, sampleRate, windowSec);
+  const margin = maxLagSamples + 64 + sampleRate;
+  const from = Math.max(0, start - Math.ceil(margin / step) * step);
+  const to = Math.min(reference.length, start + win + margin);
+  return { from, to };
+}
+
+export function measureLag(reference: Float32Array, decoded: Float32Array, sampleRate: number, maxLagSamples = 8192, windowSec = 1): { lag: number; corr: number; silent: boolean } {
+  const { start, win, energy: best } = loudestWindow(reference, sampleRate, windowSec);
   if (!(best > 1e-6)) return { lag: 0, corr: 0, silent: true };
   const B = 8;
   const envelope = (x: Float32Array) => {

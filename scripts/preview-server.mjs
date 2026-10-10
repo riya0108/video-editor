@@ -7,9 +7,12 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const root = join(__dirname, "..", "dist");
+// With the Node adapter (on-demand API route), the static build lands in dist/client; a fully static build is dist/.
+const dist = join(__dirname, "..", "dist");
+const root = existsSync(join(dist, "client")) ? join(dist, "client") : dist;
 const port = Number(process.env.PORT) || 4321;
 
 const MIME = {

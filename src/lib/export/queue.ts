@@ -59,8 +59,9 @@ export type ExportRunner = (timeline: TimelineModel, settings: RenderSettings, o
 /** Share of the whole job each phase stands for. */
 const PHASE_WEIGHT: Record<RenderProgress["phase"], [number, number]> = {
   preparing: [0, 0.02],
-  video: [0.02, 0.85],
-  audio: [0.85, 0.9],
+  // The render job mixes and encodes audio BEFORE the video frames (render/job.ts), so audio comes first on the bar.
+  audio: [0.02, 0.07],
+  video: [0.07, 0.9],
   finalizing: [0.9, 0.93],
   validating: [0.93, 1],
 };
@@ -133,6 +134,8 @@ export class ExportQueue {
     const i = this.items.findIndex((x) => x.job.id === id);
     if (i < 0) return;
     if (!isTerminal(this.items[i].job.status)) throw new Error("Cancel the export before removing it.");
+    // The written file lives in private browser storage until released (render/output-file.ts).
+    void this.items[i].job.outcome?.release?.().catch(() => {});
     this.items.splice(i, 1);
     this.emit();
   }

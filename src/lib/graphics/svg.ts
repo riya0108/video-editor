@@ -31,8 +31,9 @@ export function sanitizeSvg(raw: string): string {
   // Event handlers (onload=, onclick=...).
   s = s.replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
   // javascript:/data:text/html URLs and any non-fragment href (external fetches): keep only internal #refs and inline raster data images.
-  s = s.replace(/\s+(xlink:)?href\s*=\s*("([^"]*)"|'([^']*)')/gi, (m, _x, _q, dq, sq) => {
-    const v = (dq ?? sq ?? "").trim();
+  // Quoted or unquoted (`href=javascript:...` is valid markup too — Phase 20 audit).
+  s = s.replace(/\s+(xlink:)?href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>"']+))/gi, (m, _x, _q, dq, sq, uq) => {
+    const v = (dq ?? sq ?? uq ?? "").trim();
     return v.startsWith("#") || /^data:image\/(png|jpe?g|gif|webp);/i.test(v) ? m : "";
   });
   // CSS url(...) to anything but an internal fragment.

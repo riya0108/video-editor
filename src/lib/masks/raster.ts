@@ -245,7 +245,14 @@ export function coverageToEdgeDistance(c: number, nx: number, ny: number): numbe
  * geometry of it and its 8 neighbouring edge pixels — so a grown/feathered edge lands where the real edge is (within
  * ~0.12 px on straight edges at any angle, tested), not on the pixel grid.
  */
-export function signedDistanceField(cov: Float32Array, w: number, h: number): Float32Array {
+/**
+ * `band` (optional, PERFORMANCE_OPTIMIZATION_REPORT.md §5): a pixel whose distance is CERTAINLY beyond `outside` (outside
+ * the shape) or `inside` (inside it) gets ±Infinity instead of its exact sub-pixel distance. The exact distance lies
+ * within SDF_COARSE_SLACK px of the distance between its center and its nearest edge pixel's center, so the cut is
+ * safe; callers whose result saturates past the band (a feathered edge profile) then get identical output without
+ * refining every pixel of the region.
+ */
+export function signedDistanceField(cov: Float32Array, w: number, h: number, band?: { inside: number; outside: number }): Float32Array {
   const feature = new Uint8Array(w * h);
   // Edge geometry per feature: a segment E ± T (T = 0 for a point), in pixel-center coordinates.
   const ex = new Float32Array(w * h);
@@ -312,7 +319,7 @@ export function signedDistanceField(cov: Float32Array, w: number, h: number): Fl
     out.fill(cov.length && cov[0] >= 0.5 ? -INF : INF);
     return out;
   }
-  const { nearest } = nearestFeatureTransform(feature, w, h);
+  const { nearest, d2 } = nearestFeatureTransform(feature, w, h);
   // Distance from pixel center (px, py) to feature f's local edge piece.
   const edgeDistance = (f: number, px: number, py: number): number => {
     if (nxIn[f] !== 0 || nyIn[f] !== 0) {
@@ -332,6 +339,13 @@ export function signedDistanceField(cov: Float32Array, w: number, h: number): Fl
     return Math.hypot(px - (ax + sx * t), py - (ay + sy * t));
   };
   for (let i = 0; i < out.length; i++) {
+    if (band) {
+      const coarse = Math.sqrt(d2[i]) - SDF_COARSE_SLACK;
+      if (cov[i] >= 0.5 ? coarse > band.inside : coarse > band.outside) {
+        out[i] = cov[i] >= 0.5 ? -Infinity : Infinity;
+        continue;
+      }
+    }
     const q = nearest[i];
     const px = i % w;
     const py = (i - px) / w;
@@ -360,12 +374,26 @@ export function signedDistanceField(cov: Float32Array, w: number, h: number): Fl
  * expanded ones go through the sub-pixel signed distance field, computed over the region grown by the influence
  * margin so edges just outside the region are still accounted for.
  */
+/**
+ * How far a refined edge distance can be below the center-to-center distance to the nearest edge pixel: the edge
+ * pieces examined lie in the 3×3 neighbourhood of that pixel (≤ √2 px) and within ~1.06 px of their own pixel center.
+ * 3 px leaves a margin.
+ */
+export const SDF_COARSE_SLACK = 3;
+
+/** Distances past which edgeProfile(sd - expansion, feather) is exactly 0 (outside) or 1 (inside). */
+export function profileSaturation(feather: number, expansion: number): { inside: number; outside: number } {
+  const half = feather < 1 ? 0.5 : feather / 2;
+  return { outside: half + expansion, inside: half - expansion };
+}
+
 export function shapeCoverage(m: Pick<RasterMask, "polygon" | "feather" | "expansion">, region: Region): Float32Array {
   if (m.feather <= 0 && m.expansion === 0) return polygonCoverage(m.polygon, region);
   const pad = influenceMargin(m) + Math.ceil(Math.max(0, -m.expansion));
   const big: Region = { x: region.x - pad, y: region.y - pad, width: region.width + pad * 2, height: region.height + pad * 2 };
   const cov = polygonCoverage(m.polygon, big);
-  const sdf = signedDistanceField(cov, big.width, big.height);
+  // Only the feather band needs exact distances; past it the profile is exactly 0 or 1.
+  const sdf = signedDistanceField(cov, big.width, big.height, profileSaturation(m.feather, m.expansion));
   const out = new Float32Array(region.width * region.height);
   for (let y = 0; y < region.height; y++) {
     for (let x = 0; x < region.width; x++) {

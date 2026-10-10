@@ -2,6 +2,8 @@ import { createCanvas, get2d } from "./canvas";
 import type { FrameProvider, FrameRequest } from "./frame-provider";
 import type { SourceInfo } from "./resolve";
 import { normalizeSequence, sampleAt, type SequenceFrame } from "./frame-sequence";
+import { SequentialFrameCursor } from "./sequential-frame-cursor";
+import type { Input, VideoSample, VideoSampleSink } from "mediabunny";
 
 /**
  * Browser FrameProvider backed by <video> elements and decoded ImageBitmaps.
@@ -10,14 +12,20 @@ import { normalizeSequence, sampleAt, type SequenceFrame } from "./frame-sequenc
  *  - Preview uses a pool of <video> elements per source, one per on-screen
  *    slot, that play in real time and are re-seeked only when they drift. It
  *    returns the element itself — drawImage() takes whatever frame is current.
- *  - Final uses one dedicated, never-played <video> per source. Each request
- *    seeks it to the exact frame, waits until that frame is actually
- *    presented, and snapshots it into a full-resolution canvas — so playback
- *    or scrubbing in the preview can't move the frame an export is reading.
+ *  - Final decodes with WebCodecs (Mediabunny), one forward-only decoder per
+ *    on-screen slot (SequentialFrameCursor): an export's in-order requests
+ *    decode each frame once instead of re-seeking from a keyframe per frame
+ *    (PERFORMANCE_OPTIMIZATION_REPORT.md §2). Each request is snapshotted into
+ *    its own full-resolution canvas. Sources it can't decode exactly as the
+ *    <video> element would (no WebCodecs decoder, rotation metadata, alpha, a
+ *    different display size) use one dedicated, never-played <video> per
+ *    source instead: each request seeks it to the exact frame and waits until
+ *    that frame is presented. Either way playback or scrubbing in the preview
+ *    can't move the frame an export is reading.
  *
- * Exact-frame timing: frame n is requested at (n + 0.5) / fps — the middle of
- * the frame's display interval — so float rounding of currentTime can't land
- * on the previous frame's boundary.
+ * Exact-frame timing: frame n is requested at (n + 0.5 + FRAME_TIME_NUDGE) / fps
+ * — the middle of the frame's display interval — so float rounding of
+ * currentTime can't land on the previous frame's boundary (see sourceTimeSec).
  */
 
 interface VideoSource {
@@ -29,6 +37,23 @@ interface VideoSource {
   previewSlots: Map<string, HTMLVideoElement>;
   exact: HTMLVideoElement | null;
   exactQueue: Promise<unknown>;
+  /** The file itself when known (read without going through the URL). */
+  blob?: Blob;
+  /** WebCodecs decode of the source, opened on the first exact request; null = use the <video> path. */
+  decoder: Promise<ExactDecoder | null> | null;
+  /** One forward-only decoder per slot key. */
+  cursors: Map<string, ExactSlot>;
+}
+
+interface ExactDecoder {
+  input: Input;
+  sink: VideoSampleSink;
+}
+
+interface ExactSlot {
+  cursor: SequentialFrameCursor<VideoSample>;
+  queue: Promise<unknown>;
+  idleTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface StillSource {
@@ -49,6 +74,12 @@ type Source = VideoSource | StillSource | SequenceSource;
 /** A preview decoder not on screen for this long is released — covers clips that were deleted/undone/split away, whose slot key will never be asked for again. Short enough to bound memory, long enough that scrubbing back and forth doesn't reload decoders. */
 const SLOT_IDLE_EVICT_MS = 10_000;
 
+/** An exact-frame decoder not asked for a frame this long is closed (WebCodecs decoders are a limited hardware resource). */
+const EXACT_IDLE_CLOSE_MS = 5_000;
+
+/** A paused preview seek taking longer than this is superseded by the newest target instead of awaited. */
+const SEEK_STUCK_MS = 1_000;
+
 /** Re-seek a playing preview element only when it's this far off — seeking every frame would stall playback. */
 const PLAYBACK_DRIFT_TOLERANCE_SEC = 0.2;
 
@@ -60,6 +91,7 @@ export class MediaFrameProvider implements FrameProvider {
   /** Preview elements that have decoded at least one frame. */
   private readonly hasShownFrame = new WeakSet<HTMLVideoElement>();
   private readonly lastUsed = new WeakMap<HTMLVideoElement, number>();
+  private readonly seekStartedAt = new WeakMap<HTMLVideoElement, number>();
 
   /** Fires when a preview decoder has a new frame ready (seek finished / metadata loaded) — the preview should redraw. */
   onFrameReady(listener: () => void): () => void {
@@ -71,7 +103,8 @@ export class MediaFrameProvider implements FrameProvider {
     for (const l of this.listeners) l();
   }
 
-  async addVideo(sourceId: string, url: string, fps: number): Promise<{ info: SourceInfo; durationSec: number }> {
+  /** `blob`: the file behind `url`, when the caller has it — the exact-frame decoder then reads it directly. */
+  async addVideo(sourceId: string, url: string, fps: number, blob?: Blob): Promise<{ info: SourceInfo; durationSec: number }> {
     const probe = createVideoElement(url);
     await waitForEvent(probe, "loadedmetadata");
     const info = { width: probe.videoWidth, height: probe.videoHeight };
@@ -79,7 +112,7 @@ export class MediaFrameProvider implements FrameProvider {
     probe.removeAttribute("src");
     probe.load();
     if (!(info.width > 0 && info.height > 0)) throw new Error(`Video "${sourceId}" has no video track.`);
-    this.sources.set(sourceId, { kind: "video", url, fps, info, durationSec, previewSlots: new Map(), exact: null, exactQueue: Promise.resolve() });
+    this.sources.set(sourceId, { kind: "video", url, fps, info, durationSec, previewSlots: new Map(), exact: null, exactQueue: Promise.resolve(), blob, decoder: null, cursors: new Map() });
     this.notify();
     return { info, durationSec };
   }
@@ -127,6 +160,8 @@ export class MediaFrameProvider implements FrameProvider {
     if (s.kind === "video") {
       for (const el of s.previewSlots.values()) disposeVideo(el);
       if (s.exact) disposeVideo(s.exact);
+      for (const key of [...s.cursors.keys()]) this.closeExactSlot(s, key);
+      void s.decoder?.then((d) => d?.input.dispose()).catch(() => {});
     } else if (typeof ImageBitmap !== "undefined" && s.image instanceof ImageBitmap) {
       s.image.close();
     }
@@ -195,15 +230,23 @@ export class MediaFrameProvider implements FrameProvider {
     }
     this.usedThisFrame.add(el);
 
-    const target = clampTime((req.sourceFrame + 0.5) / s.fps, s.durationSec);
+    const target = sourceTimeSec(req.sourceFrame, s.fps, s.durationSec);
     const drift = Math.abs(el.currentTime - target);
     if (this.playing) {
       if (drift > PLAYBACK_DRIFT_TOLERANCE_SEC && !el.seeking) el.currentTime = target;
       if (el.paused) void el.play().catch(() => {});
     } else {
       if (!el.paused) el.pause();
-      // Paused/scrubbing: chase the exact frame. If a seek is already in flight, setting currentTime again supersedes it — the browser only decodes the latest target.
-      if (drift > 0.5 / s.fps) el.currentTime = target;
+      // Paused/scrubbing: chase the exact frame, one seek at a time. A new target while a seek is in flight waits for
+      // it: superseding every in-flight seek meant a fast drag finished almost none of them (28 of 120 frames shown,
+      // PERFORMANCE_OPTIMIZATION_REPORT.md §6). "seeked" notifies the preview, whose next render issues the newest
+      // target. A seek stuck longer than SEEK_STUCK_MS is superseded anyway.
+      const now = performance.now();
+      const inFlight = el.seeking && now - (this.seekStartedAt.get(el) ?? now) < SEEK_STUCK_MS;
+      if (drift > 0.5 / s.fps && !inFlight) {
+        el.currentTime = target;
+        this.seekStartedAt.set(el, now);
+      }
     }
     // readyState can dip below HAVE_CURRENT_DATA mid-seek; the element still holds (and drawImage still draws) the last decoded frame. Returning it keeps the layer on screen while scrubbing instead of blinking out every seek.
     return el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA || this.hasShownFrame.has(el) ? el : null;
@@ -219,14 +262,86 @@ export class MediaFrameProvider implements FrameProvider {
     if (s.kind === "still") return Promise.resolve(s.image);
     if (s.kind === "sequence") return Promise.resolve(sampleAt(s.frames, sequenceFrameIndex(req.sourceFrame))!.image);
 
-    // One exact decoder per source, so requests are serialized on it. Each resolves with its own snapshot canvas — never the live element.
+    return this.exactDecoder(s).then((decoder) => (decoder ? this.exactViaDecoder(s, decoder, req) : this.exactViaElement(s, req)));
+  }
+
+  /** Opens the WebCodecs decode of a source once; null when it can't reproduce what the <video> element shows. */
+  private exactDecoder(s: VideoSource): Promise<ExactDecoder | null> {
+    s.decoder ??= (async () => {
+      if (typeof VideoDecoder === "undefined") return null;
+      let input: Input | null = null;
+      try {
+        // Loaded on the first export/exact request, not with the editor: Mediabunny is ~400 KB the preview never needs.
+        const { ALL_FORMATS, BlobSource, Input, UrlSource, VideoSampleSink } = await import("mediabunny");
+        input = new Input({ source: s.blob ? new BlobSource(s.blob) : new UrlSource(s.url), formats: ALL_FORMATS });
+        const track = await input.getPrimaryVideoTrack();
+        const usable =
+          !!track &&
+          (await track.canDecode()) &&
+          (await track.getRotation()) === 0 &&
+          !(await track.canBeTransparent()) &&
+          (await track.getDisplayWidth()) === s.info.width &&
+          (await track.getDisplayHeight()) === s.info.height;
+        if (!usable) {
+          input.dispose();
+          return null;
+        }
+        return { input, sink: new VideoSampleSink(track) };
+      } catch {
+        input?.dispose();
+        return null;
+      }
+    })();
+    return s.decoder;
+  }
+
+  private exactViaDecoder(s: VideoSource, decoder: ExactDecoder, req: FrameRequest): Promise<CanvasImageSource> {
+    let slot = s.cursors.get(req.slotKey);
+    if (!slot) {
+      slot = { cursor: new SequentialFrameCursor<VideoSample>((t) => decoder.sink.samples(t)), queue: Promise.resolve(), idleTimer: null };
+      s.cursors.set(req.slotKey, slot);
+    }
+    const target = sourceTimeSec(req.sourceFrame, s.fps, s.durationSec);
+    const own = slot;
+    const run = async (): Promise<CanvasImageSource> => {
+      try {
+        const sample = await own.cursor.frameAt(target);
+        const snap = createCanvas(s.info.width, s.info.height);
+        sample.draw(get2d(snap), 0, 0, s.info.width, s.info.height);
+        return snap;
+      } catch {
+        // A decode failure mid-stream: this source goes back to the <video> path for good (same frames, slower).
+        s.decoder = Promise.resolve(null);
+        this.closeExactSlot(s, req.slotKey);
+        return this.exactViaElement(s, req);
+      }
+    };
+    // Requests on one slot are served in order (the cursor is sequential); each resolves with its own snapshot.
+    const result = own.queue.then(run, run);
+    own.queue = result.catch(() => {});
+    if (own.idleTimer) clearTimeout(own.idleTimer);
+    own.idleTimer = setTimeout(() => this.closeExactSlot(s, req.slotKey, own), EXACT_IDLE_CLOSE_MS);
+    return result;
+  }
+
+  private closeExactSlot(s: VideoSource, key: string, only?: ExactSlot) {
+    const slot = s.cursors.get(key);
+    if (!slot || (only && slot !== only)) return;
+    if (slot.idleTimer) clearTimeout(slot.idleTimer);
+    s.cursors.delete(key);
+    // After whatever is queued on it: never close a frame a pending request is drawing.
+    slot.queue = slot.queue.then(() => slot.cursor.close()).catch(() => {});
+  }
+
+  /** One exact <video> per source, so requests are serialized on it. Each resolves with its own snapshot canvas — never the live element. */
+  private exactViaElement(s: VideoSource, req: FrameRequest): Promise<CanvasImageSource> {
     const run = async (): Promise<CanvasImageSource> => {
       if (!s.exact) {
         s.exact = createVideoElement(s.url);
         await waitForEvent(s.exact, "loadeddata");
       }
       const el = s.exact;
-      const target = clampTime((req.sourceFrame + 0.5) / s.fps, s.durationSec);
+      const target = sourceTimeSec(req.sourceFrame, s.fps, s.durationSec);
       if (Math.abs(el.currentTime - target) > 1e-6 || el.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
         const seeked = waitForEvent(el, "seeked");
         el.currentTime = target;
@@ -267,6 +382,20 @@ function disposeVideo(el: HTMLVideoElement) {
   el.pause();
   el.removeAttribute("src");
   el.load();
+}
+
+/**
+ * The time at which project frame `frame` samples a source: the middle of its display interval, nudged 1/10000 of a
+ * frame later. The nudge matters when the source's rate differs from the project's: a 24 fps source on a 30 fps
+ * timeline puts every 5th midpoint EXACTLY on a source-frame boundary, where which frame a decoder shows is decided by
+ * sub-microsecond rounding — Chrome's <video> and the WebCodecs path disagreed there (measured,
+ * PERFORMANCE_OPTIMIZATION_REPORT.md §2). ~3 µs past the boundary is far beyond any µs rounding, so preview and
+ * export both show the frame that starts there.
+ */
+export const FRAME_TIME_NUDGE = 1e-4;
+
+export function sourceTimeSec(frame: number, fps: number, durationSec: number): number {
+  return clampTime((frame + 0.5 + FRAME_TIME_NUDGE) / fps, durationSec);
 }
 
 function clampTime(t: number, duration: number): number {

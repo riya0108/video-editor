@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyImport, describeDecodeFailure, dragHasFiles } from "./media-import";
+import { refineImportKind, classifyImport, describeDecodeFailure, dragHasFiles } from "./media-import";
 
 const file = (name: string, type: string, size = 100) => new File([new Uint8Array(size)], name, { type });
 
@@ -38,5 +38,45 @@ describe("messages", () => {
     expect(dragHasFiles({ types: ["Files"] } as unknown as DataTransfer)).toBe(true);
     expect(dragHasFiles({ types: ["text/plain"] } as unknown as DataTransfer)).toBe(false);
     expect(dragHasFiles(null)).toBe(false);
+  });
+});
+
+describe("refineImportKind (Phase 19: WebM video was imported as audio)", () => {
+  const file = (name: string, type: string) => new File([new Uint8Array(64)], name, { type });
+  const probe = (hasVideo: boolean) => async () => hasVideo;
+
+  it("a .webm with a video track becomes a video, whatever its label", async () => {
+    for (const type of ["video/webm", ""]) {
+      const f = file("screen-recording.webm", type);
+      expect(classifyImport(f)).toEqual({ ok: true, kind: "audio" });
+      expect(await refineImportKind(f, classifyImport(f), probe(true))).toEqual({ ok: true, kind: "video" });
+    }
+  });
+
+  it("an audio-only .webm/.ogg stays audio", async () => {
+    for (const name of ["voice-memo.webm", "song.ogg"]) {
+      const f = file(name, "video/webm");
+      expect(await refineImportKind(f, classifyImport(f), probe(false))).toEqual({ ok: true, kind: "audio" });
+    }
+  });
+
+  it("files labelled audio/*, and non-ambiguous audio, are never probed", async () => {
+    let probed = 0;
+    const counting = async () => (probed++, true);
+    for (const f of [file("a.webm", "audio/webm"), file("a.mp3", ""), file("a.wav", "audio/wav")]) expect(await refineImportKind(f, classifyImport(f), counting)).toEqual({ ok: true, kind: "audio" });
+    expect(probed).toBe(0);
+  });
+
+  it("an unreadable file falls back to its label (video/* → video; the import then reports the decode failure)", async () => {
+    const fail = async () => {
+      throw new Error("unreadable");
+    };
+    expect(await refineImportKind(file("x.webm", "video/webm"), classifyImport(file("x.webm", "video/webm")), fail)).toEqual({ ok: true, kind: "video" });
+    expect(await refineImportKind(file("x.webm", ""), classifyImport(file("x.webm", "")), fail)).toEqual({ ok: true, kind: "audio" });
+  });
+
+  it("leaves non-audio classifications alone", async () => {
+    const f = file("clip.mp4", "video/mp4");
+    expect(await refineImportKind(f, classifyImport(f), probe(false))).toEqual(classifyImport(f));
   });
 });

@@ -56,7 +56,7 @@ export function createMediaHost(d: MediaHostDeps, editor: { snapshot(): EditorSt
     unload(id);
     if (kind === "video") {
       const url = typeof src === "string" ? src : URL.createObjectURL(src);
-      const { info, durationSec } = await d.provider.addVideo(id, url, d.fps);
+      const { info, durationSec } = await d.provider.addVideo(id, url, d.fps, typeof src === "string" ? undefined : src);
       // Its soundtrack: awaited, so a render right after opening never finds the audio still decoding.
       await d.audio.add(id, url, label, { video: true });
       return { kind, width: info.width, height: info.height, durationSec };

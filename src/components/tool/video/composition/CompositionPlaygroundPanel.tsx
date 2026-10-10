@@ -14,7 +14,7 @@ import { GRAPHICS_LIBRARY } from "../../../../lib/graphics/library";
 import { svgSpecFromMarkup } from "../../../../lib/graphics/svg";
 import type { AuthoredContentPatch } from "../../../../lib/timeline/operations";
 import TimelinePanel from "./TimelinePanel";
-import { classifyImport, describeDecodeFailure, dragHasFiles, filesFromDataTransfer } from "../../../../lib/composition/media-import";
+import { classifyImport, describeDecodeFailure, dragHasFiles, filesFromDataTransfer, refineImportKind } from "../../../../lib/composition/media-import";
 import { createCanvasTextMeasurer, FinalRenderer, MediaFrameProvider, FinalRenderError, resolveClipLayer, safeZones, type BoxSize, type ResolvedLayer, type TextLayout, type SafeZone, type SafeZonePreset } from "../../../../lib/composition";
 import TransformPanel, { type KeyframeControl } from "./TransformPanel";
 import KeyframesPanel from "./KeyframesPanel";
@@ -407,7 +407,7 @@ export default function CompositionPlaygroundPanel() {
     const at = frame;
     for (const [fi, file] of files.entries()) {
       const handle = handles[fi];
-      const c = classifyImport(file);
+      const c = await refineImportKind(file, classifyImport(file));
       if (!c.ok) {
         errors.push(c.message);
         continue;
@@ -459,7 +459,7 @@ export default function CompositionPlaygroundPanel() {
           const svg = svgSpecFromMarkup(await file.text(), Math.min(width, height) * 0.5);
           r = engine.addGraphicLayer({ graphic: { svg }, atFrame: at, durationFrames: 5 * FPS, name: file.name });
         } else if (c.kind === "video") {
-          const { info, durationSec } = await provider.addVideo(id, url, FPS);
+          const { info, durationSec } = await provider.addVideo(id, url, FPS, file);
           void audioStore?.add(id, url, file.name, { video: true });
           await registry.setFile(id, "video", file, { width: info.width, height: info.height, durationSec, fps: FPS }, handle);
           const n = Math.max(1, secondsToFrames(durationSec, FPS, "floor"));
@@ -622,7 +622,7 @@ export default function CompositionPlaygroundPanel() {
     }
   };
   // Dev-only test handle: the same actions the UI buttons run (persistence tests build projects through them).
-  if (import.meta.env.DEV && typeof window !== "undefined") Object.assign(((window as unknown as Record<string, Record<string, unknown>>).__compositionActions ??= {}), { apply, addMediaFiles, removeBackground });
+  if (import.meta.env.DEV && typeof window !== "undefined") Object.assign(((window as unknown as Record<string, Record<string, unknown>>).__compositionActions ??= {}), { apply, addMediaFiles, removeBackground, generateCaptions });
 
   return (
     <div

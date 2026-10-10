@@ -15,7 +15,7 @@ import type { ProbeLayout } from "./probe-project";
  *   output frame (binary counter), keyframed position + layer order, effect, mask, alpha, text, caption timing,
  *   cross-dissolve mixing, and audio beep timing (A/V sync).
  */
-const DIR = join(process.cwd(), ".tmp-test-assets", "phase15");
+const DIR = process.env.RENDER_EVAL_DIR ? join(process.cwd(), process.env.RENDER_EVAL_DIR) : join(process.cwd(), ".tmp-test-assets", "phase15");
 const renders = existsSync(DIR) ? readdirSync(DIR).filter((f) => /^r-.*\.meta\.json$/.test(f)).map((f) => f.replace(/\.meta\.json$/, "")) : [];
 
 interface Meta {

@@ -194,7 +194,7 @@ describe("read-back checks: container, codecs, bitrate, alpha", () => {
 // ---------------------------------------------------------------- job system
 
 const check = (ok: boolean, id = "fidelity"): RenderCheck => ({ id, label: id, ok, detail: ok ? "fine" : "bad" });
-const outcome = (ok: boolean): RenderOutcome => ({ blob: new Blob(["x"]), plan: {} as RenderOutcome["plan"], report: { ok, checks: [check(true, "frame-count"), check(ok)], warnings: [], codec: "avc", bytes: 1, renderMs: 1, frameCount: 1, durationSec: 1 } as RenderReport });
+const outcome = (ok: boolean): RenderOutcome => ({ blob: new Blob(["x"]), plan: {} as RenderOutcome["plan"], report: { ok, checks: [check(true, "frame-count"), check(ok)], warnings: [], codec: "avc", bytes: 1, renderMs: 1, frameCount: 1, durationSec: 1 } as RenderReport, stageMs: { setup: 0, frames: 0, checks: 0, encode: 0, audio: 0, finalize: 0, validate: 0 }, release: async () => {} });
 
 /** A runner whose renders are finished by hand. */
 function manualRunner() {
@@ -319,9 +319,9 @@ describe("export job system", () => {
     t = 10_000;
     on({ phase: "video", done: 50, total: 100 });
     const p = q.get(id)!.progress!;
-    expect(p.fraction).toBeCloseTo(0.02 + 0.83 * 0.5, 9);
-    // 0.415 of the bar took 10 s -> the remaining 0.565 takes ~13.6 s.
-    expect(p.etaSec).toBeCloseTo((0.565 / 0.415) * 10, 6);
+    expect(p.fraction).toBeCloseTo(0.07 + 0.83 * 0.5, 9);
+    // 0.415 of the bar took 10 s -> the remaining 0.515 takes ~12.4 s.
+    expect(p.etaSec).toBeCloseTo((0.515 / 0.415) * 10, 6);
     expect(jobFraction({ phase: "validating", done: 1, total: 1 })).toBe(1);
     expect(jobFraction({ phase: "preparing", done: 0, total: 1 })).toBe(0);
     const fractions = seen.map((js) => js[0]?.progress?.fraction ?? 0);
@@ -381,5 +381,86 @@ describe("audio length fixes found by real exports", () => {
     expect(dur(planFor("mov", "aac"), probe("mov", "aac", 4.0, 4.009333)).ok).toBe(true);
     expect(dur(planFor("mp4", "aac"), probe("mp4", "aac", 4.0, 3.95)).ok).toBe(false); // decoded audio short -> caught
     expect(audioFrameSec("opus")).toBe(0.02);
+  });
+});
+
+describe("fidelity check: codec-limited detail (Phase 20, P1-1)", () => {
+  const ok = (frame: number) => ({ frame, psnr: 41, neighborPsnr: 30 });
+  it("passes a dither-dissolve frame that is lossy but matches its own frame best (the Project 7 case: 21.7 dB)", () => {
+    const r = fidelityCheck([ok(0), ok(30), ok(60), { frame: 108, psnr: 21.7, neighborPsnr: 17.8 }, { frame: 107, psnr: 23.3, neighborPsnr: 17.0 }]);
+    expect(r.ok).toBe(true);
+    expect(r.detail).toMatch(/2 high-detail frame\(s\) below 30 dB .* codec-limited/);
+  });
+  it("still fails a SHIFTED frame (matches a neighbour better than itself)", () => {
+    const r = fidelityCheck([ok(0), ok(30), ok(60), { frame: 108, psnr: 22.2, neighborPsnr: 26.7 }]);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/frame 108 matches a neighbouring frame better/);
+  });
+  it("still fails a black / garbage frame, whatever its neighbours", () => {
+    const r = fidelityCheck([ok(0), ok(30), ok(60), { frame: 90, psnr: 11, neighborPsnr: 9 }]);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/frame 90 is only 11\.0 dB/);
+  });
+  it("fails when most checkpoints are below 30 dB (a global problem can't hide as codec-limited)", () => {
+    const r = fidelityCheck([{ frame: 0, psnr: 25, neighborPsnr: 20 }, { frame: 1, psnr: 24, neighborPsnr: 19 }, ok(2)]);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/only 1 of 3 reach 30 dB/);
+  });
+  it("a frame without a captured neighbour can't be codec-limited", () => {
+    expect(fidelityCheck([ok(0), ok(1), ok(2), { frame: 3, psnr: 25 }]).ok).toBe(false);
+  });
+  it("identical behaviour for clean exports", () => {
+    expect(fidelityCheck([ok(0), ok(1)]).ok).toBe(true);
+    expect(fidelityCheck([]).ok).toBe(false);
+    expect(fidelityCheck([ok(0)], undefined, 2).ok).toBe(false);
+  });
+});
+
+describe("export files are released (Phase 20, P1-2)", () => {
+  it("removing a finished job releases its written file; removing an active one is refused", async () => {
+    const { runner, calls } = manualRunner();
+    const q = new ExportQueue(runner);
+    const id = q.enqueue({ name: "A", presetId: "youtube", settings: S, fileName: "a.mp4", timeline: project() });
+    await tick();
+    expect(() => q.remove(id)).toThrow(/Cancel/);
+    let released = 0;
+    calls[0].resolve({ ...outcome(true), release: async () => void released++ });
+    await q.idle();
+    q.remove(id);
+    expect(released).toBe(1);
+    expect(q.get(id)).toBeUndefined();
+  });
+
+  it("packet bounds for MP4 'reserve' fast start cover every frame and audio packet with margin", async () => {
+    const { maxPacketCounts } = await import("../render/output-file");
+    const b = maxPacketCounts(18000, 600, { codec: "aac", sampleRate: 48000 });
+    expect(b.video).toBeGreaterThanOrEqual(18000);
+    expect(b.audio).toBeGreaterThan(Math.ceil((600 * 48000) / 1024));
+    expect(maxPacketCounts(300, 10, { codec: "opus", sampleRate: 48000 }).audio).toBeGreaterThan(500);
+    expect(maxPacketCounts(300, 10, null).audio).toBe(0);
+  });
+});
+
+describe("audio sync check on a slice (Phase 20, P1-2)", () => {
+  it("measureLag over lagSlice equals measureLag over the whole signals — wherever the loud part is", async () => {
+    const { lagSlice, measureLag } = await import("../render/validate");
+    const sr = 48000;
+    let seed = 9;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5;
+    // (The lag VALUE measureLag finds on white noise isn't what's under test — that it is the SAME on the slice is.)
+    for (const [lenSec, burstAt, lag] of [[30, 0.2, 37], [30, 14.6, -12], [30, 29.1, 2112], [3, 1.5, 0]] as const) {
+      const n = lenSec * sr;
+      const ref = new Float32Array(n);
+      for (let i = 0; i < n; i++) ref[i] = rnd() * 0.02;
+      const b0 = Math.round(burstAt * sr);
+      for (let i = b0; i < Math.min(n, b0 + sr / 2); i++) ref[i] = rnd() * 0.8;
+      const dec = new Float32Array(n);
+      for (let i = 0; i < n; i++) dec[i] = (i - lag >= 0 && i - lag < n ? ref[i - lag] : 0) * 0.9 + rnd() * 0.001;
+      const full = measureLag(ref, dec, sr);
+      const { from, to } = lagSlice(ref, sr);
+      const part = measureLag(ref.subarray(from, to), dec.subarray(from, to), sr);
+      expect(part, `burst at ${burstAt}s`).toEqual(full);
+      expect(to - from).toBeLessThan(4 * sr);
+    }
   });
 });

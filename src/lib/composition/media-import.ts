@@ -31,6 +31,57 @@ export function classifyImport(file: File): ImportClassification {
   return { ok: true, kind: v.kind };
 }
 
+/** Containers that hold either a video or audio only — the extension alone can't say which. */
+const AMBIGUOUS_CONTAINER = /\.(webm|ogg)$/i;
+
+/**
+ * Resolves an import that classifyImport called "audio" only by its extension. A .webm/.ogg that isn't explicitly
+ * labelled audio/* may be a video — a screen recording (MediaRecorder writes WebM), or this editor's own WebM/alpha
+ * export — and would otherwise lose its picture (QA: FULL_QA_REPORT.md, KNOWN_ISSUES.md). `hasVideoTrack` probes the
+ * file (browser: a <video> element's metadata); an audio-only file stays audio.
+ */
+export async function refineImportKind(file: File, c: ImportClassification, hasVideoTrack: (file: File) => Promise<boolean> = probeHasVideoTrack): Promise<ImportClassification> {
+  if (!c.ok || c.kind !== "audio" || !AMBIGUOUS_CONTAINER.test(file.name) || file.type.startsWith("audio/")) return c;
+  let video = file.type.startsWith("video/");
+  try {
+    video = await hasVideoTrack(file);
+  } catch {
+    // Unreadable metadata: keep the label's word for it (video/* = video); the import path reports the real failure.
+  }
+  if (!video) return c;
+  const v = validateUploadedMediaFile(file);
+  return v.ok && v.kind === "video" ? { ok: true, kind: "video" } : c;
+}
+
+/** Whether the browser sees a video track in the file (videoWidth > 0 once metadata has loaded). */
+export function probeHasVideoTrack(file: File, timeoutMs = 10_000): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const el = document.createElement("video");
+    el.muted = true;
+    el.preload = "metadata";
+    const done = (fn: () => void) => {
+      clearTimeout(timer);
+      el.removeAttribute("src");
+      el.load();
+      URL.revokeObjectURL(url);
+      fn();
+    };
+    const timer = setTimeout(() => done(() => reject(new Error("Timed out reading the file's metadata."))), timeoutMs);
+    el.addEventListener(
+      "loadedmetadata",
+      () => {
+        // Read before done() resets the element (which zeroes videoWidth).
+        const hasVideo = el.videoWidth > 0 && el.videoHeight > 0;
+        done(() => resolve(hasVideo));
+      },
+      { once: true },
+    );
+    el.addEventListener("error", () => done(() => reject(new Error(el.error?.message ?? "unreadable"))), { once: true });
+    el.src = url;
+  });
+}
+
 /** A decode failure (file passed validation but the browser couldn't open it), phrased for the user. */
 export function describeDecodeFailure(file: File, kind: "image" | "video" | "svg" | "audio", error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);

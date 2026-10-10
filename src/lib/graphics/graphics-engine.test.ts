@@ -410,3 +410,16 @@ describe("error handling", () => {
     expect(normalizeShapeSpec({ type: "line", stroke: false, fill: true })).toMatchObject({ stroke: true, fill: false });
   });
 });
+
+describe("SVG sanitizer — Phase 20 audit", () => {
+  it("strips UNQUOTED javascript: / external hrefs (quoted ones were already stripped)", () => {
+    const out = sanitizeSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><a href=javascript:alert(1)><rect width="5" height="5"/></a><use xlink:href=https://evil.example/x.svg#a /><use href=#ok /></svg>`);
+    expect(out).not.toMatch(/javascript:/i);
+    expect(out).not.toMatch(/evil\.example/);
+    expect(out).toMatch(/href=#ok/);
+  });
+  it("is idempotent on already-sanitized markup", () => {
+    const once = sanitizeSvg(`<svg width="10" height="10"><script>x()</script><rect onclick="x()" width="5" height="5" fill="url(#g)"/></svg>`);
+    expect(sanitizeSvg(once)).toBe(once);
+  });
+});

@@ -8,6 +8,7 @@ export const prerender = false;
 
 import type { APIRoute } from "astro";
 import { execFile } from "node:child_process";
+import { resolvePublicHttpUrl } from "../../lib/net/public-url";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,38 +36,9 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
-// Rejects anything that isn't a plain http(s) URL to a public host — this
-// endpoint accepts arbitrary user-supplied URLs and hands them to a shelled
-// out process, so it must not be usable to probe the server's own network.
-function parsePublicHttpUrl(raw: string): URL | null {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host.endsWith(".local") ||
-    host === "0.0.0.0" ||
-    host === "::1" ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^f[cd][0-9a-f]{0,2}:/.test(host) ||
-    host.startsWith("fe80:")
-  ) {
-    return null;
-  }
-  return url;
-}
-
+// Rejects anything that isn't a plain http(s) URL to a public host — this endpoint accepts arbitrary user-supplied URLs
+// and hands them to a shelled out process, so it must not be usable to probe the server's own network. The guard (and
+// its residual risk: redirects / DNS rebinding need egress filtering at the deployment) lives in lib/net/public-url.ts.
 export const POST: APIRoute = async ({ request }) => {
   let body: unknown;
   try {
@@ -76,7 +48,7 @@ export const POST: APIRoute = async ({ request }) => {
   }
 
   const raw = typeof (body as { url?: unknown })?.url === "string" ? (body as { url: string }).url.trim() : "";
-  const url = raw ? parsePublicHttpUrl(raw) : null;
+  const url = raw ? await resolvePublicHttpUrl(raw) : null;
   if (!url) {
     return jsonResponse({ error: "Enter a valid http(s) link." }, 400);
   }

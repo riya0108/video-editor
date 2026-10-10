@@ -94,23 +94,61 @@ function boxesForGauss(sigma: number): number[] {
  * full-frame video), the border is real content, and replication continues it instead of fading the frame edge to
  * transparent.
  */
-function boxPass(src: Float32Array, dst: Float32Array, w: number, h: number, r: number, horizontal: boolean) {
-  const len = horizontal ? w : h;
-  const lines = horizontal ? h : w;
+export function boxPass(src: Float32Array, dst: Float32Array, w: number, h: number, r: number, horizontal: boolean) {
+  // PERFORMANCE_OPTIMIZATION_REPORT.md §3: every channel's running sum sees exactly the same additions in the same order
+  // as the straightforward per-channel loop (kept as the reference in perf/kernels.test.ts), so the output is
+  // bit-identical — only the memory walk changed: four channels per step, and the vertical pass runs row by row (one
+  // accumulator per column) instead of striding down columns.
   const norm = 1 / (2 * r + 1);
-  const last = len - 1;
-  for (let line = 0; line < lines; line++) {
-    const idx = (k: number) => {
-      const kk = k < 0 ? 0 : k > last ? last : k;
-      return horizontal ? (line * w + kk) * 4 : (kk * w + line) * 4;
-    };
-    for (let c = 0; c < 4; c++) {
-      let acc = 0;
-      for (let k = -r; k <= r; k++) acc += src[idx(k) + c];
-      for (let k = 0; k < len; k++) {
-        dst[idx(k) + c] = acc * norm;
-        acc += src[idx(k + r + 1) + c] - src[idx(k - r) + c];
+  if (horizontal) {
+    const last = w - 1;
+    for (let line = 0; line < h; line++) {
+      const base = line * w * 4;
+      let a0 = 0;
+      let a1 = 0;
+      let a2 = 0;
+      let a3 = 0;
+      for (let k = -r; k <= r; k++) {
+        const o = base + (k < 0 ? 0 : k > last ? last : k) * 4;
+        a0 += src[o];
+        a1 += src[o + 1];
+        a2 += src[o + 2];
+        a3 += src[o + 3];
       }
+      for (let k = 0; k < w; k++) {
+        const o = base + k * 4;
+        dst[o] = a0 * norm;
+        dst[o + 1] = a1 * norm;
+        dst[o + 2] = a2 * norm;
+        dst[o + 3] = a3 * norm;
+        const kin = k + r + 1;
+        const kout = k - r;
+        const i = base + (kin > last ? last : kin) * 4;
+        const j = base + (kout < 0 ? 0 : kout) * 4;
+        a0 += src[i] - src[j];
+        a1 += src[i + 1] - src[j + 1];
+        a2 += src[i + 2] - src[j + 2];
+        a3 += src[i + 3] - src[j + 3];
+      }
+    }
+    return;
+  }
+  const row = w * 4;
+  const last = h - 1;
+  const acc = new Float64Array(row);
+  for (let k = -r; k <= r; k++) {
+    const o = (k < 0 ? 0 : k > last ? last : k) * row;
+    for (let x = 0; x < row; x++) acc[x] += src[o + x];
+  }
+  for (let k = 0; k < h; k++) {
+    const o = k * row;
+    const kin = k + r + 1;
+    const kout = k - r;
+    const i = (kin > last ? last : kin) * row;
+    const j = (kout < 0 ? 0 : kout) * row;
+    for (let x = 0; x < row; x++) {
+      dst[o + x] = acc[x] * norm;
+      acc[x] += src[i + x] - src[j + x];
     }
   }
 }

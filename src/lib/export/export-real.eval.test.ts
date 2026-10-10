@@ -19,7 +19,7 @@ import type { ExportProfile } from "./profile";
  * It also checks the job outcomes: completed only with a fully passing report, cancelled with no file, refused
  * combinations never queued.
  */
-const DIR = join(process.cwd(), ".tmp-test-assets", "phase16", "final");
+const DIR = process.env.EXPORT_EVAL_DIR ? join(process.cwd(), process.env.EXPORT_EVAL_DIR) : join(process.cwd(), ".tmp-test-assets", "phase16", "final");
 const metas = existsSync(DIR) ? readdirSync(DIR).filter((f) => /^e-.*\.meta\.json$/.test(f)).map((f) => f.replace(/\.meta\.json$/, "")) : [];
 
 interface Meta {

@@ -74,18 +74,19 @@ export class PreviewRenderer {
     const stats = drawResolvedFrame(this.ctx, resolved, pixels, {
       renderScale,
       smoothing: profile.smoothing,
-      getScratch: (slot = 0) => this.getScratch(slot, width, height),
+      getScratch: (slot = 0, readback = true) => this.getScratch(slot, readback, width, height),
     });
     return { resolved, stats, renderMs: performance.now() - t0, width, height, scale: renderScale };
   }
 
-  /** One canvas per slot (0 = layer isolation, 1-3 = transitions), allocated on first use. */
-  private getScratch(slot: number, width: number, height: number): Ctx2D {
-    let s = this.scratch.get(slot);
+  /** One canvas per (slot, readback) pair (0 = layer isolation, 1-3 = transitions, 4-5 = mask/matte work), allocated on first use; only readback surfaces are CPU-backed (willReadFrequently). */
+  private getScratch(slot: number, readback: boolean, width: number, height: number): Ctx2D {
+    const key = readback ? slot : -1 - slot;
+    let s = this.scratch.get(key);
     if (!s) {
       const canvas = createCanvas(width, height);
-      s = { canvas, ctx: get2d(canvas, { willReadFrequently: true }) };
-      this.scratch.set(slot, s);
+      s = { canvas, ctx: get2d(canvas, { willReadFrequently: readback }) };
+      this.scratch.set(key, s);
     }
     ensureSize(s.canvas, width, height);
     return s.ctx;
