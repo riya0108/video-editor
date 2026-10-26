@@ -10,6 +10,7 @@ import { MemoryProjectStore, versionsToPrune, type VersionSummary } from "./stor
 import { findRecoverable, SessionTracker } from "./recovery";
 import { NeedsSaveTargetError, ProjectManager, type AssetStatus, type EditorState, type ProjectFileTarget, type ProjectHost } from "./manager";
 import { buildComplexProject, FIXTURE_MATTE_ID } from "./fixture";
+import { MatteTrack, MatteTrackBuilder } from "../composition/matte-track";
 import { buildProbeProject } from "../render/probe-project";
 
 const buildProbeProjectUnnormalized = () => buildProbeProject(1920, 1080).timeline;
@@ -476,8 +477,8 @@ async function setup() {
   registry.setUrl("probe-logo", "image", "logo-half-red.png", "/assets/logo.png");
   await registry.setFile("probe-tone", "audio", file("tone.wav", "TONE-BYTES", "audio/wav"), { durationSec: 3.5 });
   await registry.setGenerated(FIXTURE_MATTE_ID, "sequence", "Background removal", "background-removal", [
-    { frame: 90, png: png(90), width: 64, height: 36 },
-    { frame: 120, png: png(120), width: 64, height: 36 },
+    { frame: 90, bytes: png(90), width: 64, height: 36 },
+    { frame: 120, bytes: png(120), width: 64, height: 36 },
   ]);
   const editor = new FakeEditor(registry, { timeline: f.timeline, aiResults: f.aiResults, exportSettings: f.exportSettings, ui: { frame: 42 } });
   const fp = (id: string) => (registry.get(id)!.origin as { fingerprint: string }).fingerprint;
@@ -523,6 +524,29 @@ describe("project manager", () => {
     expect(fresh.mgr.state).toMatchObject({ id: "project-test", name: "Complex project", dirty: false, savedRevision: 1 });
     expect(fresh.editor.loaded.get(FIXTURE_MATTE_ID)).toBe("generated");
     void store;
+  });
+
+  it("a per-frame MATTE TRACK (chunked blobs) saves, reopens bit-identical and replaces the PNG sequence it supersedes", async () => {
+    const { editor, mgr, registry } = await setup();
+    const b = new MatteTrackBuilder(32, 18, 90, { chunkFrames: 4 });
+    for (let k = 0; k < 10; k++) await b.push(Uint8Array.from({ length: 32 * 18 }, (_, i) => ((i + k * 7) * 13) & 255));
+    const chunks = await b.finish();
+    await registry.setGenerated(FIXTURE_MATTE_ID, "matte-track", "Background removal", "background-removal", chunks.map((c) => ({ frame: c.firstFrame, bytes: c.bytes, width: 32, height: 18 })));
+    const disk = new FakeFile();
+    await mgr.saveAs(disk.target());
+    const decoded = await decodeBundle(disk.bytes!);
+    // One blob per chunk (3), not one PNG per frame; the superseded sequence PNGs aren't written.
+    expect([...decoded.entries.keys()].filter((n) => n.startsWith("blobs/"))).toHaveLength(3);
+
+    const fresh = await reopen(new MemoryProjectStore(), new Set(editor.available));
+    const res = await fresh.mgr.openFile(disk.bytes!, { name: "complex.clipbench" });
+    expect(res.assets.find((a) => a.id === FIXTURE_MATTE_ID)).toMatchObject({ state: "ok", kind: "matte-track" });
+    const rec = fresh.registry.get(FIXTURE_MATTE_ID)!;
+    expect(rec.kind).toBe("matte-track");
+    const reopened = new MatteTrack((rec.origin as { frames: { sha256: string }[] }).frames.map((f) => fresh.registry.png(f.sha256)!));
+    const original = new MatteTrack(chunks.map((c) => c.bytes));
+    expect(reopened.frameCount).toBe(10);
+    for (let f = 90; f < 100; f++) expect(await reopened.decodeFrame(f)).toEqual(await original.decodeFrame(f));
   });
 
   it("source media is never written: only the project target receives bytes, and it never contains the source files", async () => {

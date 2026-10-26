@@ -28,3 +28,9 @@ pnpm-debug.log*
 .tmp-test-sample.mp4
 .tmp-test-assets/
 .scratch/
+
+# macOS AppleDouble files (created on exFAT/non-HFS drives)
+._*
+
+# Claude Code runtime lock
+.claude/scheduled_tasks.lock

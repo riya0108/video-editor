@@ -10,13 +10,16 @@ import { sha256Hex } from "./bundle";
  *                fingerprint. The bytes are never copied into the project and the file is never opened for writing.
  *  - "url"       media the app itself serves (e.g. the demo clip).
  *  - "generated" media this app CREATED — background-removal mattes, AI-registered images, procedural stills. It
- *                exists nowhere else, so its frames are stored IN the project (PNG, content-addressed by SHA-256).
+ *                exists nowhere else, so its data is stored IN the project (blobs content-addressed by SHA-256):
+ *                stills and (pre-B-05) sequences as one PNG per frame; a "matte-track" as matte-track.ts chunks, one
+ *                blob per chunk of frames.
  */
 
-export type AssetKind = "video" | "image" | "audio" | "still" | "sequence";
+export type AssetKind = "video" | "image" | "audio" | "still" | "sequence" | "matte-track";
 
+/** One stored blob of generated media: a frame's PNG (still / sequence) or a chunk of frames (matte-track). */
 export interface GeneratedFrame {
-  /** Source frame (sequences); 0 for a still. */
+  /** Source frame (sequences), first source frame of the chunk (matte-track); 0 for a still. */
   frame: number;
   sha256: string;
   size: number;

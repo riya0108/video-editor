@@ -10,7 +10,7 @@ import type { ProjectStore } from "./storage";
  * MEDIA HOST (PROJECT_PERSISTENCE_ARCHITECTURE.md §4, browser only) — resolves a document's asset records back into
  * decoded media in the frame provider (pictures) and audio store (sound), and reports what it couldn't:
  *
- *   generated  PNG frames from the project file / local blob store        → "damaged" if a frame is gone or corrupt
+ *   generated  PNG frames / matte-track chunks from the project file or local blob store → "damaged" if one is gone or corrupt
  *   url        fetched from the app                                        → "missing" if it no longer loads
  *   file       1. the same file already open in this session (by fingerprint)
  *              2. a stored READ handle for that fingerprint (permission granted, content re-verified)
@@ -78,6 +78,23 @@ export function createMediaHost(d: MediaHostDeps, editor: { snapshot(): EditorSt
       return { ...base, state: "ok" };
     }
     const o = rec.origin;
+    if (o.type === "generated" && rec.kind === "matte-track") {
+      const chunks: Uint8Array[] = [];
+      for (const f of o.frames) {
+        const bytes = await pngFor(f.sha256);
+        if (!bytes) return { ...base, state: "damaged", detail: `Its stored matte for frames from ${f.frame} is missing or damaged. Run background removal again.` };
+        d.registry.addPng(f.sha256, bytes);
+        chunks.push(bytes);
+      }
+      unload(rec.id);
+      try {
+        d.provider.addMatteTrack(rec.id, chunks);
+      } catch (e) {
+        return { ...base, state: "damaged", detail: `Its stored matte can't be read (${(e as Error).message}). Run background removal again.` };
+      }
+      d.registry.adopt(rec);
+      return { ...base, state: "ok" };
+    }
     if (o.type === "generated") {
       const frames: { frame: number; image: ImageBitmap }[] = [];
       for (const f of o.frames) {

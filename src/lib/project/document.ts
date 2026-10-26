@@ -69,7 +69,7 @@ export interface ParsedProject {
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const ASSET_KINDS: readonly AssetKind[] = ["video", "image", "audio", "still", "sequence"];
+const ASSET_KINDS: readonly AssetKind[] = ["video", "image", "audio", "still", "sequence", "matte-track"];
 
 export function parseProjectDocument(json: string, fallback: { id: () => string; now: () => string } = { id: () => `project-${Date.now().toString(36)}`, now: () => new Date().toISOString() }): ParsedProject {
   let raw: unknown;
@@ -172,6 +172,6 @@ function validateAsset(a: unknown, i: number): AssetRecord {
   return { id: r.id as string, kind: r.kind as AssetKind, label: r.label as string, origin: o as AssetRecord["origin"], media: r.media as AssetRecord["media"] };
 }
 
-/** Bundle entry name of a generated frame's PNG. */
+/** Bundle entry name of a generated blob (historically always a PNG, hence the extension; matte-track chunks reuse it — readers go by the asset kind, never the name). */
 export const blobEntryName = (sha256: string) => `blobs/${sha256}.png`;
 export const DOCUMENT_ENTRY = "project.json";

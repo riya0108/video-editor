@@ -185,7 +185,7 @@ export default function CompositionPlaygroundPanel() {
       registerCanvas: (id, canvas) => {
         provider.addStill(id, canvas);
         // AI-made images exist nowhere else: kept (as PNG) in the project.
-        void encodePng(canvas).then((png) => registry.setGenerated(id, "still", "AI image", "ai", [{ frame: 0, png, width: canvas.width, height: canvas.height }]));
+        void encodePng(canvas).then((png) => registry.setGenerated(id, "still", "AI image", "ai", [{ frame: 0, bytes: png, width: canvas.width, height: canvas.height }]));
       },
     });
     return new AIEditingSession(aiRegistry, services, (clip) => createClipMediaSource(clip, FPS, provider, (id) => audioStore?.pcm(id)));
@@ -205,8 +205,8 @@ export default function CompositionPlaygroundPanel() {
         provider.addStill("logo", logoAsset);
         provider.addStill("matte", matteAsset);
         registry.setUrl("demo-video", "video", "Demo video", DEMO_VIDEO_URL, { width: demoInfo.width, height: demoInfo.height, durationSec, fps: FPS });
-        await registry.setGenerated("logo", "still", "Logo (generated)", "demo:logo", [{ frame: 0, png: await encodePng(logoAsset), width: logoAsset.width, height: logoAsset.height }]);
-        await registry.setGenerated("matte", "still", "Matte (generated)", "demo:matte", [{ frame: 0, png: await encodePng(matteAsset), width: matteAsset.width, height: matteAsset.height }]);
+        await registry.setGenerated("logo", "still", "Logo (generated)", "demo:logo", [{ frame: 0, bytes: await encodePng(logoAsset), width: logoAsset.width, height: logoAsset.height }]);
+        await registry.setGenerated("matte", "still", "Matte (generated)", "demo:matte", [{ frame: 0, bytes: await encodePng(matteAsset), width: matteAsset.width, height: matteAsset.height }]);
         if (cancelled) return;
         const durationFrames = Math.max(1, secondsToFrames(durationSec, FPS, "floor"));
         const engine = new TimelineEngine(FPS, { width: 1920, height: 1080, background: "#000000" });
@@ -590,7 +590,7 @@ export default function CompositionPlaygroundPanel() {
 
   /**
    * BACKGROUND REMOVAL (MASK_COMPOSITING_ARCHITECTURE.md §7): the existing matting engine runs on the layer's own media
-   * (video: sampled frames across the clip), its alpha becomes a matte source, and the layer's matte points at it —
+   * (video: every frame of the clip), its alpha becomes a matte source, and the layer's matte points at it —
    * ONE undo step, fully non-destructive (remove/invert/combine with masks any time).
    */
   const removeBackground = async (clip: Clip) => {
@@ -598,19 +598,33 @@ export default function CompositionPlaygroundPanel() {
     const ac = new AbortController();
     bgAbortRef.current = ac;
     setBgRemoval({ clipId: clip.id, busy: { done: 0, total: 1 }, error: null, report: null });
+    // Time-left estimate from the frames done so far, timed from the first finished frame (so the model download/load doesn't skew it).
+    let timing: { at: number; done: number } | null = null;
     try {
       const out = await generateClipMatte(provider, clip, {
         fps: FPS,
         signal: ac.signal,
-        onProgress: (pr) => setBgRemoval((s) => (s.clipId === clip.id ? { ...s, busy: { done: pr.done, total: pr.total, modelFraction: pr.modelFraction } } : s)),
+        onProgress: (pr) => {
+          let etaSec: number | undefined;
+          if (pr.phase === "frames" && pr.done > 0) {
+            timing ??= { at: performance.now(), done: pr.done };
+            const n = pr.done - timing.done;
+            if (n >= 3) etaSec = (((performance.now() - timing.at) / 1000) * (pr.total - pr.done)) / n;
+          }
+          setBgRemoval((s) => (s.clipId === clip.id ? { ...s, busy: { done: pr.done, total: pr.total, modelFraction: pr.modelFraction, etaSec } } : s));
+        },
       });
       const sourceId = matteSourceIdFor(clip);
-      // The matte exists only here: its frames go into the project as PNG before the layer points at it.
-      const frames = out.kind === "still" ? [{ frame: 0, image: out.image }] : out.frames;
-      const pngs = await Promise.all(frames.map(async (f) => ({ frame: f.frame, png: await encodePng(f.image), width: f.image.width, height: f.image.height })));
-      if (out.kind === "still") provider.addStill(sourceId, out.image);
-      else provider.addFrameSequence(sourceId, out.frames);
-      await registry.setGenerated(sourceId, out.kind, `Background removal (${clip.content.source?.label ?? clip.id})`, "background-removal", pngs);
+      const label = `Background removal (${clip.content.source?.label ?? clip.id})`;
+      // The matte exists only here: it goes into the project (still: PNG; video: its matte-track chunks) before the layer points at it.
+      if (out.kind === "still") {
+        provider.addStill(sourceId, out.image);
+        await registry.setGenerated(sourceId, "still", label, "background-removal", [{ frame: 0, bytes: await encodePng(out.image), width: out.image.width, height: out.image.height }]);
+      } else {
+        const chunks = out.chunks.map((c) => c.bytes);
+        provider.addMatteTrack(sourceId, chunks);
+        await registry.setGenerated(sourceId, "matte-track", label, "background-removal", out.chunks.map((c) => ({ frame: c.firstFrame, bytes: c.bytes, width: out.width, height: out.height })));
+      }
       const current = engine.timeline.clips[clip.id];
       if (current) apply(engine.setClipVisualsAtFrame({ [clip.id]: { matte: { sourceId, invert: false, decontaminate: true } } }, frame));
       setBgRemoval({ clipId: clip.id, busy: null, error: null, report: out.report });

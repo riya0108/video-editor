@@ -21,8 +21,15 @@ import { NumberField, type KeyframeControl } from "./TransformPanel";
 
 export type MatteStatus = "none" | "ready" | "missing";
 
+function formatEta(sec: number): string {
+  if (sec < 90) return `${Math.max(1, Math.round(sec))} s`;
+  if (sec < 90 * 60) return `${Math.round(sec / 60)} min`;
+  return `${(sec / 3600).toFixed(1)} h`;
+}
+
 export interface BackgroundRemovalState {
-  busy: { done: number; total: number; modelFraction?: number } | null;
+  /** etaSec: estimated time left, once a few frames have been timed. */
+  busy: { done: number; total: number; modelFraction?: number; etaSec?: number } | null;
   error: string | null;
   report: MatteReport | null;
 }
@@ -113,7 +120,7 @@ export default function MasksPanel(p: MasksPanelProps) {
               <>
                 <span className="flex flex-1 items-center gap-1.5 text-(--color-text-muted)" role="status">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  {p.bgRemoval.busy.modelFraction !== undefined && p.bgRemoval.busy.modelFraction < 1 ? `Loading model ${Math.round(p.bgRemoval.busy.modelFraction * 100)}%` : `Removing background — frame ${Math.min(p.bgRemoval.busy.done + 1, p.bgRemoval.busy.total)} of ${p.bgRemoval.busy.total}`}
+                  {p.bgRemoval.busy.modelFraction !== undefined && p.bgRemoval.busy.modelFraction < 1 ? `Loading model ${Math.round(p.bgRemoval.busy.modelFraction * 100)}%` : `Removing background — frame ${Math.min(p.bgRemoval.busy.done + 1, p.bgRemoval.busy.total)} of ${p.bgRemoval.busy.total}${p.bgRemoval.busy.etaSec !== undefined ? ` · about ${formatEta(p.bgRemoval.busy.etaSec)} left` : ""}`}
                 </span>
                 <button type="button" className={btn} onClick={p.onCancelRemoveBackground}>
                   <X className="h-3.5 w-3.5" /> Cancel
@@ -130,7 +137,7 @@ export default function MasksPanel(p: MasksPanelProps) {
         {p.bgRemoval.report && p.matteStatus === "ready" && (
           <p className="text-(--color-text-muted)" data-testid="matte-report">
             {p.bgRemoval.report.framesMatted} frame{p.bgRemoval.report.framesMatted === 1 ? "" : "s"} matted
-            {p.bgRemoval.report.framesFailed ? `, ${p.bgRemoval.report.framesFailed} skipped (held)` : ""} · {p.bgRemoval.report.modelsUsed.join(", ")} · confidence {Math.round(p.bgRemoval.report.meanConfidence * 100)}%
+            {p.bgRemoval.report.framesFailed ? `, ${p.bgRemoval.report.framesFailed} failed (use a neighbouring frame's matte)` : ""} · {p.bgRemoval.report.modelsUsed.join(", ")} · confidence {Math.round(p.bgRemoval.report.meanConfidence * 100)}%
           </p>
         )}
         {p.matte && (

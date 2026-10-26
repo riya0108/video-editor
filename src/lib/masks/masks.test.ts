@@ -10,7 +10,8 @@ import { compositeOperationFor, decontaminatedMatteInPlace, drawResolvedFrame, l
 import { multiply, scale as scaleMatrix } from "../composition/matrix";
 import { fakeContext } from "../composition/test-helpers";
 import { sampleAt, normalizeSequence } from "../composition/frame-sequence";
-import { alphaToMatteRgba, canRemoveBackground, generateClipMatte, matteSourceIdFor, sampleFrames, MatteGenerationError, type MatteAlpha } from "../composition/matte-generation";
+import { alphaToMatteRgba, canRemoveBackground, generateClipMatte, matteSourceIdFor, MatteGenerationError, MAX_MATTE_CLIP_SECONDS, type MatteAlpha } from "../composition/matte-generation";
+import { MatteTrack } from "../composition/matte-track";
 import { applyMaskPatch, boxFromLayerPoints, createMask, InvalidMaskError, maskKeyframes, maskParamPath, normalizeMask, parseMaskPath, simplifyStroke, type Mask } from "./model";
 import { contentToMaskBox, maskContentPolygon, maskControlPoints, pointInPolygon } from "./geometry";
 import { combine, edgeProfile, MaskRasterCache, polygonCoverage, rasterizeMasks, shapeCoverage, signedDistanceField, squaredDistanceTransform, stackStartsFull, type RasterMask } from "./raster";
@@ -758,35 +759,56 @@ describe("background removal -> matte input", () => {
       getExactFrame: async (r: { sourceFrame: number }) => (requested.push(r.sourceFrame), fakeImage(64, 36)),
     };
   };
-  const matteFn = (fail: Set<number>, calls: { n: number }) => async (): Promise<MatteAlpha> => {
+  /** Engine stand-in: call n's matte is uniformly n/10, so every stored frame says which engine run produced it. */
+  const matteFn = (fail: Set<number>, calls: { n: number }, w = 64, h = 36) => async (): Promise<MatteAlpha> => {
     const n = calls.n++;
     if (fail.has(n)) throw new Error("no subject");
-    return { alpha: new Float32Array(64 * 36).fill(0.5), alphaWidth: 64, alphaHeight: 36, modelUsed: "u2netp", confidence: 0.8, warnings: [] };
+    return { alpha: new Float32Array(w * h).fill(n / 10), alphaWidth: w, alphaHeight: h, modelUsed: "u2netp", confidence: 0.8, warnings: [] };
+  };
+  const levels = async (chunks: { bytes: Uint8Array }[]) => {
+    const track = new MatteTrack(chunks.map((c) => c.bytes));
+    const out: number[] = [];
+    for (let f = track.firstFrame; f < track.firstFrame + track.frameCount; f++) out.push(Math.round(((await track.decodeFrame(f))[0] / 255) * 10));
+    return out;
   };
   const toImage = (_d: Uint8ClampedArray, w: number, h: number) => ({ width: w, height: h }) as unknown as CanvasImageSource & { width: number; height: number };
-
-  it("samples a video clip's range evenly, first and last included", () => {
-    expect(sampleFrames(10, 40, 30, 6)).toEqual([10, 15, 20, 25, 30, 35, 39]);
-    expect(sampleFrames(0, 1, 30, 6)).toEqual([0]);
-  });
 
   it("alpha -> white matte with alpha channel", () => {
     expect(Array.from(alphaToMatteRgba(new Float32Array([0, 0.5, 1.4]), 3, 1))).toEqual([255, 255, 255, 0, 255, 255, 255, 128, 255, 255, 255, 255]);
   });
 
-  it("video: one engine run per sample -> frame sequence; failed frames skipped, reported", async () => {
+  it("video: one engine run per SOURCE FRAME -> a matte track; failed frames reuse a neighbour's matte and are reported", async () => {
     const e = project();
-    const id = addVideo(e, "v", 0, 30);
+    const id = addVideo(e, "v", 10, 20);
     const p = provider();
-    const calls = { n: 0 };
-    const out = await generateClipMatte(p, e.timeline.clips[id], { fps: 30, samplesPerSecond: 6, matteFn: matteFn(new Set([1]), calls), toImage });
-    expect(p.requested).toEqual([0, 5, 10, 15, 20, 25, 29]);
-    expect(out.kind).toBe("sequence");
-    if (out.kind !== "sequence") return;
-    expect(out.frames.map((f) => f.frame)).toEqual([0, 10, 15, 20, 25, 29]);
-    expect(out.report).toMatchObject({ framesRequested: 7, framesMatted: 6, framesFailed: 1, modelsUsed: ["u2netp"] });
+    const out = await generateClipMatte(p, e.timeline.clips[id], { fps: 30, matteFn: matteFn(new Set([0, 4]), { n: 0 }), toImage });
+    expect(p.requested).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+    expect(out.kind).toBe("track");
+    if (out.kind !== "track") return;
+    expect(out).toMatchObject({ firstFrame: 10, frameCount: 10, width: 64, height: 36 });
+    // Call 0 failed (leading: takes call 1's matte), call 4 failed (repeats call 3's).
+    expect(await levels(out.chunks)).toEqual([1, 1, 2, 3, 3, 5, 6, 7, 8, 9]);
+    expect(out.report).toMatchObject({ framesRequested: 10, framesMatted: 8, framesFailed: 2, modelsUsed: ["u2netp"] });
+    expect(out.report.warnings.some((w) => w.includes("2 of 10 frames"))).toBe(true);
     expect(out.report.meanConfidence).toBeCloseTo(0.8);
-    expect(matteSourceIdFor(e.timeline.clips[id])).toBe("bgmatte:v:0-30");
+    expect(matteSourceIdFor(e.timeline.clips[id])).toBe("bgmatte:v:10-20");
+  });
+
+  it("video: large frames are stored at most 640 px on the long side", async () => {
+    const e = project();
+    const id = addVideo(e, "v", 0, 3);
+    const out = await generateClipMatte(provider(), e.timeline.clips[id], { fps: 30, matteFn: matteFn(new Set(), { n: 0 }, 1280, 720), toImage });
+    expect(out).toMatchObject({ kind: "track", width: 640, height: 360, frameCount: 3 });
+  });
+
+  it("video: every frame failing is an error; over-long clips are refused up front", async () => {
+    const e = project();
+    const id = addVideo(e, "v", 0, 5);
+    await expect(generateClipMatte(provider(), e.timeline.clips[id], { fps: 30, matteFn: matteFn(new Set([0, 1, 2, 3, 4]), { n: 0 }), toImage })).rejects.toThrow(MatteGenerationError);
+    const long = addVideo(e, "v", 0, MAX_MATTE_CLIP_SECONDS * 30 + 1);
+    const p = provider();
+    await expect(generateClipMatte(p, e.timeline.clips[long], { fps: 30, matteFn: matteFn(new Set(), { n: 0 }), toImage })).rejects.toThrow(/up to 10 minutes/);
+    expect(p.requested).toEqual([]);
   });
 
   it("image: a single matte; nothing matted at all is an error, never a fake success", async () => {

@@ -1,8 +1,9 @@
-import { createCanvas, get2d } from "./canvas";
+import { createCanvas, get2d, type AnyCanvas } from "./canvas";
 import type { FrameProvider, FrameRequest } from "./frame-provider";
 import type { SourceInfo } from "./resolve";
 import { normalizeSequence, sampleAt, type SequenceFrame } from "./frame-sequence";
 import { SequentialFrameCursor } from "./sequential-frame-cursor";
+import { MatteTrack, alphaToRgba } from "./matte-track";
 import type { Input, VideoSample, VideoSampleSink } from "mediabunny";
 
 /**
@@ -69,7 +70,26 @@ interface SequenceSource {
   info: SourceInfo;
 }
 
-type Source = VideoSource | StillSource | SequenceSource;
+/**
+ * A per-frame background-removal matte stored compactly (matte-track.ts). Frames are decoded on demand into small
+ * canvases held in a bounded LRU, so memory is the compressed track plus MATTE_CACHE_FRAMES decoded frames however
+ * long the clip is.
+ */
+interface MatteTrackSource {
+  kind: "matte-track";
+  track: MatteTrack;
+  info: SourceInfo;
+  /** Decoded frames, least recently used first. */
+  cache: Map<number, AnyCanvas>;
+  pending: Map<number, Promise<AnyCanvas>>;
+}
+
+type Source = VideoSource | StillSource | SequenceSource | MatteTrackSource;
+
+/** Decoded matte frames kept per track (a 360x640 frame is 0.9 MB). */
+const MATTE_CACHE_FRAMES = 48;
+/** Frames decoded ahead of the one shown, so playback finds them ready. */
+const MATTE_PREFETCH_FRAMES = 8;
 
 /** A preview decoder not on screen for this long is released — covers clips that were deleted/undone/split away, whose slot key will never be asked for again. Short enough to bound memory, long enough that scrubbing back and forth doesn't reload decoders. */
 const SLOT_IDLE_EVICT_MS = 10_000;
@@ -145,6 +165,18 @@ export class MediaFrameProvider implements FrameProvider {
     return info;
   }
 
+  /**
+   * A per-frame matte track (chunks from MatteTrackBuilder / a project file). Validated up front: a damaged or gappy
+   * track throws here instead of failing mid-render.
+   */
+  addMatteTrack(sourceId: string, chunks: readonly Uint8Array[]): SourceInfo {
+    const track = new MatteTrack(chunks);
+    const info = { width: track.width, height: track.height };
+    this.sources.set(sourceId, { kind: "matte-track", track, info, cache: new Map(), pending: new Map() });
+    this.notify();
+    return info;
+  }
+
   /** True when `sourceId` is registered (used to tell a missing matte from a loaded one). */
   has(sourceId: string): boolean {
     return this.sources.has(sourceId);
@@ -153,7 +185,7 @@ export class MediaFrameProvider implements FrameProvider {
   remove(sourceId: string): void {
     const s = this.sources.get(sourceId);
     if (!s) return;
-    if (s.kind === "sequence") {
+    if (s.kind === "sequence" || s.kind === "matte-track") {
       this.sources.delete(sourceId);
       return;
     }
@@ -216,6 +248,7 @@ export class MediaFrameProvider implements FrameProvider {
     if (!s) return null;
     if (s.kind === "still") return s.image;
     if (s.kind === "sequence") return sampleAt(s.frames, sequenceFrameIndex(req.sourceFrame))?.image ?? null;
+    if (s.kind === "matte-track") return this.peekMatte(s, req.sourceFrame);
 
     let el = s.previewSlots.get(req.slotKey);
     if (!el) {
@@ -261,8 +294,63 @@ export class MediaFrameProvider implements FrameProvider {
     if (!s) return Promise.reject(new Error(`Unknown source "${req.sourceId}".`));
     if (s.kind === "still") return Promise.resolve(s.image);
     if (s.kind === "sequence") return Promise.resolve(sampleAt(s.frames, sequenceFrameIndex(req.sourceFrame))!.image);
+    if (s.kind === "matte-track") return this.matteFrame(s, s.track.clampFrame(sequenceFrameIndex(req.sourceFrame)));
 
     return this.exactDecoder(s).then((decoder) => (decoder ? this.exactViaDecoder(s, decoder, req) : this.exactViaElement(s, req)));
+  }
+
+  /**
+   * Preview: the exact matte frame when decoded; otherwise its decode starts (the preview redraws when it lands) and the
+   * nearest decoded frame stands in — the same way a seeking <video> keeps showing its last frame. Final renders use
+   * getExactFrame, which always waits for the exact frame.
+   */
+  private peekMatte(s: MatteTrackSource, sourceFrame: number): CanvasImageSource | null {
+    const f = s.track.clampFrame(sequenceFrameIndex(sourceFrame));
+    for (let k = 1; k <= MATTE_PREFETCH_FRAMES; k++) {
+      const n = s.track.clampFrame(f + k);
+      if (!s.cache.has(n)) void this.matteFrame(s, n).catch(() => {});
+    }
+    const hit = s.cache.get(f);
+    if (hit) {
+      s.cache.delete(f);
+      s.cache.set(f, hit);
+      return hit;
+    }
+    void this.matteFrame(s, f).then(
+      () => this.notify(),
+      () => {},
+    );
+    let best: AnyCanvas | null = null;
+    let bestD = Infinity;
+    for (const [n, c] of s.cache) {
+      const d = Math.abs(n - f);
+      if (d < bestD) [best, bestD] = [c, d];
+    }
+    return best;
+  }
+
+  /** Decodes (once) and caches one matte frame as a drawable white-with-alpha canvas. */
+  private matteFrame(s: MatteTrackSource, f: number): Promise<AnyCanvas> {
+    const hit = s.cache.get(f);
+    if (hit) {
+      s.cache.delete(f);
+      s.cache.set(f, hit);
+      return Promise.resolve(hit);
+    }
+    let p = s.pending.get(f);
+    if (!p) {
+      p = s.track.decodeFrame(f).then((alpha) => {
+        const canvas = createCanvas(s.track.width, s.track.height);
+        get2d(canvas).putImageData(new ImageData(alphaToRgba(alpha), s.track.width, s.track.height), 0, 0);
+        s.cache.set(f, canvas);
+        while (s.cache.size > MATTE_CACHE_FRAMES) s.cache.delete(s.cache.keys().next().value!);
+        return canvas;
+      });
+      const pending = p;
+      s.pending.set(f, pending);
+      void pending.finally(() => s.pending.delete(f)).catch(() => {});
+    }
+    return p;
   }
 
   /** Opens the WebCodecs decode of a source once; null when it can't reproduce what the <video> element shows. */

@@ -1,6 +1,6 @@
 import { isTrimmableContent, type Clip } from "../timeline/clip";
 import type { FrameRequest } from "./frame-provider";
-import type { SequenceFrame } from "./frame-sequence";
+import { MatteTrackBuilder, downsampleAlpha, matteStorageSize, type MatteChunk } from "./matte-track";
 
 /**
  * BACKGROUND REMOVAL -> MATTE INPUT (MASK_COMPOSITING_ARCHITECTURE.md §7).
@@ -18,10 +18,15 @@ import type { SequenceFrame } from "./frame-sequence";
  * separate source referenced by id, so it can be inverted, swapped,
  * combined with masks, or removed (one undo step) at any time.
  *
- * Images get one matte. Video gets mattes at sampled source frames across the
- * clip's range (sample-and-hold in between — the same sparse policy as the
- * engine's own video cutout path); a frame the engine fails on is skipped,
- * never faked, and if every frame fails the whole call throws.
+ * Images get one matte. Video gets ONE MATTE PER SOURCE FRAME across the clip's
+ * range — no sampling, so a moving subject is cut out where it actually is on
+ * every frame (sample-and-hold at 6 fps was measured at IoU 0.904 on hand
+ * motion, RELEASE_BLOCKERS.md B-04). Video mattes are streamed into a compact
+ * matte track (matte-track.ts: 8-bit alpha, ≤ 640 px long side, near-lossless,
+ * chunked), so neither generation nor the result holds full-resolution RGBA
+ * frames (B-05). A frame the engine fails on repeats the previous frame's matte
+ * and is counted in the report (framesFailed) — never silently; if every frame
+ * fails the whole call throws.
  */
 
 /** What the generator needs from a frame source — MediaFrameProvider satisfies it. */
@@ -44,17 +49,24 @@ export type MatteFn = (source: CanvasImageSource, width: number, height: number,
 
 export interface GenerateMatteOptions {
   fps: number;
-  /** Video: matte samples per second of clip (default 6). Every sample is a full engine run. */
-  samplesPerSecond?: number;
   signal?: AbortSignal;
   onProgress?: (p: { phase: "model" | "frames"; done: number; total: number; modelFraction?: number }) => void;
   /** Injected in tests; production uses the real pipeline (loaded lazily so the editor doesn't pay for it until used). */
   matteFn?: MatteFn;
-  /** Turns an alpha buffer into a drawable matte image (default: a canvas). Injected in tests (no DOM in Node). */
+  /** Images: turns the alpha into a drawable matte image (default: a canvas). Injected in tests (no DOM in Node). */
   toImage?: (rgba: Uint8ClampedArray, width: number, height: number) => CanvasImageSource & { width: number; height: number };
 }
 
-export type GeneratedMatte = { kind: "still"; image: CanvasImageSource & { width: number; height: number }; report: MatteReport } | { kind: "sequence"; frames: SequenceFrame<CanvasImageSource & { width: number; height: number }>[]; report: MatteReport };
+export type GeneratedMatte =
+  | { kind: "still"; image: CanvasImageSource & { width: number; height: number }; report: MatteReport }
+  /** Video: every source frame in [firstFrame, firstFrame + frameCount), as matte-track chunks. */
+  | { kind: "track"; chunks: MatteChunk[]; width: number; height: number; firstFrame: number; frameCount: number; report: MatteReport };
+
+/**
+ * Longest video clip background removal accepts. Each frame is a full engine run (≈ 0.45 s for 720x1280 on WASM, so
+ * 10 min ≈ 2.3 h) and the stored track grows ≈ 17 KB per frame (≈ 30 MB per minute at 30 fps).
+ */
+export const MAX_MATTE_CLIP_SECONDS = 10 * 60;
 
 export interface MatteReport {
   framesRequested: number;
@@ -85,17 +97,6 @@ export function matteSourceIdFor(clip: Clip): string {
 export function canRemoveBackground(clip: Clip): boolean {
   const c = clip.content;
   return isTrimmableContent(c) ? c.kind !== "audio" : !!c.source && !c.shape && !c.svg;
-}
-
-/** Source frames to matte for a video clip: evenly spaced over [in, out), always including the first and last. */
-export function sampleFrames(sourceIn: number, sourceOut: number, fps: number, samplesPerSecond: number): number[] {
-  const last = sourceOut - 1;
-  if (last <= sourceIn) return [sourceIn];
-  const step = Math.max(1, Math.round(fps / Math.max(0.1, samplesPerSecond)));
-  const out: number[] = [];
-  for (let f = sourceIn; f < last; f += step) out.push(f);
-  out.push(last);
-  return out;
 }
 
 /** Continuous 0..1 alpha -> RGBA matte bytes (white, alpha = matte). Pure. */
@@ -139,38 +140,79 @@ export async function generateClipMatte(provider: MatteFrameSource, clip: Clip, 
   const info = provider.getSourceInfo(sourceId);
   if (!info) throw new MatteGenerationError("The layer's media isn't loaded yet.");
   const matteFn = opts.matteFn ?? defaultMatteFn;
-  const toImage = opts.toImage ?? defaultToImage;
-  const frames = isTrimmableContent(c) ? sampleFrames(c.sourceInFrame, c.sourceOutFrame, opts.fps, opts.samplesPerSecond ?? 6) : [0];
-  const report: MatteReport = { framesRequested: frames.length, framesMatted: 0, framesFailed: 0, modelsUsed: [], meanConfidence: 0, warnings: [] };
-  const out: SequenceFrame<CanvasImageSource & { width: number; height: number }>[] = [];
+  const report: MatteReport = { framesRequested: 0, framesMatted: 0, framesFailed: 0, modelsUsed: [], meanConfidence: 0, warnings: [] };
   let lastError: unknown = null;
   let confSum = 0;
-
-  for (let i = 0; i < frames.length; i++) {
+  const aborted = () => {
     if (opts.signal?.aborted) throw new DOMException("Background removal cancelled.", "AbortError");
-    opts.onProgress?.({ phase: "frames", done: i, total: frames.length });
-    const image = await provider.getExactFrame({ sourceId, sourceFrame: frames[i], slotKey: `${clip.id}#bgmatte` });
+  };
+  /** One engine run; null when the engine failed on this frame (an abort is rethrown). */
+  const matteOne = async (image: CanvasImageSource, i: number, total: number): Promise<MatteAlpha | null> => {
     const { width, height } = frameSize(image, info);
     try {
-      const r = await matteFn(image, width, height, (f) => opts.onProgress?.({ phase: "model", done: i, total: frames.length, modelFraction: f }));
-      out.push({ frame: frames[i], image: toImage(alphaToMatteRgba(r.alpha, r.alphaWidth, r.alphaHeight), r.alphaWidth, r.alphaHeight) });
+      const r = await matteFn(image, width, height, (f) => opts.onProgress?.({ phase: "model", done: i, total, modelFraction: f }));
       report.framesMatted++;
       confSum += r.confidence;
       if (!report.modelsUsed.includes(r.modelUsed)) report.modelsUsed.push(r.modelUsed);
       for (const w of r.warnings) if (!report.warnings.includes(w)) report.warnings.push(w);
+      return r;
     } catch (e) {
       if ((e as { name?: string })?.name === "AbortError") throw e;
       report.framesFailed++;
       lastError = e;
+      return null;
     }
-  }
-  opts.onProgress?.({ phase: "frames", done: frames.length, total: frames.length });
-  if (out.length === 0) {
+  };
+  const failure = () => {
     const reason = lastError instanceof Error ? lastError.message : "no frame could be processed";
-    throw new MatteGenerationError(`Background removal failed: ${reason}`);
+    return new MatteGenerationError(`Background removal failed: ${reason}`);
+  };
+
+  if (!isTrimmableContent(c)) {
+    report.framesRequested = 1;
+    aborted();
+    opts.onProgress?.({ phase: "frames", done: 0, total: 1 });
+    const image = await provider.getExactFrame({ sourceId, sourceFrame: 0, slotKey: `${clip.id}#bgmatte` });
+    const r = await matteOne(image, 0, 1);
+    opts.onProgress?.({ phase: "frames", done: 1, total: 1 });
+    if (!r) throw failure();
+    report.meanConfidence = confSum / report.framesMatted;
+    const toImage = opts.toImage ?? defaultToImage;
+    return { kind: "still", image: toImage(alphaToMatteRgba(r.alpha, r.alphaWidth, r.alphaHeight), r.alphaWidth, r.alphaHeight), report };
   }
+
+  // VIDEO: every source frame of the clip, in order (the exact-frame decoder reads forward, one decode per frame).
+  const first = c.sourceInFrame;
+  const total = Math.max(1, c.sourceOutFrame - c.sourceInFrame);
+  if (total / opts.fps > MAX_MATTE_CLIP_SECONDS) {
+    throw new MatteGenerationError(`This clip is ${(total / opts.fps / 60).toFixed(1)} minutes long; background removal handles up to ${MAX_MATTE_CLIP_SECONDS / 60} minutes per clip. Split or trim it first.`);
+  }
+  report.framesRequested = total;
+  // Sized from the engine's first alpha (it returns source resolution); every later frame is stored at that size.
+  let builder: MatteTrackBuilder | null = null;
+  /** Frames the engine failed on before any success — filled with the first good matte once there is one. */
+  let leadingFailures = 0;
+  for (let i = 0; i < total; i++) {
+    aborted();
+    opts.onProgress?.({ phase: "frames", done: i, total });
+    const image = await provider.getExactFrame({ sourceId, sourceFrame: first + i, slotKey: `${clip.id}#bgmatte` });
+    const r = await matteOne(image, i, total);
+    if (!r) {
+      if (!builder || !(await builder.repeatLast())) leadingFailures++;
+      continue;
+    }
+    if (!builder) {
+      const size = matteStorageSize(r.alphaWidth, r.alphaHeight);
+      builder = new MatteTrackBuilder(size.width, size.height, first);
+    }
+    const alpha = downsampleAlpha(r.alpha, r.alphaWidth, r.alphaHeight, builder.width, builder.height);
+    for (let k = 0; k <= leadingFailures; k++) await builder.push(alpha);
+    leadingFailures = 0;
+  }
+  aborted();
+  opts.onProgress?.({ phase: "frames", done: total, total });
+  if (!builder) throw failure();
   report.meanConfidence = confSum / report.framesMatted;
-  // All samples must share one size for the sequence source; the engine returns alpha at source resolution, so they do.
-  if (!isTrimmableContent(c)) return { kind: "still", image: out[0].image, report };
-  return { kind: "sequence", frames: out, report };
+  if (report.framesFailed > 0) report.warnings.push(`${report.framesFailed} of ${total} frames couldn't be processed and reuse the nearest processed frame's matte.`);
+  return { kind: "track", chunks: await builder.finish(), width: builder.width, height: builder.height, firstFrame: first, frameCount: total, report };
 }

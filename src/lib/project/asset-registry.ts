@@ -61,14 +61,17 @@ export class AssetRegistry {
     return record;
   }
 
-  /** Generated media (still: one frame at 0; sequence: frames keyed by source frame), as encoded PNG bytes. */
-  async setGenerated(id: string, kind: "still" | "sequence", label: string, generator: string, frames: { frame: number; png: Uint8Array; width: number; height: number }[], media?: AssetRecord["media"]): Promise<AssetRecord> {
+  /**
+   * Generated media as stored blobs: still = one PNG at frame 0; sequence = PNGs keyed by source frame; matte-track =
+   * one matte-track.ts chunk per entry, keyed by its first source frame. The blob bytes are shared, not copied.
+   */
+  async setGenerated(id: string, kind: "still" | "sequence" | "matte-track", label: string, generator: string, frames: { frame: number; bytes: Uint8Array; width: number; height: number }[], media?: AssetRecord["media"]): Promise<AssetRecord> {
     if (frames.length === 0) throw new Error(`Generated asset "${id}" has no frames.`);
     const out: GeneratedFrame[] = [];
     for (const f of [...frames].sort((a, b) => a.frame - b.frame)) {
-      const sha256 = await sha256Hex(f.png);
-      this.pngs.set(sha256, f.png);
-      out.push({ frame: f.frame, sha256, size: f.png.length, width: f.width, height: f.height });
+      const sha256 = await sha256Hex(f.bytes);
+      this.pngs.set(sha256, f.bytes);
+      out.push({ frame: f.frame, sha256, size: f.bytes.length, width: f.width, height: f.height });
     }
     const record: AssetRecord = { id, kind, label, origin: { type: "generated", generator, frames: out }, media };
     this.records.set(id, record);
