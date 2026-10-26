@@ -8,11 +8,12 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "node scripts/preview-server.mjs",
     "astro": "astro",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "node scripts/copy-ffmpeg-core.mjs && node scripts/build-drawtext-font.mjs"
+    "postinstall": "node scripts/copy-ffmpeg-core.mjs && node scripts/build-drawtext-font.mjs",
+    "preview": "node server.mjs",
+    "start": "NODE_ENV=production node server.mjs"
   },
   "dependencies": {
     "@astrojs/node": "^11.1.3",

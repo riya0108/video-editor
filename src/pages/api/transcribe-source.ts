@@ -9,6 +9,7 @@ export const prerender = false;
 import type { APIRoute } from "astro";
 import { execFile } from "node:child_process";
 import { resolvePublicHttpUrl } from "../../lib/net/public-url";
+import { clientKey, LIMITS, rateLimit, tooManyRequests } from "../../lib/net/rate-limit";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,7 +40,10 @@ function jsonResponse(body: unknown, status: number): Response {
 // Rejects anything that isn't a plain http(s) URL to a public host — this endpoint accepts arbitrary user-supplied URLs
 // and hands them to a shelled out process, so it must not be usable to probe the server's own network. The guard (and
 // its residual risk: redirects / DNS rebinding need egress filtering at the deployment) lives in lib/net/public-url.ts.
-export const POST: APIRoute = async ({ request }) => {
+export const POST: APIRoute = async ({ request, clientAddress }) => {
+  // Each request can run yt-dlp + ffmpeg for minutes — the tightest limit of the API routes.
+  const wait = rateLimit("transcribe-source", clientKey(request, clientAddress), LIMITS.transcribeSource);
+  if (wait) return tooManyRequests(wait);
   let body: unknown;
   try {
     body = await request.json();

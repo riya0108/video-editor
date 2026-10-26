@@ -6,6 +6,7 @@ export const prerender = false;
 import type { APIRoute } from "astro";
 import { verifySigned } from "../../lib/stock/signing";
 import { resolvePublicHttpUrl } from "../../lib/net/public-url";
+import { clientKey, LIMITS, rateLimit, tooManyRequests } from "../../lib/net/rate-limit";
 
 const MAX_BYTES = 400 * 1024 * 1024;
 const MAX_REDIRECTS = 4;
@@ -13,7 +14,9 @@ const TIMEOUT_MS = 60_000;
 
 const fail = (status: number, message: string) => new Response(message, { status, headers: { "Content-Type": "text/plain", "Cache-Control": "no-store" } });
 
-export const GET: APIRoute = async ({ url }) => {
+export const GET: APIRoute = async ({ url, request, clientAddress }) => {
+  const wait = rateLimit("stock-file", clientKey(request, clientAddress), LIMITS.stockFile);
+  if (wait) return tooManyRequests(wait);
   const target = verifySigned(url.searchParams.get("u"), url.searchParams.get("e"), url.searchParams.get("s"));
   if (!target) return fail(403, "This link isn't valid or has expired — search again.");
 
