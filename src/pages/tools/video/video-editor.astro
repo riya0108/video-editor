@@ -1,13 +1,11 @@
 ---
 import Layout from "../../../layouts/Layout.astro";
-import VideoEditorTool from "../../../components/tool/video/VideoEditorTool.tsx";
+import StudioEditor from "../../../components/tool/video/studio/StudioEditor.tsx";
 import { getToolBySlug } from "../../../lib/tools-registry";
 
 const tool = getToolBySlug("video", "video-editor")!;
 ---
 
-<Layout title={`${tool.name} — Clipbench`} description={tool.description} fullScreen>
-  <div class="h-full md:overflow-hidden">
-    <VideoEditorTool client:load />
-  </div>
+<Layout title={`${tool.name} — Clipbench Studio`} description={tool.description} app>
+  <StudioEditor client:only="react" />
 </Layout>

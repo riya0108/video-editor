@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, FolderOpen, History, Link2, Loader2, LifeBuoy, Save, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, FolderOpen, History, Link2, Loader2, LifeBuoy, Save, ShieldAlert } from "lucide-react";
 import type { TimelineEngine } from "../../../../lib/timeline/engine";
 import type { MediaFrameProvider } from "../../../../lib/composition/media-frame-provider";
 import type { AudioSourceStore } from "../../../../lib/audio/source-store";
 import type { AIResultStore } from "../../../../lib/ai/store";
 import type { AssetRegistry } from "../../../../lib/project/asset-registry";
 import type { ExportSettingsState, ProjectDocument } from "../../../../lib/project/document";
-import { IdbProjectStore, type ProjectStore, type VersionSummary } from "../../../../lib/project/storage";
+import { IdbProjectStore, type ProjectMeta, type ProjectStore, type VersionSummary } from "../../../../lib/project/storage";
 import { NeedsSaveTargetError, ProjectManager, type AssetStatus, type ProjectState } from "../../../../lib/project/manager";
 import { createMediaHost } from "../../../../lib/project/media-host";
 import { downloadTarget, fsAccessAvailable, handleTarget, pickOpenHandle, pickSaveHandle } from "../../../../lib/project/file-target";
@@ -175,7 +175,28 @@ export function useProjectPersistence(ed: PersistenceEditor | null): Persistence
 const fmtTime = (t: number) => new Date(t).toLocaleTimeString();
 const REASON: Record<string, string> = { save: "Saved", autosave: "Autosave", "before-restore": "Before restore", "before-open": "Before opening another project", restored: "Restored", recovered: "Recovered after crash" };
 
-export function ProjectFileBar({ p, registry }: { p: Persistence; registry: AssetRegistry }) {
+/** What the editor shell can trigger from outside the bar (start screen, menus). */
+export interface ProjectFileActions {
+  open: () => void;
+  openRecent: (meta: ProjectMeta) => void;
+  recover: (r: Recoverable) => void;
+}
+
+export function ProjectFileBar({
+  p,
+  registry,
+  compact = false,
+  hideRecovery = false,
+  onActions,
+}: {
+  p: Persistence;
+  registry: AssetRegistry;
+  /** Top-bar layout for the editor shell: one slim row, with messages, history and missing media floating below it. */
+  compact?: boolean;
+  /** The shell's start screen offers recovery itself while it's showing. */
+  hideRecovery?: boolean;
+  onActions?: (a: ProjectFileActions) => void;
+}) {
   const { manager, state, autosave } = p;
   const [busy, setBusy] = useState<string | null>(null);
   const [versions, setVersions] = useState<VersionSummary[] | null>(null);
@@ -241,6 +262,27 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
     }
   };
 
+  const recover = (r: Recoverable) =>
+    run("Recover", async () => {
+      await manager.recover(r);
+      p.setRecoverable(p.recoverable.filter((x) => x !== r));
+      return `Recovered "${r.name}" (version ${r.version.revision}). Save it to keep it in a file.`;
+    });
+  const openRecent = (m: ProjectMeta) =>
+    run("Open", async () => {
+      const r = await manager.restoreVersion(m.headRevision, m.id);
+      const missing = r.assets.filter((a) => a.state !== "ok").length;
+      return [`Opened "${m.name}".`, missing ? `${missing} media item(s) need attention — relink them below.` : ""].filter(Boolean).join(" ");
+    });
+  const openRef = useRef(open);
+  openRef.current = open;
+  const actionsRef = useRef({ recover, openRecent });
+  actionsRef.current = { recover, openRecent };
+  useEffect(() => {
+    onActions?.({ open: () => void openRef.current(), openRecent: (m) => void actionsRef.current.openRecent(m), recover: (r) => void actionsRef.current.recover(r) });
+  }, [onActions]);
+  const [menu, setMenu] = useState(false);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -290,8 +332,39 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
     });
 
   return (
-    <div className="flex flex-col gap-2" data-testid="project-file-bar">
-      {p.recoverable.map((r) => (
+    <div className={compact ? "flex min-w-0 items-center" : "flex flex-col gap-2"} data-testid="project-file-bar">
+      <input
+        ref={openInput}
+        type="file"
+        accept=".clipbench,.json"
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) await openBytes(new Uint8Array(await f.arrayBuffer()), f.name);
+        }}
+      />
+      {compact && (
+        <CompactRow
+          name={state.name}
+          nameKey={state.id + state.name}
+          status={status}
+          busy={!!busy}
+          error={autosave.state === "error"}
+          dirty={state.dirty}
+          menu={menu}
+          setMenu={setMenu}
+          onRename={(n) => manager.rename(n)}
+          onSave={save}
+          onSaveAs={saveAs}
+          onOpen={open}
+          onVersions={showVersions}
+        />
+      )}
+      <div className={compact ? "fixed top-16 left-1/2 z-40 flex w-[min(760px,92vw)] -translate-x-1/2 flex-col gap-2 empty:hidden" : "contents"}>
+      {!hideRecovery && p.recoverable.map((r) => (
         <div key={r.sessionId} role="alert" className="flex flex-wrap items-center gap-2 rounded-xl border border-warning-500/40 bg-warning-500/10 px-3 py-2 text-body-sm" data-testid="recovery-banner">
           <LifeBuoy className="h-4 w-4" />
           <span>
@@ -300,13 +373,7 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
           <button
             type="button"
             className="rounded-md bg-(--color-text) px-2 py-1 font-medium text-(--color-bg)"
-            onClick={() =>
-              run("Recover", async () => {
-                await manager.recover(r);
-                p.setRecoverable(p.recoverable.filter((x) => x !== r));
-                return `Recovered "${r.name}" (version ${r.version.revision}). Save it to keep it in a file.`;
-              })
-            }
+            onClick={() => void recover(r)}
           >
             Recover
           </button>
@@ -326,6 +393,7 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
         </div>
       ))}
 
+      {!compact && (
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-(--color-border) bg-(--color-surface) px-3 py-2 text-body-sm">
         <input
           aria-label="Project name"
@@ -357,22 +425,12 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
               Import old save
             </button>
           )}
-          <input
-            ref={openInput}
-            type="file"
-            accept=".clipbench,.json"
-            className="sr-only"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) await openBytes(new Uint8Array(await f.arrayBuffer()), f.name);
-            }}
-          />
         </div>
       </div>
+      )}
 
       {p.message && (
-        <p className={`flex items-start gap-2 rounded-md px-3 py-2 text-caption ${p.message.kind === "error" ? "bg-danger-500/10 text-danger-700" : "bg-(--color-bg-subtle)"}`} role={p.message.kind === "error" ? "alert" : "status"} data-testid="project-message">
+        <p className={`flex items-start gap-2 rounded-md px-3 py-2 text-caption ${compact ? "border border-(--color-border) bg-(--color-surface-raised) shadow-lg" : ""} ${p.message.kind === "error" ? "bg-danger-500/10 text-danger-700 dark:text-danger-500" : compact ? "" : "bg-(--color-bg-subtle)"}`} role={p.message.kind === "error" ? "alert" : "status"} data-testid="project-message">
           {p.message.kind === "error" ? <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
           <span className="flex-1">{p.message.text}</span>
           <button type="button" onClick={() => p.setMessage(null)} aria-label="Dismiss">
@@ -382,7 +440,7 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
       )}
 
       {versions && (
-        <div className="rounded-xl border border-(--color-border) bg-(--color-surface) px-3 py-2 text-caption" data-testid="project-versions">
+        <div className={`rounded-xl border border-(--color-border) bg-(--color-surface) px-3 py-2 text-caption ${compact ? "shadow-lg" : ""}`} data-testid="project-versions">
           <div className="mb-1 font-medium">Version history (this browser)</div>
           {versions.length === 0 && <div className="text-(--color-text-muted)">No versions yet — they appear after the first save or autosave.</div>}
           <ul className="max-h-48 overflow-auto">
@@ -412,7 +470,7 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
       )}
 
       {attention.length > 0 && (
-        <div className="flex flex-col gap-1 rounded-xl border border-danger-500/30 bg-danger-500/5 px-3 py-2 text-caption" data-testid="missing-media">
+        <div className={`flex flex-col gap-1 rounded-xl border border-danger-500/30 px-3 py-2 text-caption ${compact ? "bg-(--color-surface) shadow-lg" : "bg-danger-500/5"}`} data-testid="missing-media">
           <div className="flex flex-wrap items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-danger-600" />
             <span className="font-medium">{attention.length} media item(s) unavailable — the timeline keeps their clips; they render once relinked.</span>
@@ -476,6 +534,90 @@ export function ProjectFileBar({ p, registry }: { p: Persistence; registry: Asse
             </div>
           )}
         </div>
+      )}
+      </div>
+    </div>
+  );
+}
+
+/** The slim project row of the editor shell's top bar: name, save state, and a File menu. */
+function CompactRow({
+  name,
+  nameKey,
+  status,
+  busy,
+  error,
+  dirty,
+  menu,
+  setMenu,
+  onRename,
+  onSave,
+  onSaveAs,
+  onOpen,
+  onVersions,
+}: {
+  name: string;
+  nameKey: string;
+  status: string;
+  busy: boolean;
+  error: boolean;
+  dirty: boolean;
+  menu: boolean;
+  setMenu: (v: boolean) => void;
+  onRename: (n: string) => void;
+  onSave: () => void;
+  onSaveAs: () => void;
+  onOpen: () => void;
+  onVersions: () => void;
+}) {
+  const item = "flex w-full items-center justify-between gap-6 rounded-md px-2.5 py-1.5 text-left text-caption hover:bg-(--color-bg-subtle)";
+  const pick = (fn: () => void) => () => {
+    setMenu(false);
+    fn();
+  };
+  return (
+    <div className="relative flex min-w-0 items-center gap-1">
+      <div className="min-w-0">
+        <input
+          aria-label="Project name"
+          defaultValue={name}
+          key={nameKey}
+          onBlur={(e) => onRename(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          className="w-44 truncate rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-body-sm font-semibold hover:border-(--color-border) focus:border-primary-500 focus:outline-none"
+        />
+        <div className={`flex items-center gap-1 px-1.5 text-[11px] leading-tight ${error ? "text-danger-500" : "text-(--color-text-faint)"}`} data-testid="project-status" role="status">
+          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className={`h-1.5 w-1.5 rounded-full ${error ? "bg-danger-500" : dirty ? "bg-warning-500" : "bg-success-500"}`} aria-hidden="true" />}
+          <span className="max-w-56 truncate">{status}</span>
+        </div>
+      </div>
+      <button type="button" onClick={() => setMenu(!menu)} aria-expanded={menu} aria-haspopup="menu" className="flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-(--color-text-muted) hover:bg-(--color-bg-subtle) hover:text-(--color-text)">
+        File <ChevronDown className="h-3.5 w-3.5" />
+      </button>
+      {menu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} aria-hidden="true" />
+          <div role="menu" className="absolute top-full left-0 z-50 mt-1 w-56 rounded-xl border border-(--color-border) bg-(--color-surface-raised) p-1 shadow-lg animate-fade-in">
+            <button type="button" role="menuitem" className={item} onClick={pick(onSave)}>
+              <span className="flex items-center gap-2"><Save className="h-3.5 w-3.5" /> Save</span>
+              <span className="text-(--color-text-faint)">⌘S</span>
+            </button>
+            <button type="button" role="menuitem" className={item} onClick={pick(onSaveAs)}>
+              <span className="pl-5.5">Save as…</span>
+              <span className="text-(--color-text-faint)">⇧⌘S</span>
+            </button>
+            <button type="button" role="menuitem" className={item} onClick={pick(onOpen)}>
+              <span className="flex items-center gap-2"><FolderOpen className="h-3.5 w-3.5" /> Open…</span>
+            </button>
+            <div className="my-1 h-px bg-(--color-border)" />
+            <button type="button" role="menuitem" className={item} onClick={pick(onVersions)}>
+              <span className="flex items-center gap-2"><History className="h-3.5 w-3.5" /> Version history</span>
+            </button>
+            <a role="menuitem" className={item} href="/tools/video/video-editor">
+              <span className="pl-5.5">New project</span>
+            </a>
+          </div>
+        </>
       )}
     </div>
   );
