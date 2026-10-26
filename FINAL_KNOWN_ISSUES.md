@@ -60,3 +60,9 @@ None.
 | P2 | `npm run preview` returned 500 | Serves `dist/client` |
 | P3 | SVG sanitizer kept unquoted `javascript:` hrefs | Unquoted values handled |
 | — | 10 more advisories (svgo, devalue, undici, …) | `npm audit fix` (semver-compatible) |
+
+## Fixed after RC2
+
+| ID | Was | Fix |
+|---|---|---|
+| P1 | Every ONNX tool on the WASM backend (background removal / U²-Net, upscale, TTS) hung forever at "loading model" in the Claude desktop app's built-in browser (Electron Chromium 152). Real Chrome 156 was not affected | **Cause:** `ort.env.wasm.proxy = true` runs ORT inside a proxy worker, and the multi-threaded build then starts its pthread pool with `new Worker(import.meta.url)` from *inside* that worker. That Chromium can't start a nested worker from an http(s) URL (blob: URLs work). The nested worker fires `error`, Emscripten never listens for it, and `InferenceSession.create` waits on the pool forever. Same in `astro dev` and the production build, so neither Vite nor the CDN was involved. **Fix** (`src/lib/ml/onnx-runtime.ts`): the Emscripten glue (`ort-wasm-simd-threaded.jsep.mjs`, self-hosted via Vite `?url`) is fetched once and passed to ORT as a blob: URL in `env.wasm.wasmPaths`, so its pthread workers start from a blob: URL too. Proxied creation of u2netp now takes about 0.2 s with 8 threads. Also fixed in the same helper: (1) all creates, `run()` and `release()` calls go through one queue, because the WASM backend rejects overlapping calls ("Session already started"); (2) the proxy mode is fixed by the first session, because ORT initializes only once and switching `proxy` afterwards sends calls to a runtime that was never started. If the runtime is proxied, a later WebGPU request runs on WASM instead, or is refused with a "reload" message for fp16 models; (3) creation has a 120 s timeout with a clear error instead of spinning forever |
