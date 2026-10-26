@@ -1,4 +1,5 @@
 import type { RawImage } from "@huggingface/transformers";
+import { requireNonCommercialModels } from "../model-licensing";
 import { applyMaskForeground } from "../media/bg-removal-canvas";
 import { loadSelfieSegmenter, segmentPersonMask } from "../media/selfie-segmenter";
 
@@ -47,8 +48,14 @@ async function loadRmbgConfig(modelId: string): Promise<Record<string, unknown>>
   return { ...config, model_type: "isnet" };
 }
 
-/** Shared with other tools (e.g. passerby-track.ts) so the ~44MB RMBG-1.4 model is only ever downloaded once. */
+/**
+ * RMBG-1.4 is NON-COMMERCIAL (see MODEL_LICENSES.md). No product feature loads it any more: Remove Background,
+ * Remove Passerby and the Studio all use U²-Net / MediaPipe. The only caller left is the license-gated
+ * RmbgAdapter, which the matting router selects only when a caller explicitly sets `allowNonCommercial`
+ * (none does) — kept for a deployment that buys BRIA's commercial license.
+ */
 export async function loadSegmenter(onProgress?: (p: CutoutProgress) => void): Promise<Segmenter> {
+  requireNonCommercialModels("This background-removal model (RMBG-1.4)");
   if (cachedSegmenter) return cachedSegmenter;
   const promise = (async () => {
     const [{ pipeline }, config] = await Promise.all([
@@ -253,9 +260,8 @@ export async function sampleTrimmedFrames(
 /**
  * Samples the trimmed range of `video` at a reduced fps, and for each sample
  * runs an in-browser person-segmentation model (MediaPipe's selfie
- * segmenter — see ../media/selfie-segmenter.ts; separate from `loadSegmenter`
- * above, which stays on RMBG-1.4 for this file's other, non-person-specific
- * callers) to cut the person out onto a transparent background. Used for the
+ * segmenter — see ../media/selfie-segmenter.ts) to cut the person out onto a
+ * transparent background. Used for the
  * live "behind a person" caption preview (nearest-sample lookup) and its
  * export overlay — deliberately kept on the small, fast, person-only model
  * since that feature is specifically about a person occluding text, and
@@ -280,40 +286,6 @@ export async function generatePersonCutouts(
       if (!mask) return null;
       const cutout = applyMaskForeground(canvas, canvas.width, canvas.height, mask, work);
       return new Promise<Blob | null>((resolve) => cutout.toBlob(resolve, "image/png"));
-    },
-  });
-}
-
-/**
- * Same shape as `generatePersonCutouts`, but backed by RMBG-1.4 (`loadSegmenter`)
- * — the same general-purpose dichotomous segmentation model the still-image
- * "no green screen" mode already uses — instead of the person-only selfie
- * model. Used by the Remove Background tool's video AI mode so it can find
- * *any* subject (a hand, a product, a phone/laptop, a person) rather than
- * just people, matching what the image path already does.
- */
-export async function generateSubjectCutouts(
-  video: HTMLVideoElement,
-  { start, end, onProgress, signal }: { start: number; end: number; onProgress?: (p: CutoutProgress) => void; signal?: AbortSignal },
-): Promise<CutoutFrame[]> {
-  const [segmenter, { RawImage }] = await Promise.all([loadSegmenter(onProgress), import("@huggingface/transformers")]);
-
-  return sampleTrimmedFrames(video, {
-    start,
-    end,
-    onProgress,
-    signal,
-    produceBlob: async (canvas) => {
-      const output = await segmenter(canvas);
-      let mask = output[0]?.mask;
-      if (!mask) return null;
-      if (mask.width !== canvas.width || mask.height !== canvas.height) {
-        mask = await mask.resize(canvas.width, canvas.height);
-      }
-      mask.grayscale();
-      const cutoutRaw = RawImage.fromCanvas(canvas).clone().rgba();
-      cutoutRaw.putAlpha(mask);
-      return (await cutoutRaw.toBlob("image/png")) as Blob;
     },
   });
 }

@@ -4,6 +4,7 @@ import ResultPanel from "../ResultPanel";
 import RecorderControls from "../media/RecorderControls";
 import KokoroVoicesTab from "./KokoroVoicesTab";
 import VoiceCloneTab from "./VoiceCloneTab";
+import { NONCOMMERCIAL_MODELS_ENABLED } from "../../../lib/model-licensing";
 import { useMediaRecorder } from "../../../lib/hooks/useMediaRecorder";
 import { stopAllTracks } from "../../../lib/media/mix-audio";
 import {
@@ -218,7 +219,7 @@ export default function TextToSpeechTool() {
     return (
       <div>
         {modeTabs}
-        <VoiceCloneTab />
+        {NONCOMMERCIAL_MODELS_ENABLED ? <VoiceCloneTab /> : <NonCommercialNotice feature="Voice cloning" />}
       </div>
     );
   }
@@ -398,6 +399,17 @@ export default function TextToSpeechTool() {
         Voices are provided by your operating system, so the list varies by device.
       </p>
       </div>
+    </div>
+  );
+}
+
+function NonCommercialNotice({ feature }: { feature: string }) {
+  return (
+    <div className="rounded-xl border border-(--color-border) bg-(--color-bg-subtle) p-4 text-body-sm text-(--color-text-muted)" role="note">
+      <p className="font-medium text-(--color-text)">{feature} isn't available on this site.</p>
+      <p className="mt-1">
+        The model behind it is licensed for non-commercial use only. See the <a href="/licenses" className="underline">licenses page</a> for details.
+      </p>
     </div>
   );
 }

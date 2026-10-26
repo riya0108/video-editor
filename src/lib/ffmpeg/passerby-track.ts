@@ -1,7 +1,8 @@
-import type { RawImage } from "@huggingface/transformers";
 import type { FractionRect } from "../../components/tool/video/RectOverlay";
 import type { LogoKeyframe } from "./logo-removal";
-import { loadSegmenter, waitForSeek } from "../captions/person-cutout";
+import { waitForSeek } from "../captions/person-cutout";
+import { getSharedModelRegistry } from "../matting/models/registry";
+import { supportsImage } from "../matting/types";
 
 export interface PersonTrackProgress {
   phase: "downloading" | "processing";
@@ -17,14 +18,17 @@ export interface PersonTrackResult {
 }
 
 // Foreground segmentation (unlike detecting "a watermark") is a real,
-// pre-trained capability already in this app (see person-cutout.ts) — so
-// unlike Smart watermark detection, this one genuinely is a small model
-// inference pass, not a CV heuristic.
+// pre-trained capability already in this app — U²-Net (Apache-2.0, bundled in
+// /public/models, shared with Remove Background) — so unlike Smart watermark
+// detection, this one genuinely is a small model inference pass, not a CV
+// heuristic. (It used RMBG-1.4 until 2026-10; that model is non-commercial —
+// see MODEL_LICENSES.md.)
 const MAX_SAMPLES = 10;
-const MASK_THRESHOLD = 0.35 * 255;
+const MASK_THRESHOLD = 0.35;
 const MAX_ANALYSIS_WIDTH = 480;
 
-function boundingBoxFraction(mask: RawImage): FractionRect | null {
+/** Bounding box of the foreground (alpha 0..1 above the threshold), as fractions of the frame. */
+function boundingBoxFraction(mask: { data: Float32Array; width: number; height: number }): FractionRect | null {
   const { data, width, height } = mask;
   let minX = width;
   let minY = height;
@@ -45,8 +49,8 @@ function boundingBoxFraction(mask: RawImage): FractionRect | null {
 }
 
 /**
- * Samples a handful of frames across [start, end], runs the same RMBG-1.4
- * foreground-segmentation model used for person-cutout captions on each one,
+ * Samples a handful of frames across [start, end], runs the U²-Net
+ * foreground-segmentation model (the one Remove Background uses) on each one,
  * and turns the detected person's bounding box per frame into a fixed-size
  * region plus one keyframe per sample — ready to hand straight to a Region's
  * `keyframes` so the delogo patch tracks the person's movement.
@@ -58,7 +62,9 @@ export async function detectPersonTrack(
   const duration = Math.max(0, end - start);
   if (duration <= 0 || video.videoWidth === 0) return null;
 
-  const segmenter = await loadSegmenter((p) => onProgress?.({ phase: "downloading", fraction: p.fraction }));
+  const u2net = getSharedModelRegistry().find((m) => m.capabilities.modelId === "u2net");
+  if (!u2net || !supportsImage(u2net)) throw new Error("The foreground model isn't available.");
+  await u2net.load((fraction) => onProgress?.({ phase: "downloading", fraction }));
 
   const naturalW = video.videoWidth;
   const naturalH = video.videoHeight;
@@ -89,14 +95,10 @@ export async function detectPersonTrack(
       await waitForSeek(video);
       ctx.drawImage(video, 0, 0, w, h);
 
-      const output = await segmenter(canvas);
-      let mask = output[0]?.mask;
-      if (mask) {
-        if (mask.width !== w || mask.height !== h) mask = await mask.resize(w, h);
-        mask.grayscale();
-        const rect = boundingBoxFraction(mask);
-        if (rect) samples.push({ t: times[i], rect });
-      }
+      // The box is a FRACTION of the frame, so the model's native output resolution is fine as is.
+      const out = await u2net.inferImage({ source: canvas, width: w, height: h });
+      const rect = boundingBoxFraction({ data: out.alpha, width: out.alphaWidth, height: out.alphaHeight });
+      if (rect) samples.push({ t: times[i], rect });
       onProgress?.({ phase: "processing", fraction: (i + 1) / times.length });
     }
   } finally {

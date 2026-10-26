@@ -53,4 +53,9 @@ if (patched === original) {
   writeFileSync(corePath, patched);
 }
 
+// GPL compliance: the license and the source/modification notice travel with the binary (see /licenses).
+const licenses = join(__dirname, "..", "licenses");
+copyFileSync(join(licenses, "GPL-2.0.txt"), join(dest, "LICENSE.txt"));
+copyFileSync(join(licenses, "FFMPEG_CORE_SOURCE.txt"), join(dest, "SOURCE.txt"));
+
 console.log("[copy-ffmpeg-core] Copied ffmpeg-core files to public/ffmpeg");

@@ -1,3 +1,4 @@
+import { requireNonCommercialModels } from "../model-licensing";
 import { Tensor } from "@huggingface/transformers";
 import * as ort from "onnxruntime-web";
 import { createInferenceSession, detectRuntimeDevice, type RuntimeDevice } from "../ml/onnx-runtime";
@@ -33,6 +34,7 @@ export class F5TTS {
   private device: RuntimeDevice = { provider: "wasm", useFp16: false };
 
   async initialize(onProgress?: (p: F5TTSProgress) => void) {
+    requireNonCommercialModels("Voice cloning");
     this.device = await detectRuntimeDevice();
     const transformerFile = this.device.useFp16 ? "onnx/transformer_fp16.onnx" : "onnx/transformer_fp32.onnx";
 

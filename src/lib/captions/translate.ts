@@ -1,3 +1,4 @@
+import { requireNonCommercialModels } from "../model-licensing";
 import { nextCaptionId, type CaptionCue } from "./types";
 
 // Meta's NLLB-200, distilled to 600M params — a single model that translates
@@ -50,6 +51,7 @@ export async function translateCues(
   sourceLanguageCode: string,
   onProgress?: (p: TranslateProgress) => void,
 ): Promise<CaptionCue[]> {
+  requireNonCommercialModels("Caption translation");
   const translator = (await loadTranslator(onProgress)) as (
     text: string,
     options: Record<string, unknown>,

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { NONCOMMERCIAL_MODELS_ENABLED } from "../../../lib/model-licensing";
 import {
   Sparkles,
   Upload,
@@ -413,7 +414,12 @@ export default function CaptionsEditor({
               language with an in-browser NLLB-200 model — same fully-local
               approach as auto-generate's Whisper model above. ---- */}
           <ToolPanelSection icon={Languages} label="Translate">
-            {cues.length === 0 ? (
+            {!NONCOMMERCIAL_MODELS_ENABLED ? (
+              <p className="text-body-sm text-(--color-text-muted)">
+                Translation isn't available on this site: its model (NLLB-200) is licensed for non-commercial use only. See the{" "}
+                <a href="/licenses" className="underline">licenses page</a>.
+              </p>
+            ) : cues.length === 0 ? (
               <p className="text-body-sm text-(--color-text-muted)">Add some captions above first.</p>
             ) : (
               <div className="space-y-3">

@@ -4,7 +4,15 @@ Scope: every model (existing or proposed) touched by the background-removal / ma
 
 Verified 2026-09-26 by reading each project's own `LICENSE` file / Hugging Face model card via web search. **Re-verify at actual implementation time** — upstream licenses can and do change between minor versions (BRIA has shipped different license text across RMBG point releases).
 
-## ⚠️ Pre-existing risk already in production (not introduced by this plan)
+## Status update 2026-10-26 — non-commercial models are gated off
+
+- **RMBG-1.4**: no product feature loads it any more. Remove Passerby's tracker (`src/lib/ffmpeg/passerby-track.ts`) now uses U²-Net; the unused `generateSubjectCutouts` was deleted. `loadSegmenter` refuses to run unless `PUBLIC_ALLOW_NONCOMMERCIAL_MODELS=true`, and the matting router still excludes the RMBG adapter unless a caller sets `allowNonCommercial` (none does).
+- **NLLB-200** (`facebook/nllb-200-distilled-600M`, via `Xenova/`), caption translation — **CC-BY-NC-4.0**. Gated by the same flag (`src/lib/model-licensing.ts`); the Translate panel says why it's off.
+- **F5-TTS** (`nsarang/F5-TTS-ONNX`, weights from `SWivid/F5-TTS`), voice cloning — **CC-BY-NC-4.0**. Gated by the same flag; the Clone tab says why it's off.
+- **Whisper** (MIT) and **Kokoro-82M** (Apache-2.0) are fine for commercial use.
+- Public notices for everything shipped: `/licenses` (src/pages/licenses.astro).
+
+## ⚠️ Pre-existing risk already in production (not introduced by this plan) — historical, see the update above
 
 ### briaai/RMBG-1.4 — **non-commercial only**
 
