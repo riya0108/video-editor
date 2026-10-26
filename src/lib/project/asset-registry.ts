@@ -65,7 +65,7 @@ export class AssetRegistry {
    * Generated media as stored blobs: still = one PNG at frame 0; sequence = PNGs keyed by source frame; matte-track =
    * one matte-track.ts chunk per entry, keyed by its first source frame. The blob bytes are shared, not copied.
    */
-  async setGenerated(id: string, kind: "still" | "sequence" | "matte-track", label: string, generator: string, frames: { frame: number; bytes: Uint8Array; width: number; height: number }[], media?: AssetRecord["media"]): Promise<AssetRecord> {
+  async setGenerated(id: string, kind: "still" | "sequence" | "matte-track" | "audio", label: string, generator: string, frames: { frame: number; bytes: Uint8Array; width: number; height: number }[], media?: AssetRecord["media"]): Promise<AssetRecord> {
     if (frames.length === 0) throw new Error(`Generated asset "${id}" has no frames.`);
     const out: GeneratedFrame[] = [];
     for (const f of [...frames].sort((a, b) => a.frame - b.frame)) {

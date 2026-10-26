@@ -44,6 +44,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "astro": "^7.3.8",
+    "gifenc": "^1.0.3",
     "kokoro-js": "^1.2.1",
     "lucide-react": "^1.30.0",
     "mediabunny": "^1.61.3",

@@ -71,6 +71,7 @@ export default defineConfig({
         "wavesurfer.js",
         "wavesurfer.js/plugins/regions",
         "mediabunny",
+        "gifenc",
       ],
     },
   },

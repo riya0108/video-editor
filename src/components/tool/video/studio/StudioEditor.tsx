@@ -15,6 +15,7 @@ import {
   Pause,
   Play,
   Redo2,
+  ScrollText,
   Shapes,
   SkipBack,
   SkipForward,
@@ -33,7 +34,7 @@ import { normalizeTextStyle, type TextStyle } from "../../../../lib/timeline/tex
 import { normalizeShapeSpec, shapePreset, type ShapePreset } from "../../../../lib/timeline/shape-style";
 import { GRAPHICS_LIBRARY } from "../../../../lib/graphics/library";
 import { svgSpecFromMarkup } from "../../../../lib/graphics/svg";
-import { addTextLayer as addTextLayerOp, type AuthoredContentPatch } from "../../../../lib/timeline/operations";
+import { addTextLayer as addTextLayerOp, addTrack as addTrackOp, insertClip as insertClipOp, setClipAudio as setClipAudioOp, type AuthoredContentPatch } from "../../../../lib/timeline/operations";
 import { activeMotionSlots, applyMotionPreset, type MotionSlot } from "../../../../lib/animation/motion-presets";
 import { STICKERS } from "../../../../lib/graphics/stickers";
 import { DEFAULT_BRAND_KIT, loadBrandKit, logoPosition, saveBrandKit, type BrandKit } from "../../../../lib/brand/brand-kit";
@@ -66,7 +67,18 @@ import { captionCuesOf } from "../../../../lib/timeline/operations";
 import type { CaptionProgress } from "../../../../lib/captions/auto-caption";
 import { AudioSourceStore } from "../../../../lib/audio/source-store";
 import { AudioPlaybackEngine } from "../../../../lib/audio/playback";
-import { clipPeakDb, mixTimeline } from "../../../../lib/audio/engine-core";
+import { clipPeakDb, encodeWav16, mixTimeline } from "../../../../lib/audio/engine-core";
+import { cleanVoice } from "../../../../lib/audio/clean";
+import { separateStems, resampleTo44k, STEM_SAMPLE_RATE } from "../../../../lib/audio/stems";
+import { applyDucking, speechRegions } from "../../../../lib/audio/ducking";
+import { beatsOnTimeline, detectBeats, snapCutsToBeats, splitOnBeats, type BeatAnalysis } from "../../../../lib/audio/beats";
+import { toMonoChannels } from "../../../../lib/audio/dsp";
+import { isFillerWord, rangesForPauses, rangesForWords, timelineWords, transcriptSources, type SourceWord } from "../../../../lib/transcript/transcript";
+import { buildShortTimeline, findClips, type ClipCandidate } from "../../../../lib/transcript/clip-finder";
+import { rippleDeleteRanges } from "../../../../lib/timeline/ripple";
+import { swapBackground, type BackgroundChoice } from "../../../../lib/composition/background-swap";
+import { exportGif } from "../../../../lib/export/gif";
+import type { TimelineModel } from "../../../../lib/timeline/model";
 import { AUDIO_ROLES, guessAudioRole, isAudibleKind } from "../../../../lib/audio/model";
 import { valueAt } from "../../../../lib/animation/properties";
 import { AssetRegistry } from "../../../../lib/project/asset-registry";
@@ -81,6 +93,7 @@ import { ASPECTS, AspectGlyph, CanvasSettings, ElementsDrawer, MediaDrawer, Text
 import StartScreen from "./StartScreen";
 import { BrandDrawer, StockDrawer } from "./AssetDrawers";
 import { CaptionTemplates, MotionPresetPicker } from "./TemplateGalleries";
+import { AudioToolsSection, BackgroundSwapSection, ClipsPanel, GifExportBox, TranscriptPanel, type Busy } from "./AiToolsPanels";
 
 /**
  * CLIPBENCH STUDIO — the full-screen editor. The composition engine (src/lib/composition), timeline engine,
@@ -99,14 +112,15 @@ import { CaptionTemplates, MotionPresetPicker } from "./TemplateGalleries";
 const FPS = 30;
 const DEMO_VIDEO_URL = "/videos/hero-phone-demo.mp4";
 
-type RailId = "media" | "stock" | "text" | "elements" | "captions" | "audio" | "transitions" | "ai" | "brand" | "layers";
+type RailId = "media" | "stock" | "text" | "elements" | "captions" | "transcript" | "audio" | "transitions" | "ai" | "brand" | "layers";
 const RAIL: { id: RailId; label: string; icon: typeof ImagePlus; title: string; subtitle: string }[] = [
   { id: "media", label: "Media", icon: ImagePlus, title: "Media", subtitle: "Upload video, images and audio" },
   { id: "stock", label: "Stock", icon: Library, title: "Stock library", subtitle: "Free videos, photos and music" },
   { id: "text", label: "Text", icon: Type, title: "Text", subtitle: "Click a style to add it at the playhead" },
   { id: "elements", label: "Elements", icon: Shapes, title: "Elements", subtitle: "Stickers, emoji, shapes and graphics" },
   { id: "captions", label: "Captions", icon: Captions, title: "Captions", subtitle: "Pick a template, then generate or import" },
-  { id: "audio", label: "Audio", icon: Music, title: "Audio", subtitle: "Music, voiceover and the final mix" },
+  { id: "transcript", label: "Transcript", icon: ScrollText, title: "Transcript & clips", subtitle: "Edit by deleting words · turn long videos into shorts" },
+  { id: "audio", label: "Audio", icon: Music, title: "Audio", subtitle: "Clean voice, separate stems, duck music, sync to the beat" },
   { id: "transitions", label: "Transitions", icon: ArrowLeftRight, title: "Transitions", subtitle: "Between clips, or in and out of one" },
   { id: "ai", label: "AI tools", icon: Sparkles, title: "AI tools", subtitle: "Detect, cut and reframe automatically" },
   { id: "brand", label: "Brand", icon: Palette, title: "Brand kit", subtitle: "Your logo, colors and fonts — on every project" },
@@ -285,6 +299,20 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
   /** A caption template picked before any captions exist: applied to the first caption track created. */
   const pendingCaptionPresetRef = useRef<string | null>(null);
   const [pendingCaptionPreset, setPendingCaptionPreset] = useState<string | null>(null);
+  // --- Phase 3 tools ---
+  /** Word transcripts per SOURCE (source seconds) — the timeline transcript is derived from these. */
+  const [transcripts, setTranscripts] = useState<ReadonlyMap<string, SourceWord[]>>(new Map());
+  const [transcriptBusy, setTranscriptBusy] = useState<Busy | null>(null);
+  const [transcriptTab, setTranscriptTab] = useState<"words" | "clips">("words");
+  const [clipCandidates, setClipCandidates] = useState<ClipCandidate[] | null>(null);
+  const [clipExport, setClipExport] = useState<{ cand: ClipCandidate; timeline: TimelineModel } | null>(null);
+  const [audioBusy, setAudioBusy] = useState<Busy | null>(null);
+  const [beatInfo, setBeatInfo] = useState<{ clipId: string; analysis: BeatAnalysis; offsetSec: number } | null>(null);
+  const [gifBusy, setGifBusy] = useState<Busy | null>(null);
+  const [gifResult, setGifResult] = useState<{ url: string; bytes: number } | null>(null);
+  const toolAbortRef = useRef<AbortController | null>(null);
+  /** Derived transcript, recomputed only when the timeline or the transcripts change (not every playback frame). */
+  const wordsCache = useRef<{ tl: unknown; tr: unknown; words: ReturnType<typeof timelineWords> } | null>(null);
   /** Set when the user starts from footage: the canvas then takes the first video's (or image's) size. */
   const matchCanvasRef = useRef(false);
   const toastId = useRef(0);
@@ -901,6 +929,254 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
     setPendingCaptionPreset(null);
     apply(engine.applyCaptionPreset(trackId, pending));
   };
+  // ------------------------------------------------------------------ Phase 3: AI & audio tools
+  const startTool = () => {
+    toolAbortRef.current?.abort();
+    const ac = new AbortController();
+    toolAbortRef.current = ac;
+    return ac.signal;
+  };
+  const isAbort = (e: unknown) => (e as { name?: string })?.name === "AbortError";
+  /** The bottom-most video track — the main sequence. */
+  const mainVideoTrack = () => [...engine.timeline.trackIds].reverse().find((t) => engine.timeline.tracks[t].kind === "video") ?? null;
+  /** A clip's sound, exactly the span it plays (source in -> out). */
+  const clipPcm = (clip: Clip) => {
+    if (!audioStore || !isTrimmableContent(clip.content)) return null;
+    const pcm = audioStore.pcm(clip.content.source.sourceId);
+    if (!pcm) return null;
+    const a = Math.round((clip.content.sourceInFrame / FPS) * pcm.sampleRate);
+    const b = Math.min(pcm.channels[0].length, a + Math.round(((clipTimelineEnd(clip) - clip.timelineStart) / FPS) * pcm.sampleRate));
+    return { channels: pcm.channels.map((c) => c.subarray(a, b)), sampleRate: pcm.sampleRate, offsetSec: clip.content.sourceInFrame / FPS };
+  };
+  /** Stores processed audio IN the project (generated asset) and decodes it for playback. */
+  const addGeneratedAudio = async (channels: Float32Array[], sampleRate: number, label: string, generator: string) => {
+    const bytes = encodeWav16(channels, sampleRate);
+    const id = `gen-${generator}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const durationSec = channels[0].length / sampleRate;
+    await registry.setGenerated(id, "audio", label, generator, [{ frame: 0, bytes, width: 0, height: 0 }], { durationSec });
+    const st = await audioStore!.add(id, new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "audio/wav" }), label);
+    if (st.state !== "ready") throw new Error("the processed audio couldn't be decoded");
+    return { id, frames: Math.max(1, Math.floor(durationSec * FPS)) };
+  };
+  /** New audio tracks aligned with `clip`, whose own sound is muted (non-destructive: unmute or undo to go back). One undo step. */
+  const placeProcessedAudio = (clip: Clip, items: { id: string; frames: number; name: string; role: "voiceover" | "music" }[]) => {
+    const fades = clip.audio ? { fadeInFrames: clip.audio.fadeInFrames, fadeOutFrames: clip.audio.fadeOutFrames } : {};
+    return engine.transact((tl) => {
+      let next = tl;
+      for (const it of items) {
+        const t = addTrackOp(next, "audio", it.name);
+        const ins = insertClipOp(t.timeline, t.track.id, { kind: "audio", source: { sourceId: it.id, label: it.name, sourceDurationFrames: it.frames }, sourceInFrame: 0, sourceOutFrame: Math.min(it.frames, clipTimelineEnd(clip) - clip.timelineStart) }, clip.timelineStart);
+        next = setClipAudioOp(ins.timeline, ins.clip.id, { role: it.role, ...fades });
+      }
+      return setClipAudioOp(next, clip.id, { muted: true });
+    });
+  };
+  const clipName = (clip: Clip) => (clip.content as { source?: { label?: string } }).source?.label ?? timeline.tracks[clip.trackId]?.name ?? "clip";
+
+  const runCleanAudio = async (clip: Clip, strength: number) => {
+    const src = clipPcm(clip);
+    if (!src) return toast("warning", "That clip's audio isn't decoded yet (or it has none).", 6000);
+    const signal = startTool();
+    setAudioBusy({ label: "Cleaning audio…", fraction: 0 });
+    try {
+      const { audio, report } = await cleanVoice(toMonoChannels(src.channels), src.sampleRate, { strength, normalize: true }, (f) => setAudioBusy({ label: "Cleaning audio…", fraction: f }), signal);
+      const g = await addGeneratedAudio([audio], src.sampleRate, `Clean voice · ${clipName(clip)}`, "clean-audio");
+      apply(placeProcessedAudio(clip, [{ ...g, name: `Clean voice · ${clipName(clip)}`, role: "voiceover" }]));
+      setNotice(`Cleaned: noise floor ${report.noiseFloorDb.toFixed(0)} dBFS reduced up to ${report.reductionDb.toFixed(0)} dB, level ${report.gainDb >= 0 ? "+" : ""}${report.gainDb.toFixed(1)} dB. The original sound is muted, not deleted.`);
+    } catch (e) {
+      if (!isAbort(e)) toast("error", `Clean audio failed: ${(e as Error).message}`);
+    } finally {
+      setAudioBusy(null);
+    }
+  };
+  const runStems = async (clip: Clip) => {
+    const src = clipPcm(clip);
+    if (!src) return toast("warning", "That clip's audio isn't decoded yet (or it has none).", 6000);
+    const signal = startTool();
+    setAudioBusy({ label: "Preparing audio…", fraction: null });
+    try {
+      const at44 = await resampleTo44k(src.channels, src.sampleRate);
+      const out = await separateStems(at44, (p) => setAudioBusy({ label: p.phase === "downloading" ? "Downloading the separation model (~40 MB, once)…" : "Separating vocals and music…", fraction: p.fraction }), signal);
+      setAudioBusy({ label: "Saving stems…", fraction: null });
+      const v = await addGeneratedAudio(out.vocals, STEM_SAMPLE_RATE, `Vocals · ${clipName(clip)}`, "stems-vocals");
+      const m = await addGeneratedAudio(out.accompaniment, STEM_SAMPLE_RATE, `Music · ${clipName(clip)}`, "stems-music");
+      apply(
+        placeProcessedAudio(clip, [
+          { ...v, name: `Vocals · ${clipName(clip)}`, role: "voiceover" },
+          { ...m, name: `Music · ${clipName(clip)}`, role: "music" },
+        ]),
+      );
+      setNotice("Separated into Vocals and Music tracks — mute or delete either one. The original sound is muted.");
+    } catch (e) {
+      if (!isAbort(e)) toast("error", `Separation failed: ${(e as Error).message}`);
+    } finally {
+      setAudioBusy(null);
+    }
+  };
+  const runDucking = (duckDb: number) => {
+    if (!audioStore) return;
+    const tl = engine.timeline;
+    const isMusicClip = (c: Clip) => c.audio?.role === "music";
+    const music = Object.values(tl.clips).filter((c) => isMusicClip(c) && !c.audio?.muted);
+    // Voice = everything audible except music: music tracks are muted in a throwaway copy for the analysis mix.
+    const voiceOnly: TimelineModel = { ...tl, tracks: Object.fromEntries(Object.entries(tl.tracks).map(([id, t]) => [id, t.clipIds.some((cid) => isMusicClip(tl.clips[cid])) ? { ...t, muted: true, solo: false } : t])) };
+    const dur = Math.max(1, timelineDurationFrames(tl)) / FPS;
+    const mix = mixTimeline(voiceOnly, (id) => audioStore.pcm(id), { sampleRate: 16000, startSec: 0, endSec: dur });
+    if (mix.peak === 0) return toast("warning", "No speech to duck under — the non-music tracks are silent.", 6000);
+    const regions = speechRegions(toMonoChannels(mix.channels), 16000);
+    const r = engine.transact((t0) => applyDucking(t0, music.map((c) => c.id), regions, { duckDb, attackSec: 0.3, releaseSec: 0.8 }).timeline);
+    apply(r);
+    if (r.ok) setNotice(`Ducked ${music.length} music clip${music.length > 1 ? "s" : ""} under ${regions.length} stretch${regions.length > 1 ? "es" : ""} of speech (gain keyframes — editable in Motion).`);
+  };
+  const runBeats = async (clip: Clip) => {
+    const src = clipPcm(clip);
+    if (!src) return toast("warning", "That clip's audio isn't decoded yet.", 6000);
+    const signal = startTool();
+    setAudioBusy({ label: "Listening for the beat…", fraction: null });
+    try {
+      const analysis = await detectBeats(toMonoChannels(src.channels), src.sampleRate, signal);
+      setBeatInfo({ clipId: clip.id, analysis, offsetSec: src.offsetSec });
+    } catch (e) {
+      if (!isAbort(e)) toast("error", `Beat detection failed: ${(e as Error).message}`);
+    } finally {
+      setAudioBusy(null);
+    }
+  };
+  const beatFrames = () => (beatInfo && engine.timeline.clips[beatInfo.clipId] ? beatsOnTimeline(engine.timeline, beatInfo.clipId, beatInfo.analysis.beats.map((b) => b + beatInfo.offsetSec)) : []);
+  const runSplitOnBeats = (every: number) => {
+    const track = mainVideoTrack();
+    if (!track) return toast("warning", "Add video to the main track first.", 6000);
+    let cuts = 0;
+    const r = engine.transact((tl) => {
+      const out = splitOnBeats(tl, track, beatFrames(), every);
+      cuts = out.cuts;
+      return out.timeline;
+    });
+    apply(r);
+    if (r.ok) setNotice(`Cut the main video on ${cuts} beats. Rearrange or delete pieces to make it pop.`);
+  };
+  const runSnapToBeats = () => {
+    const track = mainVideoTrack();
+    if (!track) return;
+    let snapped = 0;
+    const r = engine.transact((tl) => {
+      const out = snapCutsToBeats(tl, track, beatFrames(), Math.round(FPS / 2));
+      snapped = out.snapped;
+      return out.timeline;
+    });
+    apply(r);
+    if (r.ok) setNotice(snapped ? `Moved ${snapped} cut${snapped > 1 ? "s" : ""} onto the beat.` : "Every cut already sits on a beat (or there are no cuts between clips on the main track).");
+  };
+
+  // --- transcript ---
+  const transcribeSources = async (): Promise<ReadonlyMap<string, SourceWord[]> | null> => {
+    if (!audioStore) return null;
+    const todo = transcriptSources(engine.timeline).filter((id) => !transcripts.has(id) && audioStore.pcm(id));
+    if (todo.length === 0) return transcripts;
+    const next = new Map(transcripts);
+    try {
+      const { transcribeAudio16k } = await import("../../../../lib/captions/auto-caption");
+      for (const [i, id] of todo.entries()) {
+        const pcm = audioStore.pcm(id)!;
+        const label = todo.length > 1 ? ` (${i + 1}/${todo.length})` : "";
+        setTranscriptBusy({ label: `Preparing${label}…`, fraction: null });
+        const { words } = await transcribeAudio16k(toMono16k(pcm.channels, pcm.sampleRate), {
+          modelTier: "fast",
+          onProgress: (p) => setTranscriptBusy({ label: p.phase === "downloading" ? "Downloading speech model (once)…" : `Transcribing${label}…`, fraction: p.fraction }),
+        });
+        next.set(id, words.map((w) => ({ text: w.text, start: w.start, end: w.end })));
+        setTranscripts(new Map(next));
+      }
+      return next;
+    } catch (e) {
+      toast("error", `Transcription failed: ${(e as Error).message}`);
+      return null;
+    } finally {
+      setTranscriptBusy(null);
+    }
+  };
+  const cutWords = (ranges: [number, number][], what: string) => {
+    if (ranges.length === 0) return;
+    let removed = 0;
+    const r = engine.transact((tl) => {
+      const out = rippleDeleteRanges(tl, ranges);
+      removed = out.removedFrames;
+      return out.timeline;
+    });
+    apply(r);
+    if (r.ok) setNotice(`${what} — ${(removed / FPS).toFixed(1)} s cut from every track. ⌘Z to undo.`);
+  };
+  const runFindClips = async (minSec: number, maxSec: number) => {
+    const tr = await transcribeSources();
+    if (!tr || !audioStore) return;
+    setTranscriptBusy({ label: "Scoring moments…", fraction: null });
+    await new Promise((r) => setTimeout(r, 0));
+    try {
+      const tl = engine.timeline;
+      const words = timelineWords(tl, tr);
+      // Loudness envelope (250 ms windows) of the whole mix, for the energy signal.
+      const dur = Math.max(1, timelineDurationFrames(tl)) / FPS;
+      const mix = mixTimeline(tl, (id) => audioStore.pcm(id), { sampleRate: 4000, startSec: 0, endSec: dur });
+      const mono = toMonoChannels(mix.channels);
+      const win = 1000;
+      const env = Array.from({ length: Math.ceil(mono.length / win) }, (_, i) => {
+        let s2 = 0;
+        for (let j = i * win; j < Math.min(mono.length, (i + 1) * win); j++) s2 += mono[j] * mono[j];
+        return 10 * Math.log10(Math.max(1e-10, s2 / win));
+      });
+      const loudness = (a: number, b: number) => {
+        const i0 = Math.floor(a * 4);
+        const i1 = Math.max(i0 + 1, Math.ceil(b * 4));
+        const slice = env.slice(i0, i1);
+        return slice.reduce((x, y) => x + y, 0) / Math.max(1, slice.length);
+      };
+      setClipCandidates(findClips(words, { minSec, maxSec, count: 5, loudness }));
+    } finally {
+      setTranscriptBusy(null);
+    }
+  };
+
+  // --- background swap ---
+  const runSwap = async (clip: Clip, choice: BackgroundChoice | { kind: "image-file"; file: File }) => {
+    let c: BackgroundChoice;
+    if (choice.kind === "image-file") {
+      if (!provider) return;
+      const id = `bg-${Date.now().toString(36)}`;
+      try {
+        const info = await provider.addImage(id, choice.file);
+        await registry.setFile(id, "image", choice.file, { width: info.width, height: info.height });
+      } catch (e) {
+        provider.remove(id);
+        return toast("error", describeDecodeFailure(choice.file, "image", e));
+      }
+      c = { kind: "media", sourceId: id, label: choice.file.name, mediaKind: "image" };
+    } else c = choice;
+    const r = engine.transact((tl) => swapBackground(tl, clip.id, c).timeline);
+    apply(r);
+    if (r.ok) {
+      engine.select(clip.id);
+      setNotice("New background placed behind the subject — it's its own track, so you can trim, move or animate it.");
+    }
+  };
+
+  // --- GIF ---
+  const runGif = async (o: { fps: number; width: number; startSec: number; endSec: number; loop: boolean }) => {
+    if (!finalRenderer) return;
+    const signal = startTool();
+    setGifBusy({ label: "Rendering GIF…", fraction: 0 });
+    try {
+      const blob = await exportGif(engine.timeline, finalRenderer, o, (f) => setGifBusy({ label: "Rendering GIF…", fraction: f }), signal);
+      setGifResult((old) => {
+        if (old) URL.revokeObjectURL(old.url);
+        return { url: URL.createObjectURL(blob), bytes: blob.size };
+      });
+    } catch (e) {
+      if (!isAbort(e)) toast("error", `GIF export failed: ${(e as Error).message}`);
+    } finally {
+      setGifBusy(null);
+    }
+  };
+
   const addLogo = async () => {
     const logo = brand.logo;
     if (!logo || !provider) return;
@@ -958,6 +1234,8 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
   const selectedLayer = selectedClip ? resolveClipLayer(timeline, selectedClip.id, frame, { getSourceInfo: (id) => provider.getSourceInfo(id), measurer }) : null;
   const activeMaskId = activeMask && selectedClip && activeMask.clipId === selectedClip.id && selectedClip.masks?.some((m) => m.id === activeMask.maskId) ? activeMask.maskId : null;
   const locked = selectedClip ? (timeline.tracks[selectedClip.trackId]?.locked ?? false) : false;
+  if (!wordsCache.current || wordsCache.current.tl !== timeline || wordsCache.current.tr !== transcripts) wordsCache.current = { tl: timeline, tr: transcripts, words: timelineWords(timeline, transcripts) };
+  const words = wordsCache.current.words;
   const keyframeControl = (clip: Clip) => (path: string) => {
     const track = clip.animation?.tracks[path];
     const key = track?.keyframes.find((k) => k.frame === frame - clip.timelineStart);
@@ -1192,6 +1470,16 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
             />
           )}
           {tab === "cutout" && (
+            <BackgroundSwapSection
+              hasCutout={!!clip.visual?.matte}
+              canBlur={isTrimmableContent(clip.content)}
+              brandColors={brand.colors}
+              onColor={(color) => void runSwap(clip, { kind: "color", color })}
+              onImage={(file) => void runSwap(clip, { kind: "image-file", file })}
+              onBlur={(radius) => void runSwap(clip, { kind: "blur", radius })}
+            />
+          )}
+          {tab === "cutout" && (
             <MasksPanel
               clip={
                 maskDraft?.clipId === clip.id
@@ -1266,6 +1554,65 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
       case "stock":
         body = <StockDrawer onImport={importStock} />;
         break;
+      case "transcript": {
+        const sources = transcriptSources(timeline);
+        body = (
+          <div className="flex flex-col gap-3">
+            <div className="px-2">
+              <Tabs
+                tabs={[
+                  { id: "words", label: "Edit by text" },
+                  { id: "clips", label: "Make clips" },
+                ]}
+                active={transcriptTab}
+                onChange={(id) => setTranscriptTab(id as "words" | "clips")}
+              />
+            </div>
+            {transcriptTab === "words" ? (
+              <TranscriptPanel
+                words={words}
+                hasSpeechClips={sources.length > 0}
+                untranscribed={sources.filter((id) => !transcripts.has(id)).length}
+                busy={transcriptBusy}
+                currentSec={frame / FPS}
+                pauseCount={rangesForPauses(words, FPS).length}
+                onTranscribe={() => void transcribeSources()}
+                onSeek={(sec) => seek(Math.round(sec * FPS))}
+                onDelete={(keys) => cutWords(rangesForWords(words, keys, FPS), `Deleted ${keys.size} word${keys.size > 1 ? "s" : ""}`)}
+                onRemoveFillers={() => {
+                  const keys = new Set(words.filter((w) => isFillerWord(w.text)).map((w) => w.key));
+                  cutWords(rangesForWords(words, keys, FPS), `Removed ${keys.size} filler word${keys.size > 1 ? "s" : ""}`);
+                }}
+                onShortenPauses={() => cutWords(rangesForPauses(words, FPS), "Shortened long pauses")}
+              />
+            ) : (
+              <ClipsPanel
+                hasTranscript={sources.length > 0 && sources.every((id) => transcripts.has(id))}
+                candidates={clipCandidates}
+                busy={transcriptBusy}
+                onFind={(a, b) => void runFindClips(a, b)}
+                onPreview={(c) => {
+                  const a = Math.round(c.start * FPS);
+                  setFrame(a);
+                  setPlayRange({ start: a, end: Math.round(c.end * FPS) });
+                  setPlaying(true);
+                }}
+                onExport={(c) => setClipExport({ cand: c, timeline: buildShortTimeline(engine.timeline, c, words, { captions: true }) })}
+                onEdit={(c) => {
+                  const r = engine.transact((tl) => buildShortTimeline(tl, c, words, { captions: true }));
+                  apply(r);
+                  if (r.ok) {
+                    setFrame(0);
+                    setClipCandidates(null);
+                    setNotice("This is now a vertical short with captions. Export it, then press ⌘Z to return to the full video and make the next one.");
+                  }
+                }}
+              />
+            )}
+          </div>
+        );
+        break;
+      }
       case "brand":
         body = (
           <BrandDrawer
@@ -1351,6 +1698,21 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
             ) : (
               <p className="rounded-xl bg-(--color-bg-subtle) px-3 py-3 text-caption text-(--color-text-muted)">Select a video or audio clip on the timeline to set its volume, fades and gain, or to normalize it.</p>
             )}
+            <AudioToolsSection
+              clipLabel={selectedClip && isAudible ? clipName(selectedClip) : null}
+              canProcess={!!selectedClip && isAudible && !!audioStore && isTrimmableContent(selectedClip.content) && audioStore.status(selectedClip.content.source.sourceId).state === "ready"}
+              isMusic={!!selectedClip && (selectedClip.audio?.role === "music" || timeline.tracks[selectedClip.trackId]?.kind === "audio")}
+              busy={audioBusy}
+              beats={beatInfo && timeline.clips[beatInfo.clipId] ? beatInfo.analysis : null}
+              canDuck={Object.values(timeline.clips).some((c) => c.audio?.role === "music") && Object.values(timeline.clips).some((c) => isAudibleKind(c.content.kind) && c.audio?.role !== "music")}
+              onClean={(st) => selectedClip && void runCleanAudio(selectedClip, st)}
+              onStems={() => selectedClip && void runStems(selectedClip)}
+              onDetectBeats={() => selectedClip && void runBeats(selectedClip)}
+              onSplitBeats={runSplitOnBeats}
+              onSnapBeats={runSnapToBeats}
+              onDuck={runDucking}
+              onCancel={() => toolAbortRef.current?.abort()}
+            />
             <div>
               <h3 className="mb-2 px-1 text-caption font-semibold tracking-wide text-(--color-text-muted) uppercase">Export the mix</h3>
               {audioStore && <AudioExportBox store={audioStore} timeline={timeline} />}
@@ -1707,11 +2069,23 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
           )}
           <div className="flex flex-col gap-2 border-t border-(--color-border) pt-4">
             <h3 className="text-caption font-semibold tracking-wide text-(--color-text-muted) uppercase">More exports</h3>
+            <GifExportBox durationSec={duration / FPS} compWidth={timeline.composition.width} busy={gifBusy} result={gifResult} onExport={(o) => void runGif(o)} onCancel={() => toolAbortRef.current?.abort()} />
             {audioStore && <AudioExportBox store={audioStore} timeline={timeline} />}
             <FinalRenderBox renderer={finalRenderer} timeline={timeline} frame={frame} />
           </div>
         </div>
       </Modal>
+
+      {clipExport && renderDeps && (
+        <Modal open title={`Export short · “${clipExport.cand.title}”`} onClose={() => setClipExport(null)} wide testId="clip-export-dialog">
+          <p className="mb-3 text-caption text-(--color-text-muted)">
+            {Math.round(clipExport.cand.end - clipExport.cand.start)} s · 1080×1920 · one-word captions from the transcript. Your project isn't changed. Keep this dialog open until the export finishes.
+          </p>
+          <div className="[&>div]:rounded-none [&>div]:border-0 [&>div]:bg-transparent [&>div]:p-0">
+            <VideoExportPanel timeline={clipExport.timeline} deps={renderDeps} initial={null} onSettingsChange={() => {}} />
+          </div>
+        </Modal>
+      )}
 
       <Modal open={shortcutsOpen} title="Keyboard shortcuts" onClose={() => setShortcutsOpen(false)}>
         <ul className="flex flex-col divide-y divide-(--color-border)">
