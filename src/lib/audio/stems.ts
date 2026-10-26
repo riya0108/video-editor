@@ -1,4 +1,4 @@
-import { ort, releaseInferenceSession } from "../ml/onnx-runtime";
+import { createInferenceSession, ort, releaseInferenceSession, type RuntimeDevice } from "../ml/onnx-runtime";
 import { downloadModelFileFromUrl } from "../ml/model-cache";
 import { fft, frameCount, hann, stftRange, yieldToUi } from "./dsp";
 
@@ -55,15 +55,10 @@ async function loadSessions(onProgress: (f: number) => void): Promise<{ vocals: 
     return bytes;
   };
   const [vb, ab] = await Promise.all([fetchOne("vocals"), fetchOne("accompaniment")]);
-  // WASM on the main thread (no worker proxy): the proxied session creation was observed to never resolve in
-  // Chromium here (for every model, not just this one), while direct creation takes ~0.4 s and each 12 s block
-  // runs in ~0.3 s per stem — the pipeline yields between blocks so the UI keeps painting progress.
-  ort.env.wasm.proxy = false;
-  ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-  const create = (bytes: Uint8Array) => ort.InferenceSession.create(bytes, { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
-  const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("The separation model didn't start. Reload the page and try again (another AI tool may be holding the runtime).")), 60_000));
-  // One at a time: the WASM backend rejects overlapping calls ("Session already started").
-  const [vocals, accompaniment] = await Promise.race([(async () => [await create(vb), await create(ab)] as const)(), timeout]);
+  // The shared loader runs WASM in its worker (the UI stays responsive), serializes calls, and times out a stuck start.
+  const device: RuntimeDevice = { provider: "wasm", useFp16: false };
+  const vocals = await createInferenceSession(vb, device);
+  const accompaniment = await createInferenceSession(ab, device);
   return { vocals, accompaniment };
 }
 
@@ -100,9 +95,9 @@ export async function separateStems(input: readonly Float32Array[], onProgress: 
     throw e;
   }
   const runner: StemRunner = async (x) => {
-    const feeds = { x: new ort.Tensor("float32", x, [2, 1, T, F]) };
-    const vr = await models.vocals.run(feeds);
-    const ar = await models.accompaniment.run(feeds);
+    // Each run gets its own buffer: the worker-proxied runtime transfers (detaches) its input.
+    const vr = await models.vocals.run({ x: new ort.Tensor("float32", x.slice(), [2, 1, T, F]) });
+    const ar = await models.accompaniment.run({ x: new ort.Tensor("float32", x, [2, 1, T, F]) });
     return { vocals: vr.y.data as Float32Array, accompaniment: ar.y.data as Float32Array };
   };
   return separateWith(input, runner, (f) => onProgress({ phase: "separating", fraction: f }), signal);
