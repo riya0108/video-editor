@@ -32,6 +32,8 @@ export interface PersistenceEditor {
   /** Called after a project was loaded into the editor (re-render, clamp playhead, remount export panel...). */
   onLoaded: (doc: ProjectDocument) => void;
   exportSettings: { current: ExportSettingsState | null };
+  /** Source transcripts, saved with the project (Studio transcript editing). */
+  transcripts?: { current: Record<string, { text: string; start: number; end: number }[]> };
 }
 
 export interface Persistence {
@@ -71,7 +73,7 @@ export function useProjectPersistence(ed: PersistenceEditor | null): Persistence
           snapshot: () => {
             const e = edRef.current!;
             const ai = e.aiStore ? (JSON.parse(e.aiStore.serialize()) as { results: unknown[] }) : null;
-            return { timeline: e.engine.timeline, aiResults: ai && ai.results.length ? ai : null, exportSettings: e.exportSettings.current, ui: { frame: e.getFrame() } };
+            return { timeline: e.engine.timeline, aiResults: ai && ai.results.length ? ai : null, exportSettings: e.exportSettings.current, ui: { frame: e.getFrame() }, ...(e.transcripts ? { transcripts: e.transcripts.current } : {}) };
           },
           apply: (doc) => {
             const e = edRef.current!;

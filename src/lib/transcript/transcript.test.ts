@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseProjectDocument, serializeProjectDocument } from "../project/document";
 import { TimelineEngine } from "../timeline/engine";
 import { clipTimelineEnd } from "../timeline/clip";
 import { timelineDurationFrames } from "../timeline/model";
@@ -133,5 +134,20 @@ describe("background swap", () => {
     const g = ok(e.addGraphicLayer({ graphic: { shape: normalizeShapeSpec({ type: "circle", width: 100, height: 100 }) }, atFrame: 0, durationFrames: 30 }));
     ok(e.transact((tl) => swapBackground(tl, g.clip.id, { kind: "color", color: "#ffffff" }).timeline));
     expect(Object.keys(e.timeline.clips)).toHaveLength(2);
+  });
+});
+
+describe("transcripts in project files", () => {
+  it("round-trips, drops malformed entries with a warning, and old files load without them", () => {
+    const { e } = project();
+    const base = { format: "clipbench-project", version: 1, id: "p1", name: "Talk", createdAt: "2026-10-26T00:00:00.000Z", savedAt: "2026-10-26T00:00:00.000Z", revision: 1, timeline: e.timeline, assets: [], aiResults: null, exportSettings: null, ui: { frame: 0 } } as const;
+    const withT = parseProjectDocument(serializeProjectDocument({ ...base, transcripts: { talk: WORDS } } as never));
+    expect(withT.doc.transcripts?.talk).toEqual(WORDS);
+    const bad = JSON.parse(serializeProjectDocument({ ...base, transcripts: { talk: WORDS } } as never));
+    bad.transcripts.broken = [{ text: "x", start: 2, end: 1 }];
+    const parsed = parseProjectDocument(JSON.stringify(bad));
+    expect(Object.keys(parsed.doc.transcripts ?? {})).toEqual(["talk"]);
+    expect(parsed.warnings.some((w) => w.includes("transcript"))).toBe(true);
+    expect(parseProjectDocument(serializeProjectDocument(base as never)).doc.transcripts).toBeUndefined();
   });
 });

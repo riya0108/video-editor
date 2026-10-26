@@ -302,6 +302,9 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
   // --- Phase 3 tools ---
   /** Word transcripts per SOURCE (source seconds) — the timeline transcript is derived from these. */
   const [transcripts, setTranscripts] = useState<ReadonlyMap<string, SourceWord[]>>(new Map());
+  /** The same transcripts as a plain object, for the project snapshot (saved with the project). */
+  const transcriptsRef = useRef<Record<string, SourceWord[]>>({});
+  transcriptsRef.current = Object.fromEntries(transcripts);
   const [transcriptBusy, setTranscriptBusy] = useState<Busy | null>(null);
   const [transcriptTab, setTranscriptTab] = useState<"words" | "clips">("words");
   const [clipCandidates, setClipCandidates] = useState<ClipCandidate[] | null>(null);
@@ -442,7 +445,10 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
             fps: FPS,
             getFrame: () => frameRef.current,
             exportSettings: exportSettingsRef,
+            transcripts: transcriptsRef,
             onLoaded: (doc: ProjectDocument) => {
+              setTranscripts(new Map(Object.entries(doc.transcripts ?? {})));
+              setClipCandidates(null);
               setPlaying(false);
               setSelectedTransitionId(null);
               setShowStart(false);
@@ -1086,6 +1092,8 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
         });
         next.set(id, words.map((w) => ({ text: w.text, start: w.start, end: w.end })));
         setTranscripts(new Map(next));
+        // Saved with the project: autosave picks the new transcript up.
+        persistence?.manager.markEdited();
       }
       return next;
     } catch (e) {

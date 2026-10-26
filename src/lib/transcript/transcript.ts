@@ -28,6 +28,29 @@ export interface TimelineWord {
   clipId: string;
 }
 
+/** Transcripts as stored in a project: source id -> words (source seconds). */
+export type SourceTranscripts = Record<string, SourceWord[]>;
+
+/** Validates stored transcripts from a project file; drops anything malformed rather than failing the whole load. */
+export function normalizeTranscripts(raw: unknown): { transcripts: SourceTranscripts; dropped: number } {
+  const out: SourceTranscripts = {};
+  let dropped = 0;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { transcripts: out, dropped: raw == null ? 0 : 1 };
+  for (const [id, words] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(words)) {
+      dropped++;
+      continue;
+    }
+    const ok = words.every((w) => typeof w === "object" && w !== null && typeof (w as SourceWord).text === "string" && Number.isFinite((w as SourceWord).start) && Number.isFinite((w as SourceWord).end) && (w as SourceWord).end >= (w as SourceWord).start && (w as SourceWord).start >= 0);
+    if (!ok) {
+      dropped++;
+      continue;
+    }
+    out[id] = (words as SourceWord[]).map((w) => ({ text: w.text, start: w.start, end: w.end }));
+  }
+  return { transcripts: out, dropped };
+}
+
 /** Clips whose speech belongs in the transcript: audible media on video tracks, or audio clips that aren't music/SFX. */
 export function isTranscriptClip(timeline: TimelineModel, clip: Clip): boolean {
   if (!isTrimmableContent(clip.content) || !isAudibleKind(clip.content.kind)) return false;
