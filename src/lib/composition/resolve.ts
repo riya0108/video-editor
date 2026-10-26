@@ -7,6 +7,7 @@ import { activeTransitionAt, transitionSeed, transitionsByTrack } from "../trans
 import type { TransitionDirection, TransitionParams } from "../transitions/registry";
 import { clipBaseVisual, captionSettingsOf, withConcreteVisual } from "../captions/timeline-bridge";
 import { captionDisplayText, captionTextStyle, type CaptionTrackSettings } from "../captions/caption-model";
+import { captionMotionAt } from "../captions/caption-animation";
 import { normalizeTextStyle, type BlendMode, type ClipVisual, type FitMode, type ShapeSpec, type TextStyle } from "../timeline/visual";
 import { compose, rectsIntersect, rotateDegrees, scale, transformedBounds, translate, type Matrix2D, type Rect } from "./matrix";
 import { layoutText, type TextLayout, type TextMeasurer } from "./text-layout";
@@ -251,13 +252,21 @@ function cachedShape(raw: object): ShapeSpec {
 }
 
 /** The {text, textStyle} a caption renders as — cached per (content, track settings, composition width) object identity so layout caching still hits. */
-const captionTextCache = new WeakMap<object, { settings: CaptionTrackSettings; compW: number; value: { text: string; textStyle: unknown } }>();
-function captionTextContent(c: { text?: string; speaker?: string }, settings: CaptionTrackSettings, comp: { width: number }) {
-  const hit = captionTextCache.get(c);
-  if (hit && hit.settings === settings && hit.compW === comp.width) return hit.value;
-  const speakerColor = c.speaker ? settings.speakerColors?.[c.speaker] : undefined;
-  const value = { text: captionDisplayText(c.text ?? "", settings.style), textStyle: captionTextStyle(settings.style, comp, speakerColor) };
-  captionTextCache.set(c, { settings, compW: comp.width, value });
+const captionTextCache = new WeakMap<object, { settings: CaptionTrackSettings; compW: number; byText: Map<string, { text: string; textStyle: unknown }> }>();
+/** `shownText` (word-by-word animations) replaces the segment's text; each distinct text is cached once per segment. */
+function captionTextContent(c: { text?: string; speaker?: string }, settings: CaptionTrackSettings, comp: { width: number }, shownText?: string) {
+  let hit = captionTextCache.get(c);
+  if (!hit || hit.settings !== settings || hit.compW !== comp.width) {
+    hit = { settings, compW: comp.width, byText: new Map() };
+    captionTextCache.set(c, hit);
+  }
+  const raw = shownText ?? c.text ?? "";
+  let value = hit.byText.get(raw);
+  if (!value) {
+    const speakerColor = c.speaker ? settings.speakerColors?.[c.speaker] : undefined;
+    value = { text: captionDisplayText(raw, settings.style), textStyle: captionTextStyle(settings.style, comp, speakerColor) };
+    hit.byText.set(raw, value);
+  }
   return value;
 }
 
@@ -280,7 +289,7 @@ function resolveClip(timeline: TimelineModel, rawClip: Clip, frame: number, ctx:
   // evaluated values being edited, so it takes precedence over the keyframes.
   // Animated captions evaluate against their concrete placement (their track's, until individually placed).
   const clip = ctx.visualOverrides?.[rawClip.id] ? rawClip : applyAnimation(rawClip.animation ? withConcreteVisual(timeline, rawClip) : rawClip, frame - rawClip.timelineStart, timeline.composition);
-  const visual = effectiveVisual(timeline, clip, ctx.visualOverrides);
+  let visual = effectiveVisual(timeline, clip, ctx.visualOverrides);
   const { width: compW, height: compH } = timeline.composition;
   const c = clip.content;
 
@@ -304,7 +313,16 @@ function resolveClip(timeline: TimelineModel, rawClip: Clip, frame: number, ctx:
     // comes from the caption track (plus a speaker color), so captions can never render differently from text.
     if (!c.text) return null;
     const settings = captionSettingsOf(timeline, clip.trackId);
-    const { layout, style } = cachedTextLayout(captionTextContent(c, settings, timeline.composition), ctx.measurer);
+    // CAPTION ANIMATION (caption-animation.ts): the track style's entrance / word-by-word motion, evaluated here so
+    // preview and export animate identically.
+    const fps = timeline.frameRate;
+    const motion = captionMotionAt(settings.style.animation, c.text, c.words, (frame - clip.timelineStart) / fps, (clipTimelineEnd(clip) - clip.timelineStart) / fps, settings.style.fontSize);
+    if (motion) {
+      if (motion.opacity <= 0) return null;
+      const t = visual.transform;
+      visual = { ...visual, opacity: visual.opacity * motion.opacity, transform: { ...t, scaleX: t.scaleX * motion.scale, scaleY: t.scaleY * motion.scale, y: t.y + motion.dy } };
+    }
+    const { layout, style } = cachedTextLayout(captionTextContent(c, settings, timeline.composition, motion?.text), ctx.measurer);
     content = { type: "text", layout, style };
     ({ width, height } = layout);
     fit = "none";

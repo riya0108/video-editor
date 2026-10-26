@@ -116,6 +116,17 @@ export const CAPTION_PRESETS: readonly CaptionPreset[] = [
   P("news", "News lower third", { textAlign: "left", x: 0.06, y: 0.86, anchor: "bottom", backgroundColor: "#1d4ed8", backgroundOpacity: 0.95, borderRadius: 0, maxWidth: 0.6, fontSize: 48 }),
   P("top", "Top caption", { y: 0.08, anchor: "top" }),
   P("karaoke-ready", "Karaoke-ready", { background: false, stroke: true, strokeWidth: 6, fontSize: 72, uppercase: true, highlightColor: "#facc15", fontWeight: 900 }),
+  // Animated templates (caption-animation.ts renders `animation`).
+  P("punchy", "Punchy", { fontFamily: "anton", fontSize: 120, fontWeight: 400, uppercase: true, color: "#facc15", background: false, stroke: true, strokeWidth: 10, y: 0.62, anchor: "middle", maxWidth: 0.8, animation: "word-single" }),
+  P("word-pop", "Word pop", { fontFamily: "montserrat", fontSize: 76, fontWeight: 700, uppercase: true, background: false, stroke: true, strokeWidth: 7, y: 0.7, anchor: "middle", maxWidth: 0.75, animation: "word-reveal" }),
+  P("bubble", "Bubble", { fontFamily: "poppins", fontSize: 60, color: "#111827", backgroundColor: "#ffffff", backgroundOpacity: 1, padding: 22, borderRadius: 40, animation: "pop" }),
+  P("comic", "Comic", { fontFamily: "bangers", fontSize: 92, fontWeight: 400, letterSpacing: 3, color: "#fde047", background: false, stroke: true, strokeWidth: 9, y: 0.75, anchor: "middle", animation: "pop" }),
+  P("neon", "Neon", { fontFamily: "righteous", fontSize: 72, fontWeight: 400, color: "#67e8f9", background: false, shadow: true, stroke: true, strokeColor: "#0e7490", strokeWidth: 3, animation: "fade" }),
+  P("typewriter", "Typewriter", { fontFamily: "mono", fontSize: 50, fontWeight: 600, color: "#f8fafc", backgroundColor: "#0f172a", backgroundOpacity: 0.85, borderRadius: 4, animation: "word-reveal" }),
+  P("elegant", "Elegant serif", { fontFamily: "playfair", fontSize: 58, fontWeight: 700, italic: true, background: false, shadow: true, animation: "fade" }),
+  P("violet-box", "Violet box", { fontFamily: "poppins", fontSize: 58, fontWeight: 700, backgroundColor: "#7c3aed", backgroundOpacity: 1, borderRadius: 14, padding: 18, animation: "rise" }),
+  P("minimal-rise", "Minimal rise", { fontSize: 52, fontWeight: 600, background: false, shadow: true, animation: "rise" }),
+  P("marker", "Marker", { fontFamily: "marker", fontSize: 72, fontWeight: 400, color: "#111827", backgroundColor: "#fde047", backgroundOpacity: 1, borderRadius: 4, padding: 16, animation: "pop" }),
 ];
 
 export function getCaptionPreset(id: string): CaptionPreset | undefined {

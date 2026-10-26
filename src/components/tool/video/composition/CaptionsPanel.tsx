@@ -1,3 +1,4 @@
+import { CAPTION_ANIMATIONS } from "../../../../lib/captions/caption-animation";
 import { useState } from "react";
 import { Captions, Download, Loader2, Merge, Scissors, Sparkles, Trash2, Upload } from "lucide-react";
 import type { TimelineModel } from "../../../../lib/timeline/model";
@@ -150,6 +151,17 @@ export default function CaptionsPanel(p: CaptionsPanelProps) {
                 {CAPTION_PRESETS.map((pr) => (
                   <option key={pr.id} value={pr.id}>
                     {pr.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-(--color-text-muted)">Animation</span>
+              <select aria-label="Caption animation" value={s.animation ?? "none"} disabled={track.locked} onChange={(e) => p.onStyle(trackId, { animation: e.target.value })} className={sel}>
+                {CAPTION_ANIMATIONS.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                    {a.needsWords && !clips.some((c) => c.content.kind === "caption" && c.content.words?.length) ? " (needs word timings)" : ""}
                   </option>
                 ))}
               </select>

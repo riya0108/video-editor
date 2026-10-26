@@ -5,6 +5,8 @@ import type { TextStyle } from "../../../../lib/timeline/text-style";
 import { GRAPHICS_LIBRARY } from "../../../../lib/graphics/library";
 import { TEXT_FONTS } from "../../../../lib/ffmpeg/fonts";
 import { dragHasFiles, filesFromDataTransfer } from "../../../../lib/composition/media-import";
+import { MOTION_PREVIEW } from "./TemplateGalleries";
+import { StickersSection } from "./AssetDrawers";
 import type { AssetRecord } from "../../../../lib/project/assets";
 
 /**
@@ -31,8 +33,8 @@ export function AspectGlyph({ width, height, size = 28 }: { width: number; heigh
 
 const SWATCHES = ["#000000", "#ffffff", "#0f172a", "#1e1b4b", "#312e81", "#7c3aed", "#db2777", "#f97316", "#facc15", "#16a34a", "#0891b2", "transparent"];
 
-export function CanvasSettings({ composition, onChange }: { composition: CompositionSettings; onChange: (patch: Partial<CompositionSettings>) => void }) {
-  const custom = composition.background !== "transparent" && !SWATCHES.includes(composition.background) ? composition.background : null;
+export function CanvasSettings({ composition, onChange, brandColors = [] }: { composition: CompositionSettings; onChange: (patch: Partial<CompositionSettings>) => void; brandColors?: string[] }) {
+  const custom = composition.background !== "transparent" && !SWATCHES.includes(composition.background) && !brandColors.includes(composition.background) ? composition.background : null;
   return (
     <div className="flex flex-col gap-5" data-testid="canvas-settings">
       <div>
@@ -65,6 +67,13 @@ export function CanvasSettings({ composition, onChange }: { composition: Composi
       </div>
       <div>
         <h3 className="mb-2 text-caption font-semibold tracking-wide text-(--color-text-muted) uppercase">Background</h3>
+        {brandColors.length > 0 && (
+          <div className="mb-2 grid grid-cols-6 gap-2" aria-label="Brand colors">
+            {brandColors.map((c) => (
+              <button key={c} type="button" onClick={() => onChange({ background: c })} aria-label={`Brand background ${c}`} aria-pressed={composition.background === c} title="Brand color" className={`aspect-square rounded-lg border transition-transform hover:scale-105 ${composition.background === c ? "ring-2 ring-primary-500 ring-offset-2 ring-offset-(--color-surface)" : "border-(--color-border-strong)"}`} style={{ background: c }} />
+            ))}
+          </div>
+        )}
         <div className="grid grid-cols-6 gap-2">
           {SWATCHES.map((c) => (
             <button
@@ -196,6 +205,8 @@ export interface TextPreset {
   /** Font size as a fraction of the canvas's shorter side, so presets read the same on every aspect ratio. */
   size: number;
   style: Partial<TextStyle>;
+  /** Motion presets (lib/animation/motion-presets.ts) applied with the text, in the same undo step. */
+  motion?: { in?: string; out?: string; loop?: string };
 }
 
 export const TEXT_PRESETS: { group: string; items: TextPreset[] }[] = [
@@ -205,6 +216,19 @@ export const TEXT_PRESETS: { group: string; items: TextPreset[] }[] = [
       { id: "heading", label: "Add a heading", text: "Your heading", size: 0.09, style: { fontFamily: "geist", fontWeight: 800, letterSpacing: -2 } },
       { id: "subheading", label: "Add a subheading", text: "A subheading", size: 0.055, style: { fontFamily: "geist", fontWeight: 600 } },
       { id: "body", label: "Add body text", text: "Some body text", size: 0.035, style: { fontFamily: "geist", fontWeight: 400 } },
+    ],
+  },
+  {
+    group: "Animated",
+    items: [
+      { id: "a-pop-title", label: "Pop title", text: "WAIT FOR IT", size: 0.1, style: { fontFamily: "anton", fontWeight: 400, stroke: true, strokeColor: "#000000", strokeWidth: 8 }, motion: { in: "pop-in", out: "pop-out" } },
+      { id: "a-rise", label: "Rise & fade", text: "Chapter one", size: 0.07, style: { fontFamily: "playfair", fontWeight: 700 }, motion: { in: "rise-in", out: "fade-out" } },
+      { id: "a-slide-lower", label: "Sliding lower third", text: "Jordan Lee · Designer", size: 0.04, style: { fontFamily: "montserrat", fontWeight: 700, textAlign: "left", background: true, backgroundColor: "#7c3aed", backgroundOpacity: 1, padding: 22, borderRadius: 10 }, motion: { in: "slide-right-in", out: "slide-left-out" } },
+      { id: "a-wipe", label: "Wipe reveal", text: "THE REVEAL", size: 0.08, style: { fontFamily: "bebas", fontWeight: 400, letterSpacing: 8 }, motion: { in: "wipe-in", out: "wipe-out" } },
+      { id: "a-zoom", label: "Zoom punch", text: "BOOM", size: 0.14, style: { fontFamily: "bangers", fontWeight: 400, color: "#facc15", stroke: true, strokeColor: "#111827", strokeWidth: 10 }, motion: { in: "zoom-in", out: "zoom-out" } },
+      { id: "a-float", label: "Floating tag", text: "Link in bio ↓", size: 0.045, style: { fontFamily: "poppins", fontWeight: 700, color: "#111827", background: true, backgroundColor: "#ffffff", backgroundOpacity: 1, padding: 20, borderRadius: 999 }, motion: { in: "drop-in", loop: "float", out: "fade-out" } },
+      { id: "a-spin", label: "Spin in", text: "NEW!", size: 0.1, style: { fontFamily: "bungee", fontWeight: 400, color: "#f472b6" }, motion: { in: "spin-in", loop: "pulse", out: "fade-out" } },
+      { id: "a-neon-blink", label: "Neon sign", text: "OPEN", size: 0.1, style: { fontFamily: "righteous", fontWeight: 400, color: "#a5f3fc", shadow: true, shadowColor: "rgba(34,211,238,0.95)", shadowBlur: 30, shadowOffsetY: 0 }, motion: { in: "fade-in", loop: "blink", out: "fade-out" } },
     ],
   },
   {
@@ -244,6 +268,17 @@ function presetCss(p: TextPreset): React.CSSProperties {
   };
 }
 
+/** Plays a preset's in -> (loop) -> out on a tile, using the same CSS previews as the motion picker. */
+function playPreview(el: Element | null, motion: NonNullable<TextPreset["motion"]>) {
+  if (!el || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const seq = [motion.in, motion.loop, motion.out].filter((id): id is string => !!id && !!MOTION_PREVIEW[id]);
+  let delay = 0;
+  for (const id of seq) {
+    el.animate(MOTION_PREVIEW[id], { duration: 520, delay, easing: "ease-in-out", fill: "backwards" });
+    delay += 560;
+  }
+}
+
 export function TextDrawer({ onAdd }: { onAdd: (preset: TextPreset) => void }) {
   return (
     <div className="flex flex-col gap-5 px-2">
@@ -272,11 +307,12 @@ export function TextDrawer({ onAdd }: { onAdd: (preset: TextPreset) => void }) {
                   key={p.id}
                   type="button"
                   onClick={() => onAdd(p)}
-                  title={`Add "${p.label}" text`}
+                  onMouseEnter={(e) => p.motion && playPreview(e.currentTarget.firstElementChild, p.motion)}
+                  title={`Add "${p.label}" text${p.motion ? " (animated)" : ""}`}
                   className="group flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl border border-(--color-border) bg-[radial-gradient(circle_at_30%_20%,#312e81,#0b0b12_70%)] px-2 text-center transition-all hover:-translate-y-0.5 hover:border-primary-400 hover:shadow-md"
                   data-testid={`text-preset-${p.id}`}
                 >
-                  <span className="text-[17px] leading-tight transition-transform group-hover:scale-105" style={presetCss(p)}>
+                  <span className={`text-[17px] leading-tight ${p.motion ? "" : "transition-transform group-hover:scale-105"}`} style={presetCss(p)}>
                     {p.text}
                   </span>
                 </button>
@@ -301,9 +337,10 @@ const SHAPES: { id: string; label: string; icon: React.ReactNode }[] = [
   { id: "arrow", label: "Arrow", icon: <path d="M12 56 H62 V74 L90 50 L62 26 V44 H12 Z" /> },
 ];
 
-export function ElementsDrawer({ onAdd }: { onAdd: (choice: string) => void }) {
+export function ElementsDrawer({ onAdd, onSticker, onEmoji }: { onAdd: (choice: string) => void; onSticker: (id: string) => void; onEmoji: (emoji: string) => void }) {
   return (
     <div className="flex flex-col gap-5 px-2">
+      <StickersSection onSticker={onSticker} onEmoji={onEmoji} />
       <div>
         <h3 className="mb-2 flex items-center gap-1.5 px-1 text-caption font-semibold tracking-wide text-(--color-text-muted) uppercase">
           <Shapes className="h-3.5 w-3.5" /> Shapes

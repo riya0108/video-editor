@@ -6,10 +6,12 @@ import {
   HelpCircle,
   ImagePlus,
   Layers,
+  Library,
   Loader2,
   Monitor,
   Moon,
   Music,
+  Palette,
   Pause,
   Play,
   Redo2,
@@ -31,7 +33,11 @@ import { normalizeTextStyle, type TextStyle } from "../../../../lib/timeline/tex
 import { normalizeShapeSpec, shapePreset, type ShapePreset } from "../../../../lib/timeline/shape-style";
 import { GRAPHICS_LIBRARY } from "../../../../lib/graphics/library";
 import { svgSpecFromMarkup } from "../../../../lib/graphics/svg";
-import type { AuthoredContentPatch } from "../../../../lib/timeline/operations";
+import { addTextLayer as addTextLayerOp, type AuthoredContentPatch } from "../../../../lib/timeline/operations";
+import { activeMotionSlots, applyMotionPreset, type MotionSlot } from "../../../../lib/animation/motion-presets";
+import { STICKERS } from "../../../../lib/graphics/stickers";
+import { DEFAULT_BRAND_KIT, loadBrandKit, logoPosition, saveBrandKit, type BrandKit } from "../../../../lib/brand/brand-kit";
+import type { StockItem } from "../../../../lib/stock/providers";
 import TimelinePanel from "../composition/TimelinePanel";
 import { classifyImport, describeDecodeFailure, dragHasFiles, filesFromDataTransfer, refineImportKind } from "../../../../lib/composition/media-import";
 import { createCanvasTextMeasurer, FinalRenderer, MediaFrameProvider, resolveClipLayer, safeZones, type ResolvedLayer, type SafeZonePreset } from "../../../../lib/composition";
@@ -73,6 +79,8 @@ import { AudioExportBox, FinalRenderBox, LayersPanel, PropertiesPanel } from "./
 import { Drawer, FLAT_PANELS, Kbd, Modal, RailButton, SHORTCUTS, Tabs, ToastStack, type InspectorTab, type Toast } from "./StudioChrome";
 import { ASPECTS, AspectGlyph, CanvasSettings, ElementsDrawer, MediaDrawer, TextDrawer, type TextPreset } from "./LibraryDrawers";
 import StartScreen from "./StartScreen";
+import { BrandDrawer, StockDrawer } from "./AssetDrawers";
+import { CaptionTemplates, MotionPresetPicker } from "./TemplateGalleries";
 
 /**
  * CLIPBENCH STUDIO — the full-screen editor. The composition engine (src/lib/composition), timeline engine,
@@ -91,15 +99,17 @@ import StartScreen from "./StartScreen";
 const FPS = 30;
 const DEMO_VIDEO_URL = "/videos/hero-phone-demo.mp4";
 
-type RailId = "media" | "text" | "elements" | "captions" | "audio" | "transitions" | "ai" | "layers";
+type RailId = "media" | "stock" | "text" | "elements" | "captions" | "audio" | "transitions" | "ai" | "brand" | "layers";
 const RAIL: { id: RailId; label: string; icon: typeof ImagePlus; title: string; subtitle: string }[] = [
   { id: "media", label: "Media", icon: ImagePlus, title: "Media", subtitle: "Upload video, images and audio" },
+  { id: "stock", label: "Stock", icon: Library, title: "Stock library", subtitle: "Free videos, photos and music" },
   { id: "text", label: "Text", icon: Type, title: "Text", subtitle: "Click a style to add it at the playhead" },
-  { id: "elements", label: "Elements", icon: Shapes, title: "Elements", subtitle: "Shapes and graphics" },
-  { id: "captions", label: "Captions", icon: Captions, title: "Captions", subtitle: "Auto-generate, import or style subtitles" },
+  { id: "elements", label: "Elements", icon: Shapes, title: "Elements", subtitle: "Stickers, emoji, shapes and graphics" },
+  { id: "captions", label: "Captions", icon: Captions, title: "Captions", subtitle: "Pick a template, then generate or import" },
   { id: "audio", label: "Audio", icon: Music, title: "Audio", subtitle: "Music, voiceover and the final mix" },
   { id: "transitions", label: "Transitions", icon: ArrowLeftRight, title: "Transitions", subtitle: "Between clips, or in and out of one" },
   { id: "ai", label: "AI tools", icon: Sparkles, title: "AI tools", subtitle: "Detect, cut and reframe automatically" },
+  { id: "brand", label: "Brand", icon: Palette, title: "Brand kit", subtitle: "Your logo, colors and fonts — on every project" },
   { id: "layers", label: "Layers", icon: Layers, title: "Layers", subtitle: "Top of the list is in front" },
 ];
 
@@ -269,6 +279,12 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
   const [smallScreenOk, setSmallScreenOk] = useState(false);
   const [dark, setDark] = useState(true);
   const fileActionsRef = useRef<ProjectFileActions | null>(null);
+  const [brand, setBrand] = useState<BrandKit>(DEFAULT_BRAND_KIT);
+  /** The motion preset last picked per clip and slot (keyframes don't record a preset name) — chip highlighting only. */
+  const [motionPicks, setMotionPicks] = useState<Record<string, Partial<Record<MotionSlot, string>>>>({});
+  /** A caption template picked before any captions exist: applied to the first caption track created. */
+  const pendingCaptionPresetRef = useRef<string | null>(null);
+  const [pendingCaptionPreset, setPendingCaptionPreset] = useState<string | null>(null);
   /** Set when the user starts from footage: the canvas then takes the first video's (or image's) size. */
   const matchCanvasRef = useRef(false);
   const toastId = useRef(0);
@@ -283,7 +299,17 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
   useEffect(() => {
     setTimelineH(readTimelineH());
     setDark(document.documentElement.classList.contains("dark"));
+    void loadBrandKit().then(setBrand);
   }, []);
+  const updateBrand = useCallback(
+    (patch: Partial<BrandKit>) =>
+      setBrand((b) => {
+        const next = { ...b, ...patch };
+        void saveBrandKit(next).then((ok) => !ok && toast("warning", "Couldn't save the brand kit in this browser (storage is blocked) — it works until you close the tab.", 8000));
+        return next;
+      }),
+    [toast],
+  );
 
   /** Final rendering engine (Phase 15): the sources it reads — exact-frame decoders, decoded PCM and its status. */
   const renderDeps = useMemo<RenderDeps | null>(
@@ -746,6 +772,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
       apply(r);
       if (r.ok) {
         setCaptionTrackId(r.trackId);
+        applyPendingCaptionPreset(r.trackId);
         setNotice(`Generated ${r.clips.length} captions (${words.length} words) from ${(endSec - startSec).toFixed(1)} s of audio.`);
       }
     } catch (e) {
@@ -763,6 +790,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
     apply(r);
     if (r.ok) {
       setCaptionTrackId(r.trackId);
+      applyPendingCaptionPreset(r.trackId);
       const notes = [`Imported ${r.clips.length} captions from ${file.name} (${parsed.format.toUpperCase()}).`];
       if (r.adjusted) notes.push(`${r.adjusted} overlapping/too-short cue timing(s) adjusted to fit a track.`);
       if (parsed.warnings.length) notes.push(`Skipped: ${parsed.warnings.length} block(s) — ${parsed.warnings.slice(0, 2).join(" ")}`);
@@ -799,17 +827,122 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
     const { width, height } = engine.timeline.composition;
     const short = Math.min(width, height);
     const left = preset.style.textAlign === "left";
-    const r = engine.addTextLayer({
-      text: preset.text,
-      atFrame: frame,
-      durationFrames: 3 * FPS,
-      name: preset.label,
-      // Size relative to the composition, so a preset reads the same on 1920x1080, 1080x1920 and 1080x1080.
-      style: { ...preset.style, fontSize: Math.round(short * preset.size), maxWidth: Math.round(width * 0.8) },
-      visual: left ? { transform: { x: Math.round(width * 0.08), y: Math.round(height * 0.8), anchorX: 0, anchorY: 0.5 } } : undefined,
+    let clipId: string | null = null;
+    // Text + its motion presets are ONE undo step.
+    const r = engine.transact((tl) => {
+      const added = addTextLayerOp(tl, {
+        text: preset.text,
+        atFrame: frame,
+        durationFrames: (preset.motion ? 4 : 3) * FPS,
+        name: preset.label,
+        // Size relative to the composition, so a preset reads the same on 1920x1080, 1080x1920 and 1080x1080.
+        style: { ...preset.style, fontSize: Math.round(short * preset.size), maxWidth: Math.round(width * 0.8) },
+        visual: left ? { transform: { x: Math.round(width * 0.08), y: Math.round(height * 0.8), anchorX: 0, anchorY: 0.5 } } : undefined,
+      });
+      clipId = added.clip.id;
+      let next = added.timeline;
+      for (const slot of ["in", "loop", "out"] as const) {
+        const id = preset.motion?.[slot];
+        if (id) next = applyMotionPreset(next, added.clip.id, slot, id);
+      }
+      return next;
     });
     apply(r);
-    if (r.ok) setEditingTextId(r.clip.id);
+    if (r.ok && clipId) {
+      const id: string = clipId;
+      engine.select(id);
+      if (preset.motion) setMotionPicks((m) => ({ ...m, [id]: { ...preset.motion } }));
+      else setEditingTextId(id);
+      bump();
+    }
+  };
+  const addSticker = (id: string) => {
+    const st = STICKERS.find((x) => x.id === id);
+    if (!st) return;
+    const { width, height } = engine.timeline.composition;
+    const r = engine.addGraphicLayer({ graphic: { svg: svgSpecFromMarkup(st.markup, Math.min(width, height) * 0.3) }, atFrame: frame, durationFrames: 4 * FPS, name: st.label });
+    apply(r);
+  };
+  const addEmoji = (emoji: string) => {
+    const { width, height } = engine.timeline.composition;
+    const r = engine.addTextLayer({ text: emoji, atFrame: frame, durationFrames: 3 * FPS, name: "Emoji", style: { fontSize: Math.round(Math.min(width, height) * 0.16), fontWeight: 400 } });
+    apply(r);
+  };
+  const importStock = async (file: File, item: StockItem) => {
+    await addMediaFiles([file]);
+    if (item.attribution) toast("info", <span>Credit required: <i>{item.attribution}</i> Add it to your description or end card.</span>, 15000);
+  };
+  const applyMotion = (clipId: string, slot: MotionSlot, presetId: string | null) => {
+    const r = engine.transact((tl) => applyMotionPreset(tl, clipId, slot, presetId));
+    apply(r);
+    if (r.ok) setMotionPicks((m) => ({ ...m, [clipId]: { ...m[clipId], [slot]: presetId ?? undefined } }));
+  };
+  /** Applies a caption template to the caption track being edited — or remembers it until captions exist. */
+  const pickCaptionTemplate = (presetId: string) => {
+    const target = captionTargetTrack();
+    if (target) {
+      apply(engine.applyCaptionPreset(target, presetId));
+      return;
+    }
+    pendingCaptionPresetRef.current = presetId;
+    setPendingCaptionPreset(presetId);
+    setNotice("Template chosen — it's applied as soon as captions are generated or imported.");
+  };
+  const captionTargetTrack = () => {
+    const tl = engine.timeline;
+    const sel = selectedClip?.content.kind === "caption" ? selectedClip.trackId : null;
+    return sel ?? (captionTrackId && tl.tracks[captionTrackId]?.kind === "caption" ? captionTrackId : (tl.trackIds.find((t) => tl.tracks[t].kind === "caption") ?? null));
+  };
+  /** A freshly created caption track takes the template picked earlier. */
+  const applyPendingCaptionPreset = (trackId: string) => {
+    const pending = pendingCaptionPresetRef.current;
+    if (!pending) return;
+    pendingCaptionPresetRef.current = null;
+    setPendingCaptionPreset(null);
+    apply(engine.applyCaptionPreset(trackId, pending));
+  };
+  const addLogo = async () => {
+    const logo = brand.logo;
+    if (!logo || !provider) return;
+    const file = new File([logo.blob], logo.name, { type: logo.type });
+    const id = `brand-logo-${Date.now().toString(36)}`;
+    try {
+      const info = await provider.addImage(id, file);
+      await registry.setFile(id, "image", file, { width: info.width, height: info.height });
+      const { width: cw, height: ch } = engine.timeline.composition;
+      const sc = (brand.logoSize * cw) / info.width;
+      const pos = logoPosition(brand.logoCorner, info.width * sc, info.height * sc, cw, ch);
+      const dur = Math.max(5 * FPS, timelineDurationFrames(engine.timeline));
+      const t = engine.addTrack("image", "Logo");
+      if (!t.ok) throw t.error;
+      engine.reorderTrack(t.track.id, 0);
+      const r = engine.insertClip(t.track.id, { kind: "image", source: { sourceId: id, label: logo.name }, durationFrames: dur }, 0, { fit: "none", transform: { x: pos.x, y: pos.y, scaleX: sc, scaleY: sc }, opacity: brand.logoOpacity });
+      apply(r);
+      if (r.ok) {
+        engine.select(r.clip.id);
+        setNotice("Logo added across the whole video — drag it on the canvas to adjust.");
+      }
+    } catch (e) {
+      provider.remove(id);
+      registry.remove(id);
+      toast("error", `Couldn't add the logo: ${(e as Error).message}`);
+    }
+  };
+  /** Recolors the selection with a brand color: text color, shape fill, or the caption track's text color. */
+  const applyBrandColor = (color: string) => {
+    if (!selectedClip) return;
+    const c = selectedClip.content;
+    if (c.kind === "text") apply(engine.updateAuthoredContent(selectedClip.id, { textStyle: { color } }));
+    else if (c.kind === "graphic" && c.shape) apply(engine.updateAuthoredContent(selectedClip.id, { shape: { fill: true, fillColor: color } }));
+    else if (c.kind === "caption") apply(engine.setCaptionTrackSettings(selectedClip.trackId, { style: { color } }));
+  };
+  const addBrandText = (kind: "heading" | "body") => {
+    const primary = brand.colors[0] ?? "#7c3aed";
+    addText(
+      kind === "heading"
+        ? { id: "brand-heading", label: "Brand title", text: brand.name, size: 0.075, style: { fontFamily: brand.headingFont, fontWeight: 800, color: "#ffffff", background: true, backgroundColor: primary, backgroundOpacity: 1, padding: 24, borderRadius: 14 } }
+        : { id: "brand-body", label: "Brand text", text: "Your message here", size: 0.04, style: { fontFamily: brand.bodyFont, fontWeight: 500, color: "#ffffff", shadow: true } },
+    );
   };
   const revealAsset = (assetId: string) => {
     const clip = Object.values(engine.timeline.clips).find((c) => (c.content as { source?: { sourceId: string } }).source?.sourceId === assetId);
@@ -966,7 +1099,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
     if (!selectedClip) {
       return (
         <div className="flex flex-col gap-6 px-4 py-4">
-          <CanvasSettings composition={timeline.composition} onChange={setComposition} />
+          <CanvasSettings composition={timeline.composition} onChange={setComposition} brandColors={brand.colors} />
           <div className="rounded-xl bg-(--color-bg-subtle) p-3 text-caption text-(--color-text-muted)">
             <p className="mb-2 font-medium text-(--color-text)">Tips</p>
             <ul className="space-y-1.5">
@@ -1105,6 +1238,9 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
               onMattePatch={(matte) => commitVisuals({ [clip.id]: { matte } })}
             />
           )}
+          {tab === "motion" && isVisual && (
+            <MotionPresetPicker active={activeMotionSlots(timeline, clip.id)} lastPicked={motionPicks[clip.id] ?? {}} locked={locked} onPick={(slot, id) => applyMotion(clip.id, slot, id)} />
+          )}
           {tab === "motion" && (
             <KeyframesPanel
               clip={clip}
@@ -1127,6 +1263,21 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
     if (!def) return null;
     let body: React.ReactNode = null;
     switch (def.id) {
+      case "stock":
+        body = <StockDrawer onImport={importStock} />;
+        break;
+      case "brand":
+        body = (
+          <BrandDrawer
+            kit={brand}
+            onChange={updateBrand}
+            onAddLogo={() => void addLogo()}
+            onApplyColor={applyBrandColor}
+            onAddBrandText={addBrandText}
+            canApplyColor={!!selectedClip && (selectedClip.content.kind === "text" || selectedClip.content.kind === "caption" || (selectedClip.content.kind === "graphic" && !!selectedClip.content.shape))}
+          />
+        );
+        break;
       case "media":
         body = <MediaDrawer assets={registry.all()} onFiles={(f) => void addMediaFiles(f)} onPick={pickMedia} onReveal={revealAsset} />;
         break;
@@ -1134,10 +1285,13 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
         body = <TextDrawer onAdd={addText} />;
         break;
       case "elements":
-        body = <ElementsDrawer onAdd={addShape} />;
+        body = <ElementsDrawer onAdd={addShape} onSticker={addSticker} onEmoji={addEmoji} />;
         break;
-      case "captions":
+      case "captions": {
+        const target = captionTargetTrack();
         body = (
+          <>
+          <CaptionTemplates activePresetId={target ? (timeline.tracks[target].caption?.presetId ?? null) : null} hasCaptions={!!target} pendingId={pendingCaptionPreset} onPick={pickCaptionTemplate} />
           <CaptionsPanel
             timeline={timeline}
             frame={frame}
@@ -1165,8 +1319,10 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
             onSplit={(id) => apply(engine.splitClip(id, frame))}
             onMerge={(id) => apply(engine.mergeCaptionWithNext(id))}
           />
+          </>
         );
         break;
+      }
       case "audio":
         body = (
           <div className="flex flex-col gap-4 px-2">
@@ -1315,7 +1471,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setCanvasMenu(false)} aria-hidden="true" />
               <div className="absolute top-full left-1/2 z-50 mt-2 w-80 -translate-x-1/2 rounded-2xl border border-(--color-border) bg-(--color-surface-raised) p-4 shadow-lg animate-fade-in">
-                <CanvasSettings composition={timeline.composition} onChange={setComposition} />
+                <CanvasSettings composition={timeline.composition} onChange={setComposition} brandColors={brand.colors} />
               </div>
             </>
           )}
@@ -1349,7 +1505,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
 
       {/* ---------------- workspace ---------------- */}
       <div className="flex min-h-0 flex-1">
-        <nav className="flex w-[76px] shrink-0 flex-col gap-1 border-r border-(--color-border) bg-(--color-surface) px-2 py-3" aria-label="Editor tools">
+        <nav className="studio-scroll flex w-[76px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-(--color-border) bg-(--color-surface) px-2 py-3" aria-label="Editor tools">
           {RAIL.map((r) => (
             <RailButton
               key={r.id}
