@@ -26,6 +26,11 @@ export const LIMITS = {
   /** Thumbnails come through here too (20+ per results page), so it's generous. */
   stockFile: { max: 400, windowMs: 60_000 },
   transcribeSource: { max: 5, windowMs: 60_000 },
+  /** Cloud AI: reading balance / job status (polled), creating jobs, requesting upload URLs. */
+  cloudRead: { max: 240, windowMs: 60_000 },
+  cloudCreate: { max: 20, windowMs: 60_000 },
+  cloudUpload: { max: 20, windowMs: 60_000 },
+  cloudAdmin: { max: 30, windowMs: 60_000 },
 } satisfies Record<string, Limit>;
 
 export function clientKey(request: Request, clientAddress: string | undefined): string {

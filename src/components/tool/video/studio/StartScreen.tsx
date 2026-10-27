@@ -69,7 +69,7 @@ export default function StartScreen({
             <Sparkles className="h-3.5 w-3.5 text-primary-400" /> Clipbench Studio
           </span>
           <h1 className="mt-4 text-h1 font-semibold tracking-tight sm:text-display">What are you making today?</h1>
-          <p className="mx-auto mt-3 max-w-xl text-body text-(--color-text-muted)">Pick a canvas or drop your footage. Everything runs in your browser — nothing is uploaded.</p>
+          <p className="mx-auto mt-3 max-w-xl text-body text-(--color-text-muted)">Pick a canvas or drop your footage. Editing runs in your browser — your files stay on your device.</p>
         </div>
 
         {recoverable.length > 0 && (
@@ -183,7 +183,7 @@ export default function StartScreen({
 
         <ul className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-caption text-(--color-text-muted)">
           <li className="flex items-center gap-1.5">
-            <Lock className="h-3.5 w-3.5 text-accent-400" /> Private — files never leave your device
+            <Lock className="h-3.5 w-3.5 text-accent-400" /> Private — editing never uploads your files
           </li>
           <li className="flex items-center gap-1.5">
             <Stamp className="h-3.5 w-3.5 text-accent-400" /> No watermark, ever

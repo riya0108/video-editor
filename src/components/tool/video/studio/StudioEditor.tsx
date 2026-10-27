@@ -91,6 +91,7 @@ import { AudioExportBox, FinalRenderBox, LayersPanel, PropertiesPanel } from "./
 import { Drawer, FLAT_PANELS, Kbd, Modal, RailButton, SHORTCUTS, Tabs, ToastStack, type InspectorTab, type Toast } from "./StudioChrome";
 import { ASPECTS, AspectGlyph, CanvasSettings, ElementsDrawer, MediaDrawer, TextDrawer, type TextPreset } from "./LibraryDrawers";
 import StartScreen from "./StartScreen";
+import { CloudAccountButton, CloudPanel, CloudProvider } from "./CloudAccount";
 import { BrandDrawer, StockDrawer } from "./AssetDrawers";
 import { CaptionTemplates, MotionPresetPicker } from "./TemplateGalleries";
 import { AudioToolsSection, BackgroundSwapSection, ClipsPanel, GifExportBox, TranscriptPanel, type Busy } from "./AiToolsPanels";
@@ -1763,6 +1764,12 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
             layers={timeline.trackIds.flatMap((tid) => timeline.tracks[tid].clipIds.map((cid) => ({ id: cid, label: `${timeline.tracks[tid].name}` })))}
           />
         );
+        body = (
+          <>
+            {body}
+            <CloudPanel />
+          </>
+        );
         break;
       case "layers":
         body = <LayersPanel engine={engine} frame={frame} selectedIds={selectedIds} onSelect={setSelection} apply={apply} />;
@@ -1779,6 +1786,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
   const iconBtn = "rounded-lg p-2 text-(--color-text-muted) transition-colors hover:bg-(--color-bg-subtle) hover:text-(--color-text) disabled:opacity-35 disabled:hover:bg-transparent";
 
   return (
+    <CloudProvider>
     <div
       className="relative flex h-dvh flex-col overflow-hidden bg-(--color-bg) text-(--color-text)"
       onDragEnter={(e) => {
@@ -1855,6 +1863,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
             <Redo2 className="h-4 w-4" />
           </button>
           <span className="mx-1 h-6 w-px bg-(--color-border)" aria-hidden="true" />
+          <CloudAccountButton />
           <button type="button" onClick={() => setShortcutsOpen(true)} className={iconBtn} aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
             <HelpCircle className="h-4 w-4" />
           </button>
@@ -2106,6 +2115,7 @@ export default function StudioEditor({ demo = false }: { demo?: boolean }) {
         </ul>
       </Modal>
     </div>
+    </CloudProvider>
   );
 }
 
