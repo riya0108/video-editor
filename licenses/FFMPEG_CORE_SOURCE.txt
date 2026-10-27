@@ -17,7 +17,7 @@ Corresponding source
 Written offer: for at least three years from the date you received these files, the Clipbench
 operator will give anyone a complete machine-readable copy of the corresponding source code for
 them, on a medium customarily used for software interchange, for no more than the cost of
-physically performing the distribution. Request it at: CONTACT_EMAIL_PLACEHOLDER
+physically performing the distribution. Request it at: support@bullorbear.in
 
 Modification
 ------------

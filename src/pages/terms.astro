@@ -4,7 +4,7 @@
 // PUBLIC_CONTACT_EMAIL.
 import Layout from "../layouts/Layout.astro";
 
-const contact = import.meta.env.PUBLIC_CONTACT_EMAIL as string | undefined;
+const contact = (import.meta.env.PUBLIC_CONTACT_EMAIL as string | undefined) || "support@bullorbear.in";
 const updated = "27 October 2026";
 ---
 
@@ -23,8 +23,14 @@ const updated = "27 October 2026";
       <li>You must have the rights to what you upload, and to the voices and faces in it.</li>
     </ul>
 
+    <h2>Age</h2>
+    <p>You must be <b>18 or older</b> to create an account or use cloud AI features. Editing on your device has no age requirement.</p>
+
     <h2>Voice cloning, dubbing and lip sync</h2>
     <p>Only use a voice or likeness that is <b>yours, or that you have clear permission to use</b>. You confirm this each time. Don't use these features to impersonate anyone, to mislead people about what someone said or did, or for fraud.</p>
+
+    <h2>AI-generated content is labelled</h2>
+    <p>Audio, images and video generated or altered by our cloud AI features carry a visible label and provenance information in the file, as Indian law requires. <b>Don't remove or hide them</b>, and don't present AI-generated content as real.</p>
 
     <h2>Not allowed</h2>
     <ul>
@@ -45,7 +51,10 @@ const updated = "27 October 2026";
     <h2>Open-source components</h2>
     <p>Clipbench uses open-source software and models under their own licenses; see <a href="/licenses" class="underline">Licenses</a>.</p>
 
-    <h2>Contact</h2>
-    <p>{contact ? <>Questions or reports: <a href={`mailto:${contact}`} class="underline">{contact}</a></> : "Questions or reports: use the contact address shown on this site."}</p>
+    <h2>Reporting content and grievances</h2>
+    <p>To report unlawful or harmful content made with Clipbench, misuse of your voice or likeness, or any other complaint, write to <a href={`mailto:${contact}`} class="underline">{contact}</a>. We'll acknowledge it within 24 hours. Content that a court or the government flags as unlawful is acted on within the time the law requires.</p>
+
+    <h2>Changes</h2>
+    <p>We may update these terms; the date above shows the latest version. If a change matters, we'll say so on the site.</p>
   </article>
 </Layout>

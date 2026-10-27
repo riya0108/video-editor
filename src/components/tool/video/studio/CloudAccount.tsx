@@ -86,6 +86,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
               {consent.feature.uploadsMedia && <li>Uploaded media is deleted within 24 hours.</li>}
               <li>It isn't used to train AI models, and it isn't shared for any other purpose.</li>
               <li>Everything else in the editor keeps running only on your device.</li>
+              <li>Cloud features are for people 18 or older.</li>
             </ul>
             <p className="text-caption text-(--color-text-muted)">
               Details: <a href="/privacy" target="_blank" rel="noopener" className="underline">privacy</a> · <a href="/terms" target="_blank" rel="noopener" className="underline">terms</a>
@@ -171,7 +172,9 @@ function AccountDialog({ open, onClose, me }: { open: boolean; onClose: () => vo
             }}
           >
             <p>
-              <b>Sign in for 50 free credits a day</b> (10 without an account) and to use voice, dubbing and lip sync. No password — we email you a sign-in link.
+              <b>Sign in for 50 free credits a day</b> (10 without an account) and to use voice, dubbing and lip sync. No password — we email you a sign-in link. By signing in you confirm you're 18 or older and agree to the{" "}
+              <a href="/terms" target="_blank" rel="noopener" className="underline">terms</a> and{" "}
+              <a href="/privacy" target="_blank" rel="noopener" className="underline">privacy policy</a>.
             </p>
             {state.kind === "sent" ? (
               <p className="flex items-center gap-2 rounded-lg bg-success-500/10 px-3 py-2">

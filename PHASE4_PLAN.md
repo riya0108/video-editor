@@ -88,6 +88,8 @@ Browser polls GET /api/jobs/:id → downloads result → adds it to the timeline
 - **New pages:** a privacy policy and terms of use. They need to cover processors (Anthropic, fal.ai, Modal, Supabase), retention, voice-cloning consent, and prohibited uses (impersonation, non-consensual likeness, deceptive political content, sexual content).
 - **Voice cloning and lip sync:** a "this is my voice, or I have permission" confirmation, kept with the job. Output is watermarked where the model supports it (Chatterbox does). An abuse report link.
 - **Image prompts:** provider safety filters stay on, plus a cheap moderation check of the prompt before generation.
+- **AI labelling (required by India's IT Rules amendment, in force since 2026-02-20):** every output of a generative cloud feature (cloned voice, dub, lip sync, AI image, generated video) gets a **visible label** and **embedded provenance metadata** (C2PA where feasible, plus an audio watermark for speech, which Chatterbox includes). This is a ship blocker for M2–M5; the exact wording and standard are for counsel ([LEGAL_REVIEW.md](LEGAL_REVIEW.md) §3).
+- **Age:** accounts and cloud features are 18+ (DPDP Rules treat under-18s as children needing verifiable parental consent).
 
 ## 6. Milestones
 

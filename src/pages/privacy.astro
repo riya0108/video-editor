@@ -4,7 +4,7 @@
 // PUBLIC_CONTACT_EMAIL so readers can reach you.
 import Layout from "../layouts/Layout.astro";
 
-const contact = import.meta.env.PUBLIC_CONTACT_EMAIL as string | undefined;
+const contact = (import.meta.env.PUBLIC_CONTACT_EMAIL as string | undefined) || "support@bullorbear.in";
 const updated = "27 October 2026";
 ---
 
@@ -46,15 +46,25 @@ const updated = "27 October 2026";
       <li>Our hosting provider may keep standard server logs (IP address, time, page) for security for a short time.</li>
     </ul>
 
-    <h2>Your choices</h2>
+    <h2>Why we process it</h2>
+    <ul>
+      <li><b>Cloud features:</b> to do what you asked. You choose to run each one, after seeing what it sends. You can stop using them at any time, which is as easy as starting.</li>
+      <li><b>Accounts and daily credits:</b> to provide the account you created and share the free budget fairly.</li>
+      <li><b>Abuse prevention</b> (hashed IP for anonymous credits, the Turnstile check, rate limits, minimal job records): to keep the free service available and safe.</li>
+    </ul>
+
+    <h2>Your rights</h2>
+    <p>You can ask us to <b>see</b>, <b>correct</b> or <b>delete</b> the personal data we hold about you. You can <b>withdraw consent</b> for cloud processing at any time, though that doesn't undo processing already done, and you can raise a <b>complaint</b>. Write to <a href={`mailto:${contact}`} class="underline">{contact}</a>. We'll acknowledge you within 7 days and resolve it within 30 days, and never later than the 90 days India's data protection rules allow. If you're not satisfied, you may complain to the Data Protection Board of India, or to your local data protection authority if you live elsewhere (for example in the EU or UK).</p>
     <ul>
       <li>Use everything without an account, and without cloud features, if you prefer.</li>
       <li>Delete local data by clearing this site's data in your browser.</li>
-      <li>Ask us to delete your account and records{contact ? <>: <a href={`mailto:${contact}`} class="underline">{contact}</a></> : " via the contact address shown on this site"}.</li>
     </ul>
 
-    <h2>Children</h2>
-    <p>Clipbench isn't directed at children under 13, and cloud features require you to be old enough to agree to these terms where you live.</p>
+    <h2>Where data is processed</h2>
+    <p>Accounts, credits, job records and uploads are stored by Supabase in India. A cloud feature's AI provider may process the request in another country (for example the United States), only to produce the result.</p>
+
+    <h2>Age</h2>
+    <p>Editing on your device needs no account and collects nothing. <b>Accounts and cloud AI features are for people 18 or older</b>, and by signing in or running one you confirm you are. If you believe a child has used them, contact us and we'll delete their data.</p>
 
     <h2>Changes</h2>
     <p>If this policy changes in a way that matters, we'll update the date above and say so on the site.</p>

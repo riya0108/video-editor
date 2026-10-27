@@ -109,15 +109,31 @@ function loadTurnstile(): Promise<TurnstileApi> {
 export async function humanToken(): Promise<string | undefined> {
   if (!TURNSTILE_SITE_KEY) return undefined;
   const ts = await loadTurnstile();
+  // Usually the check passes invisibly. When Cloudflare does need a click, the widget is shown centred over a backdrop
+  // with a line of explanation — a lone checkbox in a corner is easy to miss, and the job would just seem stuck.
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)";
+  const card = document.createElement("div");
+  card.style.cssText = "display:flex;flex-direction:column;gap:12px;align-items:center;padding:20px 24px;border-radius:16px;background:var(--color-surface,#111);color:var(--color-text,#fff);font:14px/1.4 system-ui,sans-serif;box-shadow:0 12px 32px rgba(0,0,0,.35)";
+  const text = document.createElement("p");
+  text.textContent = "Quick check before using free cloud credits — please confirm you're human.";
+  text.style.cssText = "margin:0;max-width:300px;text-align:center";
   const host = document.createElement("div");
-  host.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:70";
-  document.body.appendChild(host);
+  card.append(text, host);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
   try {
     return await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("The human check timed out — please try again.")), 60_000);
+      const timer = setTimeout(() => reject(new Error("The human check timed out — please try again.")), 120_000);
       ts.render(host, {
         sitekey: TURNSTILE_SITE_KEY,
         appearance: "interaction-only",
+        "before-interactive-callback": () => {
+          overlay.style.display = "flex";
+        },
+        "after-interactive-callback": () => {
+          overlay.style.display = "none";
+        },
         callback: (t: string) => {
           clearTimeout(timer);
           resolve(t);
@@ -129,7 +145,7 @@ export async function humanToken(): Promise<string | undefined> {
       });
     });
   } finally {
-    host.remove();
+    overlay.remove();
   }
 }
 
