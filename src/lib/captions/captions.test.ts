@@ -1,3 +1,4 @@
+import { captionMotionAt } from "./caption-animation";
 import { describe, expect, it } from "vitest";
 import { createTimeline, type TimelineModel } from "../timeline/model";
 import { addTrack, applyCaptionPreset, captionCuesOf, importCaptionCues, insertClip, mergeCaptionWithNext, moveClip, setCaptionSpeaker, setCaptionTrackSettings, setClipVisual, splitClip, trimClip, updateCaptionText, addKeyframe } from "../timeline/operations";
@@ -312,5 +313,51 @@ describe("persistence (project v9)", () => {
     const old = JSON.parse(serializeTimeline(addTrack(base(), "video", "V").timeline));
     old.version = 8;
     expect(() => deserializeTimeline(JSON.stringify(old))).not.toThrow();
+  });
+});
+
+describe("caption animation (rendered through resolveFrame)", () => {
+  const words = [
+    { text: "one", start: 0, end: 0.4 },
+    { text: "two", start: 0.5, end: 0.9 },
+    { text: "three", start: 1.0, end: 1.4 },
+  ];
+
+  it("word modes follow the word timings", () => {
+    expect(captionMotionAt("word-reveal", "one two three", words, 0.6, 1.5, 56)?.text).toBe("one two");
+    expect(captionMotionAt("word-reveal", "one two three", words, 0, 1.5, 56)?.text).toBe("one");
+    expect(captionMotionAt("word-single", "one two three", words, 1.2, 1.5, 56)?.text).toBe("three");
+    expect(captionMotionAt("word-single", "one two three", words, 0.45, 1.5, 56)?.text).toBe("one");
+  });
+
+  it("word modes without timings fall back to the whole segment", () => {
+    const m = captionMotionAt("word-single", "hello", undefined, 1, 2, 56);
+    expect(m?.text).toBeUndefined();
+    expect(m?.scale).toBeCloseTo(1);
+  });
+
+  it("entrances settle to rest; unknown or none render static", () => {
+    expect(captionMotionAt("pop", "x", undefined, 0, 2, 56)!.scale).toBeLessThan(1);
+    expect(captionMotionAt("pop", "x", undefined, 1, 2, 56)!.scale).toBeCloseTo(1);
+    expect(captionMotionAt("rise", "x", undefined, 0, 2, 56)!.dy).toBeGreaterThan(0);
+    expect(captionMotionAt("rise", "x", undefined, 1, 2, 56)!.dy).toBeCloseTo(0);
+    expect(captionMotionAt("fade", "x", undefined, 2, 2, 56)!.opacity).toBe(0);
+    expect(captionMotionAt("none", "x", undefined, 0, 2, 56)).toBeNull();
+    expect(captionMotionAt("from-the-future", "x", undefined, 0, 2, 56)).toBeNull();
+  });
+
+  it("the resolved caption layer shows only the spoken words", () => {
+    const e = new TimelineEngine(30, { width: 1920, height: 1080, background: "#000000" });
+    const r = e.importCaptionCues([{ text: "one two three", start: 0, end: 1.5, words }], { name: "Captions" });
+    if (!r.ok) throw r.error;
+    const ok = e.applyCaptionPreset(r.trackId, "word-pop");
+    if (!ok.ok) throw ok.error;
+    const at = (f: number) => resolveFrame(e.timeline, f, fakeContext({})).layers[0];
+    const text = (f: number) => {
+      const l = at(f);
+      return l.content.type === "text" ? l.content.layout.lines.map((ln: { text: string }) => ln.text).join(" ") : "";
+    };
+    expect(text(18)).toBe("ONE TWO");
+    expect(text(40)).toBe("ONE TWO THREE");
   });
 });

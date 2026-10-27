@@ -7,6 +7,7 @@ export default defineConfig({
     // .agents/ contains Claude Code skill scripts with their own *.test.mjs
     // files (plain Node test scripts, not Vitest) — excluded so this config
     // never tries to run them as Vitest suites.
-    exclude: ["node_modules", "dist", ".agents"],
+    // ._* are macOS metadata files written next to every file on non-Apple (exFAT) drives — not tests.
+    exclude: ["node_modules", "dist", ".agents", "**/._*"],
   },
 });

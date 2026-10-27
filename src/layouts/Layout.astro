@@ -8,12 +8,15 @@ interface Props {
   description?: string;
   /** Skips the footer and lets `main` fill the remaining viewport height — for app-like full-screen tools (the Video Editor) that manage their own internal scrolling instead of a normal scrolling page. */
   fullScreen?: boolean;
+  /** A standalone app page (Clipbench Studio): no site header, footer or backdrop — the page is one viewport-sized app. */
+  app?: boolean;
 }
 
 const {
   title = "Clipbench — Free Video & Audio Editor in Your Browser",
   description = "Trim, merge, record, and edit video and audio entirely in your browser. No uploads, no installs, no watermarks.",
   fullScreen = false,
+  app = false,
 } = Astro.props;
 ---
 
@@ -47,12 +50,20 @@ const {
       })();
     </script>
   </head>
-  <body class={`flex min-h-dvh flex-col bg-(--color-bg) text-(--color-text) ${fullScreen ? "md:h-dvh md:overflow-hidden" : ""}`}>
-    <div class="site-backdrop" aria-hidden="true"></div>
-    <Header />
-    <main class={`relative ${fullScreen ? "min-h-0 flex-1 md:overflow-hidden" : "flex-1"}`}>
-      <slot />
-    </main>
-    {!fullScreen && <Footer />}
-  </body>
+  {
+    app ? (
+      <body class="h-dvh overflow-hidden bg-(--color-bg) text-(--color-text)">
+        <slot />
+      </body>
+    ) : (
+      <body class={`flex min-h-dvh flex-col bg-(--color-bg) text-(--color-text) ${fullScreen ? "md:h-dvh md:overflow-hidden" : ""}`}>
+        <div class="site-backdrop" aria-hidden="true" />
+        <Header />
+        <main class={`relative ${fullScreen ? "min-h-0 flex-1 md:overflow-hidden" : "flex-1"}`}>
+          <slot />
+        </main>
+        {!fullScreen && <Footer />}
+      </body>
+    )
+  }
 </html>

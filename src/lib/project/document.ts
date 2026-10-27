@@ -1,3 +1,4 @@
+import { normalizeTranscripts, type SourceTranscripts } from "../transcript/transcript";
 import type { TimelineModel } from "../timeline/model";
 import { deserializeTimeline, PROJECT_FORMAT as TIMELINE_FORMAT, serializeTimeline } from "../timeline/serialize";
 import { AIResultStore } from "../ai/store";
@@ -47,6 +48,8 @@ export interface ProjectDocument {
   aiResults: unknown | null;
   exportSettings: ExportSettingsState | null;
   ui: { frame: number };
+  /** Word transcripts per source (source seconds) — transcript editing / clip maker. Absent in older files. */
+  transcripts?: SourceTranscripts;
 }
 
 export class ProjectDocumentError extends Error {
@@ -125,12 +128,18 @@ export function parseProjectDocument(json: string, fallback: { id: () => string;
       }
     } else warnings.push("The saved export settings couldn't be read; the default preset is used.");
   }
+  let transcripts: SourceTranscripts | undefined;
+  if (raw.transcripts !== undefined && raw.transcripts !== null) {
+    const t = normalizeTranscripts(raw.transcripts);
+    transcripts = t.transcripts;
+    if (t.dropped) warnings.push(`${t.dropped} saved transcript(s) couldn't be read; transcribe those clips again.`);
+  }
   let ui = { frame: 0 };
   if (isObj(raw.ui) && typeof raw.ui.frame === "number" && Number.isInteger(raw.ui.frame) && raw.ui.frame >= 0) ui = { frame: raw.ui.frame };
   else if (raw.ui !== undefined) warnings.push("The saved playhead position was invalid; it starts at 0.");
 
   return {
-    doc: { format: PROJECT_DOC_FORMAT, version: PROJECT_DOC_VERSION, id: raw.id as string, name: raw.name as string, createdAt: raw.createdAt as string, savedAt: raw.savedAt as string, revision: raw.revision, timeline, assets, aiResults, exportSettings, ui },
+    doc: { format: PROJECT_DOC_FORMAT, version: PROJECT_DOC_VERSION, id: raw.id as string, name: raw.name as string, createdAt: raw.createdAt as string, savedAt: raw.savedAt as string, revision: raw.revision, timeline, assets, aiResults, exportSettings, ui, ...(transcripts && Object.keys(transcripts).length ? { transcripts } : {}) },
     warnings,
     migratedFrom: raw.version < PROJECT_DOC_VERSION ? `${PROJECT_DOC_FORMAT} v${raw.version}` : null,
   };

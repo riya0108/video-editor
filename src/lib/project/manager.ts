@@ -36,6 +36,8 @@ export interface EditorState {
   aiResults: unknown | null;
   exportSettings: ExportSettingsState | null;
   ui: { frame: number };
+  /** Source transcripts (optional — editors without transcript editing leave it out). */
+  transcripts?: Record<string, { text: string; start: number; end: number }[]>;
 }
 
 export interface ProjectHost {
@@ -167,6 +169,11 @@ export class ProjectManager {
       aiResults: st.aiResults,
       exportSettings: st.exportSettings,
       ui: st.ui,
+      // Only transcripts of media still in the project travel with it.
+      ...(st.transcripts ? (() => {
+        const kept = Object.fromEntries(Object.entries(st.transcripts).filter(([id]) => ids.has(id)));
+        return Object.keys(kept).length ? { transcripts: kept } : {};
+      })() : {}),
     };
   }
 

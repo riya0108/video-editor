@@ -4,7 +4,15 @@ Scope: every model (existing or proposed) touched by the background-removal / ma
 
 Verified 2026-09-26 by reading each project's own `LICENSE` file / Hugging Face model card via web search. **Re-verify at actual implementation time** — upstream licenses can and do change between minor versions (BRIA has shipped different license text across RMBG point releases).
 
-## ⚠️ Pre-existing risk already in production (not introduced by this plan)
+## Status update 2026-10-26 — non-commercial models are gated off
+
+- **RMBG-1.4**: no product feature loads it any more. Remove Passerby's tracker (`src/lib/ffmpeg/passerby-track.ts`) now uses U²-Net; the unused `generateSubjectCutouts` was deleted. `loadSegmenter` refuses to run unless `PUBLIC_ALLOW_NONCOMMERCIAL_MODELS=true`, and the matting router still excludes the RMBG adapter unless a caller sets `allowNonCommercial` (none does).
+- **NLLB-200** (`facebook/nllb-200-distilled-600M`, via `Xenova/`), caption translation — **CC-BY-NC-4.0**. Gated by the same flag (`src/lib/model-licensing.ts`); the Translate panel says why it's off.
+- **F5-TTS** (`nsarang/F5-TTS-ONNX`, weights from `SWivid/F5-TTS`), voice cloning — **CC-BY-NC-4.0**. Gated by the same flag; the Clone tab says why it's off.
+- **Whisper** (MIT) and **Kokoro-82M** (Apache-2.0) are fine for commercial use.
+- Public notices for everything shipped: `/licenses` (src/pages/licenses.astro).
+
+## ⚠️ Pre-existing risk already in production (not introduced by this plan) — historical, see the update above
 
 ### briaai/RMBG-1.4 — **non-commercial only**
 
@@ -64,3 +72,14 @@ Downloaded, unmodified, from **https://github.com/danielgatis/rembg/releases/dow
 1. Confirm the exact MODNet checkpoint file this plan intends to redistribute is the one covered by the repo's Apache-2.0 LICENSE file (not a third-party re-upload with unclear provenance — several exist on Hugging Face, e.g. mirrors under different accounts). Not yet bundled.
 2. Re-fetch and re-read RMBG-1.4's live license page at implementation time — BRIA has revised license terms across versions before. The U²-Net swap above has now shipped for the image "no green screen" path, so this is lower-urgency than when originally written, but still applies to RMBG-1.4's remaining callers (video AI mode, captions "occlude by person", passerby-track — see Phase 4 in the plan).
 3. If any commercial deal with BRIA is ever pursued instead of finishing the U²-Net migration for the remaining callers, this document must be updated to reflect that RMBG-1.4 has moved from "non-commercial" to "commercially licensed" status for this specific product.
+
+## Spleeter 2-stems (vocals / accompaniment) — added 2026-10-26 (Studio Phase 3, stem separation)
+
+- **What**: Deezer's Spleeter 2-stems model, as the fp16 ONNX export published by the k2-fsa/sherpa-onnx project: Hugging Face `csukuangfj/sherpa-onnx-spleeter-2stems-fp16`, **pinned to commit `93ba771920ade509f8cbd6825b1a90856c797e08`**.
+- **License**: Spleeter code and pretrained weights — **MIT** (deezer/spleeter). sherpa-onnx export tooling — Apache-2.0. ✅ Commercial use and redistribution permitted with the license notices.
+- **Files** (downloaded by the browser on first use, verified before use, cached in Cache Storage — not committed to this repo):
+  - `vocals.fp16.onnx` — 19,681,017 bytes, SHA-256 `24cef84aedcd1fe87c0b743ef3370ad34dc1fabf6c9014d6128a75a538c7b668`
+  - `accompaniment.fp16.onnx` — 19,681,024 bytes, SHA-256 `d14cea55793cc531a5875f5f4da08207d1c5ab9292e8e0099a104eecb014fcc0`
+- **Used in**: `src/lib/audio/stems.ts` (Studio → Audio → Separate vocals & music). Runs on onnxruntime-web's WASM backend.
+- **Verified**: `src/lib/audio/stems.eval.test.ts` runs the real model (onnxruntime-node) on real speech mixed with synthetic music: SDR improvement **+10.3 dB (vocals)** and **+10.7 dB (accompaniment)**; stems sum back to the mix. Skipped in normal test runs (needs `STEMS_MODEL_DIR` and `STEMS_SPEECH`).
+- **Re-verify** the upstream license before a commercial launch, as for every model in this file.

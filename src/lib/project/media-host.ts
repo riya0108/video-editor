@@ -95,6 +95,18 @@ export function createMediaHost(d: MediaHostDeps, editor: { snapshot(): EditorSt
       d.registry.adopt(rec);
       return { ...base, state: "ok" };
     }
+    if (o.type === "generated" && rec.kind === "audio") {
+      // Generated audio (Clean Audio, stem separation): one WAV blob, stored like generated frames.
+      const f = o.frames[0];
+      const bytes = f && (await pngFor(f.sha256));
+      if (!bytes) return { ...base, state: "damaged", detail: "Its stored audio is missing or damaged. Run the audio tool again." };
+      d.registry.addPng(f.sha256, bytes);
+      unload(rec.id);
+      const st = await d.audio.add(rec.id, new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "audio/wav" }), rec.label);
+      if (st.state !== "ready") return { ...base, state: "damaged", detail: `Its stored audio can't be decoded. Run the audio tool again.` };
+      d.registry.adopt(rec);
+      return { ...base, state: "ok" };
+    }
     if (o.type === "generated") {
       const frames: { frame: number; image: ImageBitmap }[] = [];
       for (const f of o.frames) {

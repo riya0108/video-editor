@@ -650,7 +650,7 @@ export default function VideoEditorTool() {
     return (
       <ToolUploadScreen
         icon={Clapperboard}
-        title="Video Editor"
+        title="Quick Editor"
         description="Trim, resize for any platform, dub audio, animate text — with full undo/redo history."
       >
         <Dropzone

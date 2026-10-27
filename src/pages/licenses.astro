@@ -1,0 +1,102 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { NONCOMMERCIAL_MODELS_ENABLED } from "../lib/model-licensing";
+
+/**
+ * THIRD-PARTY NOTICES — every library, engine, model and font Clipbench ships or downloads into the browser, with
+ * its license. Keep in sync with MODEL_LICENSES.md and package.json.
+ */
+interface Row {
+  name: string;
+  use: string;
+  license: string;
+  url: string;
+  note?: string;
+}
+
+const engines: Row[] = [
+  { name: "FFmpeg (ffmpeg.wasm core-mt 0.12.10)", use: "Single-purpose video & audio tools", license: "GPL-2.0-or-later", url: "https://github.com/ffmpegwasm/ffmpeg.wasm", note: "Served unmodified except one documented line. License: /ffmpeg/LICENSE.txt · source & changes: /ffmpeg/SOURCE.txt" },
+  { name: "ffmpeg.wasm (@ffmpeg/ffmpeg, @ffmpeg/util)", use: "Loads and drives the FFmpeg core", license: "MIT", url: "https://github.com/ffmpegwasm/ffmpeg.wasm" },
+  { name: "ONNX Runtime Web", use: "Runs AI models in the browser", license: "MIT", url: "https://github.com/microsoft/onnxruntime" },
+  { name: "Transformers.js", use: "Speech recognition and model loading", license: "Apache-2.0", url: "https://github.com/huggingface/transformers.js" },
+  { name: "MediaPipe Tasks Vision", use: "Face, object and person detection", license: "Apache-2.0", url: "https://github.com/google-ai-edge/mediapipe" },
+  { name: "Mediabunny", use: "Video export (MP4/WebM/MOV muxing)", license: "MPL-2.0", url: "https://github.com/Vanilagy/mediabunny" },
+  { name: "kokoro-js", use: "AI voices (text to speech)", license: "Apache-2.0", url: "https://github.com/hexgrad/kokoro" },
+  { name: "gifenc", use: "GIF export", license: "MIT", url: "https://github.com/mattdesl/gifenc" },
+  { name: "wavesurfer.js", use: "Waveforms in audio tools", license: "BSD-3-Clause", url: "https://github.com/katspaugh/wavesurfer.js" },
+  { name: "React, Astro, Tailwind CSS, Lucide icons", use: "The site and editor", license: "MIT / ISC", url: "https://github.com/withastro/astro" },
+];
+
+const models: Row[] = [
+  { name: "Whisper (tiny / base)", use: "Auto-captions, transcripts", license: "MIT", url: "https://github.com/openai/whisper" },
+  { name: "U²-Net (u2netp)", use: "Background removal, Remove Passerby", license: "Apache-2.0", url: "https://github.com/xuebinqin/U-2-Net" },
+  { name: "MediaPipe Selfie Segmenter, BlazeFace, EfficientDet-Lite0", use: "Person cut-outs, face & object detection", license: "Apache-2.0", url: "https://github.com/google-ai-edge/mediapipe" },
+  { name: "Spleeter 2-stems (sherpa-onnx export)", use: "Separate vocals & music", license: "MIT (model), Apache-2.0 (export)", url: "https://github.com/deezer/spleeter" },
+  { name: "Kokoro-82M", use: "AI voices", license: "Apache-2.0", url: "https://huggingface.co/hexgrad/Kokoro-82M" },
+  { name: "Real-ESRGAN (realesr-general-x4v3)", use: "Upscaling", license: "BSD-3-Clause", url: "https://github.com/xinntao/Real-ESRGAN" },
+];
+
+const nonCommercial: Row[] = [
+  { name: "NLLB-200 (distilled 600M)", use: "Caption translation", license: "CC-BY-NC-4.0", url: "https://huggingface.co/facebook/nllb-200-distilled-600M" },
+  { name: "F5-TTS", use: "Voice cloning", license: "CC-BY-NC-4.0", url: "https://huggingface.co/SWivid/F5-TTS" },
+  { name: "RMBG-1.4", use: "Optional matting model", license: "BRIA non-commercial", url: "https://huggingface.co/briaai/RMBG-1.4" },
+];
+
+const fonts = "Geist and Geist Mono (OFL-1.1), Anton, Archivo Black, Bangers, Bebas Neue, Bungee, Caveat, Dancing Script, Great Vibes, Montserrat, Oswald, Pacifico, Permanent Marker, Playfair Display, Poppins, Righteous, Roboto Slab (all SIL Open Font License 1.1, via Fontsource).";
+---
+
+<Layout title="Licenses — Clipbench" description="Open-source software, AI models and fonts used by Clipbench, and their licenses.">
+  <div class="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
+    <h1 class="text-h2 font-semibold tracking-tight">Licenses & third-party notices</h1>
+    <p class="mt-3 text-body text-(--color-text-muted)">
+      Clipbench is built on open-source software and openly licensed AI models. Everything below runs in your browser.
+    </p>
+
+    {[{ title: "Software", rows: engines }, { title: "AI models", rows: models }].map((g) => (
+      <section class="mt-10">
+        <h2 class="text-h3 font-semibold">{g.title}</h2>
+        <div class="mt-4 overflow-x-auto rounded-xl border border-(--color-border)">
+          <table class="w-full text-left text-body-sm">
+            <thead class="bg-(--color-bg-subtle) text-caption text-(--color-text-muted)">
+              <tr><th class="px-4 py-2 font-medium">Component</th><th class="px-4 py-2 font-medium">Used for</th><th class="px-4 py-2 font-medium">License</th></tr>
+            </thead>
+            <tbody class="divide-y divide-(--color-border)">
+              {g.rows.map((r) => (
+                <tr>
+                  <td class="px-4 py-2.5 align-top"><a href={r.url} class="font-medium hover:underline" rel="noopener">{r.name}</a>{r.note && <p class="mt-1 text-caption text-(--color-text-muted)">{r.note}</p>}</td>
+                  <td class="px-4 py-2.5 align-top text-(--color-text-muted)">{r.use}</td>
+                  <td class="px-4 py-2.5 align-top whitespace-nowrap">{r.license}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    ))}
+
+    <section class="mt-10">
+      <h2 class="text-h3 font-semibold">Non-commercial models</h2>
+      <p class="mt-2 text-body-sm text-(--color-text-muted)">
+        {NONCOMMERCIAL_MODELS_ENABLED
+          ? "This deployment has enabled the features below, which use models licensed for non-commercial use."
+          : "The features below are turned off on this site because their models are licensed for non-commercial use only."}
+      </p>
+      <ul class="mt-3 space-y-1.5 text-body-sm">
+        {nonCommercial.map((r) => <li><a href={r.url} class="font-medium hover:underline" rel="noopener">{r.name}</a> — {r.use} · {r.license}</li>)}
+      </ul>
+    </section>
+
+    <section class="mt-10">
+      <h2 class="text-h3 font-semibold">Fonts</h2>
+      <p class="mt-2 text-body-sm text-(--color-text-muted)">{fonts}</p>
+    </section>
+
+    <section class="mt-10">
+      <h2 class="text-h3 font-semibold">GNU General Public License (FFmpeg)</h2>
+      <p class="mt-2 text-body-sm text-(--color-text-muted)">
+        The FFmpeg core is a separate program, licensed under the GPL version 2 or later. Read the <a href="/ffmpeg/LICENSE.txt" class="underline">full license</a> and
+        <a href="/ffmpeg/SOURCE.txt" class="underline">how to get its source code</a>, including the one change Clipbench makes to it.
+      </p>
+    </section>
+  </div>
+</Layout>

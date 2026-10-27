@@ -1,0 +1,31 @@
+FFmpeg core (ffmpeg.wasm) — source and modification notice
+============================================================
+
+The files in this folder (ffmpeg-core.js, ffmpeg-core.wasm, ffmpeg-core.worker.js) are the
+"@ffmpeg/core-mt" package, version 0.12.10, from the ffmpeg.wasm project, licensed under the
+GNU General Public License, version 2 or (at your option) any later version — see LICENSE.txt.
+They are a separate program: Clipbench's web pages load them into a Web Worker and run them with
+command-line arguments, the same way a desktop app runs the ffmpeg command.
+
+Corresponding source
+--------------------
+- ffmpeg.wasm build scripts (Dockerfile and build steps for FFmpeg and every bundled library,
+  pinned at this release):  https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v0.12.10
+- The exact distributed package:  https://registry.npmjs.org/@ffmpeg/core-mt/-/core-mt-0.12.10.tgz
+- FFmpeg:  https://ffmpeg.org/download.html  (source of every release, including the one pinned above)
+
+Written offer: for at least three years from the date you received these files, the Clipbench
+operator will give anyone a complete machine-readable copy of the corresponding source code for
+them, on a medium customarily used for software interchange, for no more than the cost of
+physically performing the distribution. Request it at: CONTACT_EMAIL_PLACEHOLDER
+
+Modification
+------------
+One change is made to ffmpeg-core.js when it is copied into this folder
+(scripts/copy-ffmpeg-core.mjs in the Clipbench source):
+
+    - var pthreadPoolSize=32;
+    + var pthreadPoolSize=Math.max(navigator.hardwareConcurrency||4,4)+16;
+
+It sizes the WebAssembly thread pool to the machine instead of eagerly starting 32 threads (one of
+32 simultaneous thread start-ups could stall and hang the engine). Nothing else is changed.

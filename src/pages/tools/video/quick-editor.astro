@@ -1,0 +1,13 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+import VideoEditorTool from "../../../components/tool/video/VideoEditorTool.tsx";
+import { getToolBySlug } from "../../../lib/tools-registry";
+
+const tool = getToolBySlug("video", "quick-editor")!;
+---
+
+<Layout title={`${tool.name} — Clipbench`} description={tool.description} fullScreen>
+  <div class="h-full md:overflow-hidden">
+    <VideoEditorTool client:load />
+  </div>
+</Layout>

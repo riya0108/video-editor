@@ -1,12 +1,13 @@
 import * as ort from "onnxruntime-web";
+import ortGlueUrl from "onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url";
+import ortWasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url";
 
-// Deliberately NOT self-hosting these wasm files (unlike ffmpeg-core): the
-// wasm loader uses a dynamic import() of its .mjs companion, which Vite's
-// dev server refuses for files served from /public ("should not be imported
-// from source code"). onnxruntime-web's own default wasmPaths (jsdelivr,
-// version-matched to the installed package) sidesteps that entirely — and
-// this app already fetches ML models themselves from HF hub for Whisper and
-// Kokoro, so this isn't a new privacy tradeoff.
+// Not served from /public (unlike ffmpeg-core): the wasm loader uses a
+// dynamic import() of its .mjs companion, which Vite's dev server refuses for
+// files served from /public ("should not be imported from source code").
+// Instead the glue is fetched as plain bytes (Vite `?url`, so it's
+// self-hosted and version-matched in both dev and build) and handed to ORT
+// as a blob: URL — see loadRuntimeFiles() for why it must be a blob.
 
 type GpuAdapter = { features: { has(name: string): boolean } };
 type GpuLike = { requestAdapter: (opts?: unknown) => Promise<GpuAdapter | null> };
@@ -36,30 +37,114 @@ export async function detectRuntimeDevice(): Promise<RuntimeDevice> {
   return { provider: "webgpu", useFp16: adapter.features.has("shader-f16") };
 }
 
+/** Session creation hangs forever (rather than rejecting) when the runtime can't start, so cap it — generous, since a large model on a slow CPU legitimately takes a while to optimize. */
+const CREATE_TIMEOUT_MS = 120_000;
+
+let runtimeFiles: Promise<void> | null = null;
+
+/**
+ * Points ORT at a blob: copy of its Emscripten glue (+ the self-hosted .wasm).
+ * With the multi-threaded build, the glue spawns its pthread pool via
+ * `new Worker(import.meta.url)`; under the proxy that happens *inside* ORT's
+ * proxy worker. Some Chromium builds (the Claude desktop app's built-in
+ * browser, Electron) can't start a nested worker from an http(s) URL — the
+ * nested worker fires `error` (which Emscripten never listens for) and
+ * `InferenceSession.create` waits on the pool forever. Nested workers from
+ * blob: URLs do start there, and a glue module imported from a blob: URL
+ * has a blob: `import.meta.url`, so its pthreads do too. Harmless in
+ * browsers where the plain URL already worked (real Chrome). Best effort:
+ * if fetching the glue fails, ORT keeps its embedded defaults.
+ */
+function loadRuntimeFiles(): Promise<void> {
+  runtimeFiles ??= (async () => {
+    try {
+      const res = await fetch(ortGlueUrl);
+      if (!res.ok) throw new Error(`${res.status} ${res.url}`);
+      const glue = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: "text/javascript" }));
+      // Never revoked: the glue lazily spawns extra pthread workers from this URL for the lifetime of the page.
+      ort.env.wasm.wasmPaths = { mjs: glue, wasm: new URL(ortWasmUrl, location.href).href };
+    } catch (err) {
+      console.warn("Couldn't load the ONNX runtime glue as a blob; using onnxruntime-web's defaults:", err);
+    }
+  })();
+  return runtimeFiles;
+}
+
+/**
+ * Whether ORT's wasm runtime was initialized behind its proxy worker. ORT
+ * initializes once per page and then routes every later call by the
+ * *current* `env.wasm.proxy` — flipping it after init sends calls to a
+ * runtime that was never started ("worker not ready" / uninitialized wasm).
+ * So the first session decides, and every later one must match.
+ */
+let proxied: boolean | null = null;
+
+// The wasm backend is a single Emscripten instance and rejects overlapping
+// create/run calls ("Session already started") — chain every one of them.
+let queue: Promise<unknown> = Promise.resolve();
+function serialized<T>(task: () => Promise<T>): Promise<T> {
+  const result = queue.then(task, task);
+  queue = result.catch(() => {});
+  return result;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export async function createInferenceSession(
   buffer: Uint8Array,
   device: RuntimeDevice,
 ): Promise<ort.InferenceSession> {
-  // Proxy WASM (CPU) execution to a worker thread instead of running it
-  // synchronously on the main thread — without this, a heavy model (e.g.
-  // the upscale tool's RRDBNet super-resolution net) freezes the entire tab,
-  // including its own progress bar, for as long as inference takes, which
-  // looks indistinguishable from the app having hung. Only applies to the
-  // "wasm" provider: WebGPU dispatch is already off the main thread, and
-  // proxying it too has been observed to make session creation spin forever
-  // instead of completing.
-  ort.env.wasm.proxy = device.provider === "wasm";
-  // onnxruntime-web's own default caps threads at min(hardwareConcurrency/2, 4)
-  // to be conservative on shared/mobile hardware; this app already requires
-  // cross-origin isolation (see astro.config.mjs) for ffmpeg's multi-threaded
-  // core, so the same SharedArrayBuffer-backed thread pool is available here
-  // too — use every core the machine offers instead of leaving most of them idle.
-  if (device.provider === "wasm") {
-    ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-  }
-  return ort.InferenceSession.create(buffer, {
-    executionProviders: [device.provider],
-    graphOptimizationLevel: "all",
+  await loadRuntimeFiles();
+  return serialized(async () => {
+    // Proxy WASM (CPU) execution to a worker thread instead of running it
+    // synchronously on the main thread — without this, a heavy model (e.g.
+    // the upscale tool's RRDBNet super-resolution net) freezes the entire tab,
+    // including its own progress bar, for as long as inference takes, which
+    // looks indistinguishable from the app having hung. Only for the "wasm"
+    // provider: WebGPU dispatch is already off the main thread, and proxying
+    // it too has been observed to make session creation spin forever.
+    proxied ??= device.provider === "wasm";
+    let provider = device.provider;
+    if (proxied && provider === "webgpu") {
+      // The runtime is already committed to the proxy (see `proxied`), which
+      // can't host WebGPU — run this session on the proxied CPU backend
+      // instead. An fp16 variant isn't safe there (see RuntimeDevice).
+      if (device.useFp16) {
+        throw new Error("This model needs WebGPU, but another AI tool already started the CPU runtime on this page. Reload the page and try again.");
+      }
+      console.warn("ONNX runtime is already running on the CPU worker; creating this WebGPU session on WASM instead.");
+      provider = "wasm";
+    }
+    ort.env.wasm.proxy = proxied;
+    // onnxruntime-web's own default caps threads at min(hardwareConcurrency/2, 4)
+    // to be conservative on shared/mobile hardware; this app already requires
+    // cross-origin isolation (see astro.config.mjs) for ffmpeg's multi-threaded
+    // core, so the same SharedArrayBuffer-backed thread pool is available here
+    // too — use every core the machine offers instead of leaving most of them idle.
+    // (Only read at init, so it's moot after the first session either way.)
+    if (provider === "wasm") {
+      ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
+    }
+    const session = await withTimeout(
+      ort.InferenceSession.create(buffer, {
+        executionProviders: [provider],
+        graphOptimizationLevel: "all",
+      }),
+      CREATE_TIMEOUT_MS,
+      "The AI model didn't start. Reload the page and try again.",
+    );
+    // Callers run sessions directly, so route their run()/release() through the same queue.
+    const run = session.run.bind(session) as (...args: unknown[]) => Promise<ort.InferenceSession.ReturnType>;
+    const release = session.release.bind(session);
+    session.run = ((...args: unknown[]) => serialized(() => run(...args))) as ort.InferenceSession["run"];
+    session.release = () => serialized(release);
+    return session;
   });
 }
 

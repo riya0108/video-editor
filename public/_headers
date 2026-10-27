@@ -1,7 +1,12 @@
-# Cross-origin isolation, required so the multithreaded ffmpeg.wasm engine
-# can use SharedArrayBuffer. Understood by Netlify and Cloudflare Pages.
-# If you deploy elsewhere (Vercel, custom server, etc.), set the same two
-# headers on every response at the host/server level instead.
+# Security + cross-origin isolation headers for static hosts (Netlify, Cloudflare Pages). Cross-origin isolation is
+# required for SharedArrayBuffer (multithreaded ffmpeg.wasm and AI models). Keep in sync with server.mjs (the Node
+# server used by `npm start`) and vercel.json. Note: static hosts can't run the /api routes (stock library, link
+# transcription) — deploy with `npm start` for those.
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net; worker-src 'self' blob:; connect-src 'self' https: blob: data:; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(), usb=()
