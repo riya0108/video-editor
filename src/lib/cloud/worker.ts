@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { claimJob, expiredUploads, failJob, markUploadsCleared, redactOldJobs, requeueStale, settleJob, type Job } from "./db";
+import { claimJob, expiredUploads, failJob, isConnectionError, markUploadsCleared, redactOldJobs, requeueStale, settleJob, type Job } from "./db";
 import { cloudConfig } from "./config";
 import { RUNNERS, RunnerError } from "./runners";
 import { deleteUploads, storageConfigured } from "./storage";
@@ -15,6 +15,8 @@ import { deleteUploads, storageConfigured } from "./storage";
  */
 
 const POLL_MS = 1500;
+/** While the database is unreachable, polls back off up to this (and the outage is logged once, not every poll). */
+const MAX_BACKOFF_MS = 30_000;
 const STALE_SEC = 600;
 const UPLOAD_TTL_SEC = 24 * 3600;
 /** The privacy page's promise: a job's content (what was sent, what came back) is wiped after 30 days. */
@@ -62,6 +64,8 @@ async function housekeeping(): Promise<void> {
 
 export async function workLoop(signal?: AbortSignal): Promise<void> {
   let lastHousekeeping = 0;
+  let delay = POLL_MS;
+  let outageSince = 0;
   while (!signal?.aborted) {
     try {
       if (Date.now() - lastHousekeeping > 60_000) {
@@ -69,14 +73,27 @@ export async function workLoop(signal?: AbortSignal): Promise<void> {
         await housekeeping();
       }
       const job = await claimJob(id);
+      if (outageSince) {
+        console.info(`[cloud] database reachable again after ${Math.round((Date.now() - outageSince) / 1000)} s`);
+        outageSince = 0;
+      }
+      delay = POLL_MS;
       if (job) {
         await runOne(job);
         continue; // drain the queue before sleeping
       }
     } catch (e) {
-      console.error("[cloud] worker error:", (e as Error).message);
+      if (isConnectionError(e)) {
+        if (!outageSince) {
+          outageSince = Date.now();
+          console.warn(`[cloud] database unreachable (${(e as Error).message}); retrying with backoff`);
+        }
+        delay = Math.min(MAX_BACKOFF_MS, delay * 2);
+      } else {
+        console.error("[cloud] worker error:", (e as Error).message);
+      }
     }
-    await new Promise((r) => setTimeout(r, POLL_MS));
+    await new Promise((r) => setTimeout(r, delay));
   }
 }
 

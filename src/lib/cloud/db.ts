@@ -78,13 +78,25 @@ export function cloudDb(url = cloudConfig().databaseUrl): pg.Pool {
     pool = new pg.Pool({
       connectionString: url,
       max: 5,
-      idleTimeoutMillis: 30_000,
+      idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 10_000,
+      // The worker polls often enough that a connection is never idle, so without these one could live for days and
+      // fail (ECONNRESET / ETIMEDOUT) the first time it's used after the pooler or network silently dropped it.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
+      maxLifetimeSeconds: 300,
       ssl: local ? undefined : ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true },
     });
     pool.on("error", (e) => console.error("[cloud] database pool error:", e.message));
   }
   return pool;
+}
+
+/** True for errors that mean "the database connection broke", as opposed to a query that failed. */
+export function isConnectionError(e: unknown): boolean {
+  const code = (e as { code?: string })?.code;
+  if (code && ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EPIPE", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "57P01"].includes(code)) return true;
+  return /Connection terminated|connection timeout|timeout exceeded when trying to connect/i.test((e as Error)?.message ?? "");
 }
 
 /** Test-only: close and forget the pool. */

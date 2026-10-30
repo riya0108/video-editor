@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { echoFeature, getFeature } from "./features";
 import { ownsUploadPath, safeFileName, uploadPathFor } from "./storage";
 import { secondsUntilReset, publicJob } from "./http";
-import type { Job } from "./db";
+import { isConnectionError, type Job } from "./db";
 
 describe("cloud features", () => {
   it("validate untrusted params and price at least 1 credit", () => {
@@ -47,5 +47,17 @@ describe("http helpers", () => {
     expect(pub).not.toHaveProperty("uploadPaths");
     expect(pub.result).toBeNull(); // results only for succeeded jobs
     expect(pub.error).toBe("boom");
+  });
+});
+
+describe("database connection errors", () => {
+  it("tell a broken connection apart from a failed query", () => {
+    const sys = (code: string) => Object.assign(new Error(`read ${code}`), { code });
+    expect(isConnectionError(sys("ECONNRESET"))).toBe(true);
+    expect(isConnectionError(sys("ETIMEDOUT"))).toBe(true);
+    expect(isConnectionError(new Error("Connection terminated unexpectedly"))).toBe(true);
+    expect(isConnectionError(Object.assign(new Error("insufficient_credits"), { code: "P0001" }))).toBe(false);
+    expect(isConnectionError(new Error("syntax error"))).toBe(false);
+    expect(isConnectionError(undefined)).toBe(false);
   });
 });
