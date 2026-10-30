@@ -161,7 +161,7 @@ export function MediaDrawer({
           }}
         />
       </label>
-      <p className="px-1 text-[11px] text-(--color-text-faint)">Files never leave your device. Everything is processed in this browser tab.</p>
+      <p className="px-1 text-[11px] text-(--color-text-faint)">Files stay on your device — editing runs in this browser tab. Only cloud AI features you choose to run upload what they need.</p>
       <div>
         <h3 className="mb-2 px-1 text-caption font-semibold tracking-wide text-(--color-text-muted) uppercase">In this project</h3>
         {own.length === 0 ? (

@@ -10,13 +10,16 @@ interface Props {
   fullScreen?: boolean;
   /** A standalone app page (Clipbench Studio): no site header, footer or backdrop — the page is one viewport-sized app. */
   app?: boolean;
+  /** Keep the page out of search engines (admin pages). */
+  noindex?: boolean;
 }
 
 const {
   title = "Clipbench — Free Video & Audio Editor in Your Browser",
-  description = "Trim, merge, record, and edit video and audio entirely in your browser. No uploads, no installs, no watermarks.",
+  description = "Trim, merge, record, and edit video and audio in your browser. Editing runs on your device — no installs, no watermarks.",
   fullScreen = false,
   app = false,
+  noindex = false,
 } = Astro.props;
 ---
 
@@ -31,6 +34,7 @@ const {
 
     <title>{title}</title>
     <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />

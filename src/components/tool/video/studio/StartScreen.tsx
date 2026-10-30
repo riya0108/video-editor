@@ -4,6 +4,7 @@ import type { ProjectMeta } from "../../../../lib/project/storage";
 import type { Recoverable } from "../../../../lib/project/recovery";
 import { dragHasFiles, filesFromDataTransfer } from "../../../../lib/composition/media-import";
 import { ASPECTS, AspectGlyph } from "./LibraryDrawers";
+import { CloudAccountButton } from "./CloudAccount";
 
 /**
  * START SCREEN — the editor's front door: pick a canvas, start from footage (the canvas then matches the first
@@ -64,12 +65,16 @@ export default function StartScreen({
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(ellipse_60%_80%_at_50%_-10%,color-mix(in_oklch,var(--color-primary-500)_28%,transparent),transparent)]" aria-hidden="true" />
       <div className="relative mx-auto flex max-w-5xl flex-col gap-10 px-6 py-12 sm:py-16">
+        {/* Sign-in and today's free cloud credits, also reachable before a project is open. */}
+        <div className="absolute top-4 right-6">
+          <CloudAccountButton />
+        </div>
         <div className="text-center">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-(--color-border) bg-(--color-surface)/70 px-3 py-1 text-caption text-(--color-text-muted) backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 text-primary-400" /> Clipbench Studio
           </span>
           <h1 className="mt-4 text-h1 font-semibold tracking-tight sm:text-display">What are you making today?</h1>
-          <p className="mx-auto mt-3 max-w-xl text-body text-(--color-text-muted)">Pick a canvas or drop your footage. Everything runs in your browser — nothing is uploaded.</p>
+          <p className="mx-auto mt-3 max-w-xl text-body text-(--color-text-muted)">Pick a canvas or drop your footage. Editing runs in your browser — your files stay on your device.</p>
         </div>
 
         {recoverable.length > 0 && (
@@ -183,7 +188,7 @@ export default function StartScreen({
 
         <ul className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-caption text-(--color-text-muted)">
           <li className="flex items-center gap-1.5">
-            <Lock className="h-3.5 w-3.5 text-accent-400" /> Private — files never leave your device
+            <Lock className="h-3.5 w-3.5 text-accent-400" /> Private — editing never uploads your files
           </li>
           <li className="flex items-center gap-1.5">
             <Stamp className="h-3.5 w-3.5 text-accent-400" /> No watermark, ever

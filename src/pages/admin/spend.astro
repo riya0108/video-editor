@@ -1,0 +1,164 @@
+---
+// ADMIN — cloud AI spend, today's budget, the queue, and the two live controls: the kill switch and the global daily
+// cap. Server-rendered on every request (no client JS); locked unless CLOUD_ADMIN_TOKEN is set.
+export const prerender = false;
+
+import Layout from "../../layouts/Layout.astro";
+import { ADMIN_COOKIE, adminCookieValue, isAdminCookie, isAdminToken } from "../../lib/cloud/admin";
+import { cloudConfig, cloudConfigProblems } from "../../lib/cloud/config";
+import { adminSpend, setSetting, type AdminSpend } from "../../lib/cloud/db";
+import { clientKey, LIMITS, rateLimit } from "../../lib/net/rate-limit";
+
+const config = cloudConfig();
+let authed = isAdminCookie(Astro.cookies.get(ADMIN_COOKIE)?.value);
+let message: string | null = null;
+let error: string | null = null;
+
+if (Astro.request.method === "POST") {
+  const wait = rateLimit("cloud-admin", clientKey(Astro.request, Astro.clientAddress), LIMITS.cloudAdmin);
+  if (wait) {
+    error = `Too many attempts — wait ${wait} s.`;
+  } else {
+    const form = await Astro.request.formData();
+    const action = String(form.get("action") ?? "");
+    if (action === "login") {
+      const token = String(form.get("token") ?? "");
+      if (isAdminToken(token)) {
+        Astro.cookies.set(ADMIN_COOKIE, adminCookieValue(token), { httpOnly: true, sameSite: "strict", secure: Astro.url.protocol === "https:", path: "/admin", maxAge: 60 * 60 * 12 });
+        return Astro.redirect("/admin/spend", 303);
+      }
+      error = "That token isn't right.";
+    } else if (action === "logout") {
+      Astro.cookies.delete(ADMIN_COOKIE, { path: "/admin" });
+      return Astro.redirect("/admin/spend", 303);
+    } else if (authed) {
+      try {
+        if (action === "pause") await setSetting("ai_enabled", false);
+        else if (action === "resume") await setSetting("ai_enabled", true);
+        else if (action === "cap") {
+          const cap = Number(form.get("cap"));
+          if (!Number.isFinite(cap) || cap < 0 || cap > 10_000) throw new Error("Enter a cap between $0 and $10,000.");
+          await setSetting("global_daily_budget_usd", Math.round(cap * 100) / 100);
+        }
+        return Astro.redirect("/admin/spend?done=1", 303);
+      } catch (e) {
+        error = (e as Error).message;
+      }
+    }
+  }
+}
+if (Astro.url.searchParams.get("done")) message = "Saved.";
+
+let data: AdminSpend | null = null;
+if (authed && config.databaseUrl) {
+  try {
+    data = await adminSpend(14);
+  } catch (e) {
+    error = `Couldn't read spend: ${(e as Error).message}`;
+  }
+}
+const problems = cloudConfigProblems(config);
+const usd = (n: unknown) => `$${Number(n ?? 0).toFixed(Number(n ?? 0) < 1 ? 4 : 2)}`;
+const today = data?.days.find((d) => d.day === data!.today);
+const enabled = data?.settings.ai_enabled !== false;
+const cap = Number(data?.settings.global_daily_budget_usd ?? 0);
+const committed = today ? Number(today.reserved_usd) + Number(today.spent_usd) : 0;
+const pct = cap > 0 ? Math.min(100, (committed / cap) * 100) : 0;
+---
+
+<Layout title="Cloud spend — Clipbench admin" description="Clipbench cloud AI spend (admin)." noindex>
+  <div class="mx-auto max-w-5xl px-4 py-10 sm:px-6">
+    <div class="flex items-center justify-between gap-4">
+      <h1 class="text-h2 font-semibold tracking-tight">Cloud AI spend</h1>
+      {authed && (
+        <form method="post"><input type="hidden" name="action" value="logout" /><button class="text-body-sm text-(--color-text-muted) underline">Sign out</button></form>
+      )}
+    </div>
+    {message && <p class="mt-4 rounded-lg bg-success-500/10 px-3 py-2 text-body-sm" role="status">{message}</p>}
+    {error && <p class="mt-4 rounded-lg bg-danger-500/10 px-3 py-2 text-body-sm" role="alert">{error}</p>}
+
+    {!config.adminToken ? (
+      <p class="mt-6 text-body text-(--color-text-muted)">The admin page is locked: set <code>CLOUD_ADMIN_TOKEN</code> on the server.</p>
+    ) : !authed ? (
+      <form method="post" class="mt-6 flex max-w-md flex-col gap-3">
+        <input type="hidden" name="action" value="login" />
+        <label class="flex flex-col gap-1 text-body-sm">Admin token
+          <input name="token" type="password" autocomplete="current-password" required class="rounded-lg border border-(--color-border) bg-(--color-surface) px-3 py-2" />
+        </label>
+        <button class="self-start rounded-lg bg-primary-500 px-4 py-2 text-body-sm font-semibold text-white">Sign in</button>
+      </form>
+    ) : (
+      <div class="mt-6 flex flex-col gap-8">
+        {problems.length > 0 && (
+          <section class="rounded-xl border border-warning-500/40 bg-warning-500/10 p-4 text-body-sm">
+            <p class="font-semibold">Configuration</p>
+            <ul class="mt-1 list-disc pl-5">{problems.map((p) => <li>{p}</li>)}</ul>
+          </section>
+        )}
+        {data && (
+          <>
+            <section class="grid gap-4 sm:grid-cols-3">
+              <div class="rounded-xl border border-(--color-border) p-4">
+                <p class="text-caption text-(--color-text-muted)">Cloud AI</p>
+                <p class={`mt-1 text-h3 font-semibold ${enabled ? "text-success-600" : "text-danger-600"}`}>{enabled ? "Running" : "Paused"}</p>
+                <form method="post" class="mt-3">
+                  <input type="hidden" name="action" value={enabled ? "pause" : "resume"} />
+                  <button class={`rounded-lg px-3 py-1.5 text-body-sm font-semibold ${enabled ? "bg-danger-500 text-white" : "bg-success-600 text-white"}`}>{enabled ? "Pause all cloud AI (kill switch)" : "Resume cloud AI"}</button>
+                </form>
+              </div>
+              <div class="rounded-xl border border-(--color-border) p-4">
+                <p class="text-caption text-(--color-text-muted)">Today ({data.today} UTC)</p>
+                <p class="mt-1 text-h3 font-semibold tabular-nums">{usd(committed)} <span class="text-body-sm font-normal text-(--color-text-muted)">of {usd(cap)}</span></p>
+                <div class="mt-2 h-2 overflow-hidden rounded-full bg-(--color-border)"><div class={`h-full ${pct > 85 ? "bg-danger-500" : "bg-primary-500"}`} style={`width:${pct}%`} /></div>
+                <p class="mt-1 text-caption text-(--color-text-muted) tabular-nums">spent {usd(today?.spent_usd)} · reserved {usd(today?.reserved_usd)}</p>
+              </div>
+              <div class="rounded-xl border border-(--color-border) p-4">
+                <p class="text-caption text-(--color-text-muted)">Global daily cap</p>
+                <form method="post" class="mt-2 flex items-center gap-2">
+                  <input type="hidden" name="action" value="cap" />
+                  <span>$</span><input name="cap" type="number" min="0" max="10000" step="0.01" value={cap} class="w-24 rounded-lg border border-(--color-border) bg-(--color-surface) px-2 py-1 tabular-nums" />
+                  <button class="rounded-lg border border-(--color-border) px-3 py-1 text-body-sm font-medium">Save</button>
+                </form>
+                <p class="mt-2 text-caption text-(--color-text-muted)">Queue: {data.queue.queued} waiting · {data.queue.running} running</p>
+              </div>
+            </section>
+
+            <section>
+              <h2 class="text-h3 font-semibold">By feature (14 days)</h2>
+              <table class="mt-3 w-full text-left text-body-sm">
+                <thead class="text-caption text-(--color-text-muted)"><tr><th class="py-1">Day</th><th>Feature</th><th>Jobs</th><th>OK</th><th>Failed</th><th>Credits</th><th>Cost</th></tr></thead>
+                <tbody class="divide-y divide-(--color-border) tabular-nums">
+                  {data.by_feature.length === 0 && <tr><td colspan="7" class="py-2 text-(--color-text-muted)">No jobs yet.</td></tr>}
+                  {data.by_feature.map((r) => <tr><td class="py-1.5">{r.day}</td><td>{r.feature}</td><td>{r.jobs}</td><td>{r.succeeded}</td><td>{r.failed}</td><td>{r.credits}</td><td>{usd(r.cost_usd)}</td></tr>)}
+                </tbody>
+              </table>
+            </section>
+
+            <section>
+              <h2 class="text-h3 font-semibold">Today by hour (UTC)</h2>
+              <div class="mt-3 flex h-28 items-end gap-1" role="img" aria-label="Cost by hour today">
+                {Array.from({ length: 24 }, (_, h) => {
+                  const row = data!.by_hour_today.find((x) => x.hour === h);
+                  const max = Math.max(0.0001, ...data!.by_hour_today.map((x) => Number(x.cost_usd)));
+                  const v = Number(row?.cost_usd ?? 0);
+                  return <div class="flex-1 rounded-t bg-primary-500/70" style={`height:${Math.max(row ? 4 : 1, (v / max) * 100)}%`} title={`${h}:00 — ${usd(v)} · ${row?.jobs ?? 0} jobs`} />;
+                })}
+              </div>
+            </section>
+
+            <section>
+              <h2 class="text-h3 font-semibold">Daily totals</h2>
+              <table class="mt-3 w-full text-left text-body-sm">
+                <thead class="text-caption text-(--color-text-muted)"><tr><th class="py-1">Day</th><th>Cap</th><th>Spent</th><th>Reserved</th></tr></thead>
+                <tbody class="divide-y divide-(--color-border) tabular-nums">
+                  {data.days.map((d) => <tr><td class="py-1.5">{d.day}</td><td>{usd(d.cap_usd)}</td><td>{usd(d.spent_usd)}</td><td>{usd(d.reserved_usd)}</td></tr>)}
+                </tbody>
+              </table>
+            </section>
+            <p class="text-caption text-(--color-text-muted)">Also set hard spending limits in the Anthropic, fal.ai and Modal dashboards slightly above this cap — the last line of defense if this server misbehaves.</p>
+          </>
+        )}
+      </div>
+    )}
+  </div>
+</Layout>

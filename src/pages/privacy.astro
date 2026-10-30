@@ -1,0 +1,73 @@
+---
+// PRIVACY POLICY. Describes what the code actually does (keep it in sync when data handling changes). It's a plain-
+// language draft written alongside the engineering: have it reviewed by a lawyer before launch, and set
+// PUBLIC_CONTACT_EMAIL so readers can reach you.
+import Layout from "../layouts/Layout.astro";
+
+const contact = (import.meta.env.PUBLIC_CONTACT_EMAIL as string | undefined) || "support@bullorbear.in";
+const updated = "27 October 2026";
+---
+
+<Layout title="Privacy — Clipbench" description="How Clipbench handles your files and data.">
+  <article class="mx-auto max-w-3xl px-4 py-12 text-body leading-relaxed sm:px-6 [&_h2]:mt-10 [&_h2]:text-h3 [&_h2]:font-semibold [&_li]:mt-1 [&_p]:mt-3 [&_ul]:mt-3 [&_ul]:list-disc [&_ul]:pl-6">
+    <h1 class="text-h2 font-semibold tracking-tight">Privacy</h1>
+    <p class="text-body-sm text-(--color-text-muted)">Last updated {updated}</p>
+
+    <h2>The short version</h2>
+    <ul>
+      <li><b>Editing runs on your device.</b> The files you edit stay in your browser. They aren't uploaded when you trim, caption, export or use the on-device AI tools (transcription, background removal, Clean Audio, stem separation and the rest).</li>
+      <li><b>Cloud AI features are optional.</b> Only when you run one does what that feature needs leave your device. You're told what first, and uploaded media is deleted within 24 hours.</li>
+      <li>No ads, no trackers, no selling or sharing your data, and nothing you send is used to train AI models.</li>
+    </ul>
+
+    <h2>On your device</h2>
+    <p>Projects, autosaves, version history, your brand kit and your settings are stored in your browser (IndexedDB, Cache Storage and localStorage). They stay there until you clear them. AI models for the on-device tools are downloaded from Hugging Face and jsDelivr, which see your IP address like any website you visit.</p>
+
+    <h2>Cloud AI features</h2>
+    <p>Some features (for example dubbing, voice cloning, AI images and script writing) run on our servers. When you run one:</p>
+    <ul>
+      <li><b>What's sent:</b> exactly what that feature needs, such as the text you entered, or the voice sample or video you chose. The feature's notice tells you before the first use.</li>
+      <li><b>Uploaded media</b> (audio, video, images) is stored privately and <b>deleted within 24 hours</b> after the job finishes.</li>
+      <li><b>Job records:</b> the content of a job (what you sent and what came back) is <b>deleted after 30 days</b>. We keep a minimal record (which feature, when, credits used and its cost to us) to run the daily free credits and prevent abuse.</li>
+      <li><b>Processors:</b> Supabase (database, sign-in and file storage, hosted in India) and the AI provider that runs the feature, such as Anthropic, fal.ai or Modal. They process data only to provide the feature, under their own terms.</li>
+    </ul>
+
+    <h2>Accounts and credits</h2>
+    <ul>
+      <li>An account is optional. If you sign in, we store your <b>email address</b> to send sign-in links and keep your daily credits. Sign-in emails are delivered by <b>Brevo</b>. Your browser keeps the sign-in session.</li>
+      <li>Without an account, your free daily credits are tied to a <b>one-way, salted hash of your IP address</b>. We never store the address itself.</li>
+      <li>To stop automated abuse, cloud AI requests pass a <b>Cloudflare Turnstile</b> check, which Cloudflare runs under its own privacy policy.</li>
+    </ul>
+
+    <h2>Other services</h2>
+    <ul>
+      <li><b>Stock library:</b> your search terms go to Pexels, Pixabay or Openverse through our server. Files you import come through our server and are processed on your device.</li>
+      <li><b>Link transcription:</b> when you paste a link, our server downloads its audio once to transcribe it, then deletes it.</li>
+      <li>Our hosting provider may keep standard server logs (IP address, time, page) for security for a short time.</li>
+    </ul>
+
+    <h2>Why we process it</h2>
+    <ul>
+      <li><b>Cloud features:</b> to do what you asked. You choose to run each one, after seeing what it sends. You can stop using them at any time, which is as easy as starting.</li>
+      <li><b>Accounts and daily credits:</b> to provide the account you created and share the free budget fairly.</li>
+      <li><b>Abuse prevention</b> (hashed IP for anonymous credits, the Turnstile check, rate limits, minimal job records): to keep the free service available and safe.</li>
+    </ul>
+
+    <h2>Your rights</h2>
+    <p>You can ask us to <b>see</b>, <b>correct</b> or <b>delete</b> the personal data we hold about you. You can <b>withdraw consent</b> for cloud processing at any time, though that doesn't undo processing already done, and you can raise a <b>complaint</b>. Write to <a href={`mailto:${contact}`} class="underline">{contact}</a>. We'll acknowledge you within 7 days and resolve it within 30 days, and never later than the 90 days India's data protection rules allow. If you're not satisfied, you may complain to the Data Protection Board of India, or to your local data protection authority if you live elsewhere (for example in the EU or UK).</p>
+    <ul>
+      <li>Use everything without an account, and without cloud features, if you prefer.</li>
+      <li>Delete local data by clearing this site's data in your browser.</li>
+    </ul>
+
+    <h2>Where data is processed</h2>
+    <p>Accounts, credits, job records and uploads are stored by Supabase in India. A cloud feature's AI provider may process the request in another country (for example the United States), only to produce the result.</p>
+
+    <h2>Age</h2>
+    <p>Editing on your device needs no account and collects nothing. <b>Accounts and cloud AI features are for people 18 or older</b>, and by signing in or running one you confirm you are. If you believe a child has used them, contact us and we'll delete their data.</p>
+
+    <h2>Changes</h2>
+    <p>If this policy changes in a way that matters, we'll update the date above and say so on the site.</p>
+    <p class="mt-8 text-body-sm"><a href="/terms" class="underline">Terms of use</a> · <a href="/licenses" class="underline">Licenses</a></p>
+  </article>
+</Layout>

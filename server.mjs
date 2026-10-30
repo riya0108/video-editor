@@ -17,13 +17,15 @@ const { handler } = await import(new URL("./dist/server/entry.mjs", import.meta.
 /**
  * Content-Security-Policy. Scripts: our own bundles, Astro's inline hydration/theme snippets ('unsafe-inline' — Astro
  * emits them without nonces), WebAssembly, blob: workers/modules (the ONNX runtime glue, ffmpeg threads) and the
- * jsDelivr CDN that MediaPipe and Transformers.js load their WASM loaders from. Network: our origin plus HTTPS for
+ * jsDelivr CDN that MediaPipe and Transformers.js load their WASM loaders from, and Cloudflare Turnstile (the bot check on
+ * cloud AI jobs — its script and challenge frame). Network: our origin plus HTTPS for
  * model downloads (Hugging Face and its CDNs) — nothing over plain HTTP. No plugins, no framing, no form posts
  * elsewhere.
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net",
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://challenges.cloudflare.com",
+  "frame-src https://challenges.cloudflare.com",
   "worker-src 'self' blob:",
   "connect-src 'self' https: blob: data:",
   "img-src 'self' data: blob:",
