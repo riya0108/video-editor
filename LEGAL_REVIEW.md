@@ -11,6 +11,7 @@ Contact used on the site: **support@bullorbear.in**. Documents to review: [`/pri
 - **Optional accounts:** an email address, via Supabase Auth with a passwordless sign-in link. Anonymous users are keyed by a salted SHA-256 of their IP address; the raw IP isn't stored.
 - **Processors:**
   - Supabase: database, auth and storage, in India (ap-south-1)
+  - Brevo: delivers sign-in emails (sees the email address)
   - Cloudflare: Turnstile bot check
   - AI providers as features launch: Anthropic, fal.ai, Modal (US)
   - Stock libraries: Pexels, Pixabay, Openverse (search terms)

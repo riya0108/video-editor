@@ -4,6 +4,7 @@ import type { ProjectMeta } from "../../../../lib/project/storage";
 import type { Recoverable } from "../../../../lib/project/recovery";
 import { dragHasFiles, filesFromDataTransfer } from "../../../../lib/composition/media-import";
 import { ASPECTS, AspectGlyph } from "./LibraryDrawers";
+import { CloudAccountButton } from "./CloudAccount";
 
 /**
  * START SCREEN — the editor's front door: pick a canvas, start from footage (the canvas then matches the first
@@ -64,6 +65,10 @@ export default function StartScreen({
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(ellipse_60%_80%_at_50%_-10%,color-mix(in_oklch,var(--color-primary-500)_28%,transparent),transparent)]" aria-hidden="true" />
       <div className="relative mx-auto flex max-w-5xl flex-col gap-10 px-6 py-12 sm:py-16">
+        {/* Sign-in and today's free cloud credits, also reachable before a project is open. */}
+        <div className="absolute top-4 right-6">
+          <CloudAccountButton />
+        </div>
         <div className="text-center">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-(--color-border) bg-(--color-surface)/70 px-3 py-1 text-caption text-(--color-text-muted) backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 text-primary-400" /> Clipbench Studio
